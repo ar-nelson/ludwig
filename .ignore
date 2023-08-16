@@ -1,0 +1,8 @@
+vendor/asio
+vendor/catch2
+vendor/flatbuffers
+vendor/lmdb-safe
+vendor/openldap
+vendor/rapidjson
+vendor/usockets
+vendor/uwebsockets

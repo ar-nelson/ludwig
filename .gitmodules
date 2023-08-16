@@ -1,0 +1,24 @@
+[submodule "vendor/lmdb-safe"]
+	path = vendor/lmdb-safe
+	url = https://github.com/ahupowerdns/lmdb-safe.git
+[submodule "vendor/catch2"]
+	path = vendor/catch2
+	url = https://github.com/catchorg/Catch2.git
+[submodule "vendor/flatbuffers"]
+	path = vendor/flatbuffers
+	url = https://github.com/google/flatbuffers.git
+[submodule "vendor/rapidjson"]
+	path = vendor/rapidjson
+	url = https://github.com/Tencent/rapidjson.git
+[submodule "vendor/uwebsockets"]
+	path = vendor/uwebsockets
+	url = https://github.com/uNetworking/uWebSockets.git
+[submodule "vendor/openldap"]
+	path = vendor/openldap
+	url = https://git.openldap.org/openldap/openldap.git
+[submodule "vendor/asio"]
+	path = vendor/asio
+	url = git@github.com:chriskohlhoff/asio.git
+[submodule "vendor/usockets"]
+	path = vendor/usockets
+	url = https://github.com/uNetworking/uSockets.git
