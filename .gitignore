@@ -2,3 +2,4 @@ build
 build.*/
 .cache/
 .task/
+/src/generated/

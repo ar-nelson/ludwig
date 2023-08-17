@@ -25,6 +25,8 @@ add_compile_options (
 
 add_subdirectory(vendor)
 
+build_flatbuffers(src/datatypes.fbs "" flatbuffers_generated "" src/generated "" "")
+
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   set (BUILDTYPE_COMPILE_OPTIONS
     -DDEBUG
@@ -56,6 +58,7 @@ set (LUDWIG_COMMON_SRC
 )
 
 add_executable(ludwig src/ludwig.c++ ${LUDWIG_COMMON_SRC})
+add_dependencies(ludwig flatbuffers_generated)
 target_compile_options(ludwig PRIVATE ${COMPILE_OPTIONS})
 target_link_options(ludwig PRIVATE ${LINK_OPTIONS})
 target_link_libraries(ludwig PRIVATE lmdb FlatBuffers RapidJSON uWS)
@@ -63,5 +66,6 @@ target_link_libraries(ludwig PRIVATE lmdb FlatBuffers RapidJSON uWS)
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   file(GLOB_RECURSE TEST_FILES "test/*.c++")
   add_executable(test ${LUDWIG_COMMON_SRC} ${TEST_FILES})
+  add_dependencies(ludwig flatbuffers_generated)
   target_link_libraries(test PRIVATE lmdb FlatBuffers RapidJSON uWS Catch2::Catch2WithMain)
 endif ()

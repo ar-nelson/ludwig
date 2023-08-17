@@ -1,0 +1,136 @@
+namespace Ludwig;
+
+struct Uuid {
+  uuid: [ubyte:16];
+}
+
+struct Hash {
+  hash: [ubyte:32];
+}
+
+enum ModState : ubyte { Visible, Flagged, Hidden, Removed }
+
+table User {
+  id: string (required);
+  instance: string;
+  name: string (required);
+  display_name: string;
+  created_at: uint64;
+  bot: bool = false;
+  avatar_media: Hash;
+  mod_state: ModState = Visible;
+}
+
+table LocalUser {
+  email: string;
+  password_hash: Hash;
+  password_salt: Hash;
+}
+
+table Board {
+  id: string (required);
+  instance: string;
+  name: string (required);
+  display_name: string (required);
+  description: string;
+  sidebar: string;
+  avatar_media: Hash;
+  nsfw: bool = false;
+  can_upvote: bool = true;
+  can_downvote: bool = true;
+  invite_only: bool = false;
+  mod_state: ModState = Visible;
+}
+
+table LocalBoard {
+  creator: string;
+  federated: bool = true;
+  private: bool = false;
+}
+
+table Page {
+  id: Uuid (required);
+  author: string (required);
+  board: string (required);
+  title: string (required);
+  created_at: uint64;
+  updated_at: uint64 = null;
+  url: string;
+  text: string;
+  nsfw: bool = false;
+  mod_state: ModState = Visible;
+}
+
+table Note {
+  id: Uuid (required);
+  parent: Uuid (required);
+  author: string (required);
+  created_at: uint64;
+  updated_at: uint64 = null;
+  content: string;
+  mod_state: ModState = Visible;
+}
+
+enum MediaCategory : ubyte { Image, Audio, Video }
+
+table Media {
+  hash: Hash (required);
+  category: MediaCategory;
+  mimetype: string;
+  alt: string;
+}
+
+enum ModActionType : byte {
+  EditPost,
+  HidePost,
+  DeletePost,
+  ExterminatePost,
+
+  EditBoard,
+  DeleteBoard,
+  ExterminateBoard,
+
+  EditUser,
+  TempBanUserFromBoard,
+  PermBanUserFromBoard,
+  TemBanUserFromInstance,
+  PermBanUserFromInstance,
+  ExterminateUser
+}
+
+table ModAction {
+  id: Uuid (required);
+  type: ModActionType;
+  author: string;
+  target_post: Uuid;
+  target_name: string;
+  content: string;
+}
+
+table Report {
+  post: Uuid (required);
+  author: string (required);
+  created_at: uint64;
+  content: string;
+}
+
+enum InviteRole : ubyte {
+  JoinInstance,
+  JoinBoard,
+  AdminInstance,
+  ModInstance,
+  ModBoard
+}
+
+table invite {
+  id: Uuid (required);
+  role: InviteRole;
+  created_at: uint64;
+  from: string;
+  to_existing_user: string;
+  to_email: string;
+  to_external_user: string;
+  board: string;
+  accepted: bool = false;
+  accepted_at: uint64 = null;
+}

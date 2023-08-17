@@ -4,7 +4,6 @@
     buildInputs = with pkgs; [
       cmake
       go-task
-      flatbuffers
       zlib
     ];
 }
