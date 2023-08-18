@@ -21,6 +21,7 @@ add_compile_options (
   -fcolor-diagnostics
   -DASIO_SEPARATE_COMPILATION
   -DLIBUS_USE_ASIO
+  -Wno-zero-as-null-pointer-constant
 )
 
 add_subdirectory(vendor)
@@ -50,11 +51,10 @@ set (COMPILE_OPTIONS
   -Wconversion
   -Wsign-conversion
   -Wno-unused-function
-  -Wno-zero-as-null-pointer-constant
 )
 
 set (LUDWIG_COMMON_SRC
-  # files go here
+  src/id.c++
 )
 
 add_executable(ludwig src/ludwig.c++ ${LUDWIG_COMMON_SRC})

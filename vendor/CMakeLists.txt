@@ -1,28 +1,38 @@
 find_package(ZLIB REQUIRED)
 
+add_library(asio STATIC
+  asio/asio.cpp
+)
+target_include_directories(asio PUBLIC asio/)
+target_compile_definitions(asio PUBLIC ASIO_SEPARATE_COMPILATION)
+
 add_library(uWS STATIC
-  usockets/src/bsd.c
-  usockets/src/context.c
-  usockets/src/loop.c
-  usockets/src/socket.c
-  asio/asio/src/asio.cpp
-  usockets-asio.c++
+  uWS/uSockets/bsd.c
+  uWS/uSockets/context.c
+  uWS/uSockets/loop.c
+  uWS/uSockets/socket.c
+  uWS/uSockets/eventing/asio.cpp
 )
 target_include_directories(uWS
   PUBLIC
-    usockets/src/ asio/asio/include/
+    uWS/uSockets/
   INTERFACE
-    uwebsockets/src/
+    uWS/
 )
-target_compile_definitions(uWS PRIVATE LIBUS_NO_SSL)
-target_link_libraries(uWS INTERFACE ${ZLIB_LIBRARIES})
+target_compile_definitions(uWS PUBLIC LIBUS_USE_ASIO LIBUS_NO_SSL)
+target_link_libraries(uWS
+  PUBLIC
+    asio
+  INTERFACE
+    ${ZLIB_LIBRARIES}
+)
 
 add_library(lmdb STATIC
-  openldap/libraries/liblmdb/mdb.c
-  openldap/libraries/liblmdb/midl.c
-  lmdb-safe/lmdb-safe.cc
+  lmdb/mdb.c
+  lmdb/midl.c
+  lmdb/lmdb-safe.cc
 )
-target_include_directories(lmdb PUBLIC openldap/libraries/liblmdb/ lmdb-safe/)
+target_include_directories(lmdb PUBLIC lmdb/)
 
 add_subdirectory(flatbuffers)
 
