@@ -34,6 +34,10 @@ add_library(lmdb STATIC
 )
 target_include_directories(lmdb PUBLIC lmdb/)
 
+add_library(xxHash INTERFACE)
+target_include_directories(xxHash INTERFACE xxHash/)
+target_compile_definitions(xxHash INTERFACE XXH_INLINE_ALL)
+
 add_subdirectory(flatbuffers)
 
 set(RAPIDJSON_BUILD_DOC OFF CACHE BOOL "" FORCE)

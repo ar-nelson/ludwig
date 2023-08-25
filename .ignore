@@ -4,3 +4,4 @@ vendor/flatbuffers
 vendor/lmdb
 vendor/rapidjson
 vendor/uWS
+vendor/xxHash

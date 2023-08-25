@@ -1,40 +1,35 @@
 namespace Ludwig;
 
-struct Uuid {
-  uuid: [ubyte:16];
-}
-
-struct Hash {
-  hash: [ubyte:32];
-}
-
 enum ModState : ubyte { Visible, Flagged, Hidden, Removed }
 
 table User {
-  id: string (required);
-  instance: string;
   name: string (required);
   display_name: string;
+  instance: uint64 = null;
   created_at: uint64;
+  updated_at: uint64 = null;
+  deleted_at: uint64 = null;
+  avatar_media: uint64 = null;
   bot: bool = false;
-  avatar_media: Hash;
   mod_state: ModState = Visible;
 }
 
 table LocalUser {
   email: string;
-  password_hash: Hash;
-  password_salt: Hash;
+  password_hash: uint64;
+  password_salt: uint64;
 }
 
 table Board {
-  id: string (required);
-  instance: string;
   name: string (required);
-  display_name: string (required);
+  display_name: string;
+  instance: uint64 = null;
+  created_at: uint64;
+  updated_at: uint64 = null;
   description: string;
   sidebar: string;
-  avatar_media: Hash;
+  avatar_media: uint64 = null;
+  banner_media: uint64 = null;
   nsfw: bool = false;
   can_upvote: bool = true;
   can_downvote: bool = true;
@@ -43,18 +38,19 @@ table Board {
 }
 
 table LocalBoard {
-  creator: string;
+  owner: uint64;
   federated: bool = true;
   private: bool = false;
 }
 
 table Page {
-  id: Uuid (required);
-  author: string (required);
-  board: string (required);
+  author: uint64;
+  board: uint64;
   title: string (required);
   created_at: uint64;
   updated_at: uint64 = null;
+  instance: uint64 = null;
+  original_url: string;
   url: string;
   text: string;
   nsfw: bool = false;
@@ -62,11 +58,12 @@ table Page {
 }
 
 table Note {
-  id: Uuid (required);
-  parent: Uuid (required);
-  author: string (required);
+  author: uint64;
+  parent: uint64;
   created_at: uint64;
   updated_at: uint64 = null;
+  instance: uint64 = null;
+  original_url: string;
   content: string;
   mod_state: ModState = Visible;
 }
@@ -74,7 +71,6 @@ table Note {
 enum MediaCategory : ubyte { Image, Audio, Video }
 
 table Media {
-  hash: Hash (required);
   category: MediaCategory;
   mimetype: string;
   alt: string;
@@ -83,33 +79,31 @@ table Media {
 enum ModActionType : byte {
   EditPost,
   HidePost,
-  DeletePost,
-  ExterminatePost,
+  RemovePost,
+  PurgePost,
 
   EditBoard,
-  DeleteBoard,
-  ExterminateBoard,
+  RemoveBoard,
+  PurgeBoard,
 
   EditUser,
   TempBanUserFromBoard,
   PermBanUserFromBoard,
   TemBanUserFromInstance,
   PermBanUserFromInstance,
-  ExterminateUser
+  PurgeUser
 }
 
 table ModAction {
-  id: Uuid (required);
   type: ModActionType;
-  author: string;
-  target_post: Uuid;
-  target_name: string;
+  author: uint64;
+  target: uint64;
   content: string;
 }
 
 table Report {
-  post: Uuid (required);
-  author: string (required);
+  post: uint64;
+  author: uint64;
   created_at: uint64;
   content: string;
 }
@@ -123,14 +117,13 @@ enum InviteRole : ubyte {
 }
 
 table invite {
-  id: Uuid (required);
   role: InviteRole;
   created_at: uint64;
-  from: string;
-  to_existing_user: string;
+  from: uint64 = null;
+  to_existing_user: uint64 = null;
   to_email: string;
   to_external_user: string;
-  board: string;
+  board: uint64 = null;
   accepted: bool = false;
   accepted_at: uint64 = null;
 }
