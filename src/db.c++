@@ -1,6 +1,7 @@
+#include <random>
+#include <spdlog/spdlog.h>
 #include "db.h++"
 #include "id.h++"
-#include <random>
 
 using std::optional, flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot, flatbuffers::Offset;
 
@@ -121,6 +122,7 @@ namespace Ludwig {
     MDBOutVal seed_val;
     auto txn = env.getRWTransaction();
     if (txn->get(dbis[Settings], { "hash_seed" }, seed_val)) {
+      spdlog::info("Opened database {} for the first time, generating hash seed", filename);
       std::random_device rnd;
       std::mt19937 gen(rnd());
       std::uniform_int_distribution<uint64_t> dist(
@@ -130,6 +132,7 @@ namespace Ludwig {
       seed = dist(gen);
       txn->put(dbis[Settings], { "hash_seed" }, { seed });
     } else {
+      spdlog::debug("Loaded existing database {}", filename);
       seed = seed_val.get<uint64_t>();
     }
     txn->commit();
@@ -417,11 +420,13 @@ namespace Ludwig {
     auto user = GetRoot<User>(builder.GetBufferPointer());
     auto old_user_opt = get_user(id);
     if (old_user_opt) {
+      spdlog::debug("Updating user {:016x} (name {})", id, user->name()->string_view());
       auto old_user = *old_user_opt;
       if (user->name() != old_user->name()) {
         txn->del(db.dbis[User_Name], Cursor(old_user->name()->string_view(), db.seed).val);
       }
     } else {
+      spdlog::debug("Creating user {:016x} (name {})", id, user->name()->string_view());
       txn->put(db.dbis[PageCount_User], id_val, { 0 });
       txn->put(db.dbis[NoteCount_User], id_val, { 0 });
       txn->put(db.dbis[Karma_User], id_val, { 0 });
@@ -438,8 +443,12 @@ namespace Ludwig {
   }
   auto WriteTxn::delete_user(uint64_t id) -> bool {
     auto user_opt = get_user(id);
-    if (!user_opt) return false;
+    if (!user_opt) {
+      spdlog::warn("Tried to delete nonexistent user {:016x}", id);
+      return false;
+    }
 
+    spdlog::debug("Deleting user {:016x}", id);
     const MDBInVal id_val(id);
     txn->del(db.dbis[User_User], id_val);
     txn->del(db.dbis[User_Name], Cursor((*user_opt)->name()->string_view(), db.seed).val);
@@ -486,11 +495,13 @@ namespace Ludwig {
     auto board = GetRoot<Board>(builder.GetBufferPointer());
     auto old_board_opt = get_board(id);
     if (old_board_opt) {
+      spdlog::debug("Updating board {:016x} (name {})", id, board->name()->string_view());
       auto old_board = *old_board_opt;
       if (board->name() != old_board->name()) {
         txn->del(db.dbis[Board_Name], Cursor(old_board->name()->string_view(), db.seed).val);
       }
     } else {
+      spdlog::debug("Creating board {:016x} (name {})", id, board->name()->string_view());
       txn->put(db.dbis[PageCount_Board], id_val, { 0 });
       txn->put(db.dbis[NoteCount_Board], id_val, { 0 });
       txn->put(db.dbis[SubscriberCount_Board], id_val, { 0 });
@@ -507,22 +518,31 @@ namespace Ludwig {
     assert(!!get_user(board->owner()));
     auto old_board_opt = get_local_board(id);
     if (old_board_opt) {
+      spdlog::debug("Updating local board {:016x}", id);
       auto old_board = *old_board_opt;
       if (board->owner() != old_board->owner()) {
+        spdlog::info("Changing owner of local board {:016x}: {:016x} -> {:016x}", id, old_board->owner(), board->owner());
         txn->del(db.dbis[Owner_UserBoard], Cursor(old_board->owner(), id).val);
       }
+    } else {
+      spdlog::debug("Updating local board {:016x}", id);
     }
     txn->put(db.dbis[Owner_UserBoard], Cursor(board->owner(), id).val, { board->owner() });
     txn->put(db.dbis[LocalBoard_Board], id_val, v);
   }
   auto WriteTxn::delete_board(uint64_t id) -> bool {
     auto board_opt = get_board(id);
-    if (!board_opt) return false;
+    if (!board_opt) {
+      spdlog::warn("Tried to delete nonexistent board {:016x}", id);
+      return false;
+    }
 
+    spdlog::debug("Deleting board {:016x}", id);
     const MDBInVal id_val(id);
     txn->del(db.dbis[Board_Board], id_val);
     txn->del(db.dbis[Board_Name], Cursor((*board_opt)->name()->string_view(), db.seed).val);
     txn->del(db.dbis[LocalBoard_Board], id_val);
+    // TODO: Owner_UserBoard
     txn->del(db.dbis[PageCount_Board], id_val);
     txn->del(db.dbis[NoteCount_Board], id_val);
     txn->del(db.dbis[SubscriberCount_Board], id_val);
@@ -547,12 +567,14 @@ namespace Ludwig {
       assert(!!get_user(user_id));
       assert(!!get_board(board_id));
       if (!existing) {
+        spdlog::debug("Subscribing user {:016x} to board {:016x}", user_id, board_id);
         auto now = now_ms();
         txn->put(db.dbis[Subscription_BoardUser], Cursor(board_id, user_id).val, { now });
         txn->put(db.dbis[Subscription_UserBoard], Cursor(user_id, board_id).val, { now });
         increment(txn.get(), db.dbis[SubscriberCount_Board], board_id);
       }
     } else if (existing) {
+      spdlog::debug("Unsubscribing user {:016x} from board {:016x}", user_id, board_id);
       txn->del(db.dbis[Subscription_BoardUser], Cursor(board_id, user_id).val);
       txn->del(db.dbis[Subscription_UserBoard], Cursor(user_id, board_id).val);
       decrement(txn.get(), db.dbis[SubscriberCount_Board], board_id);
@@ -577,6 +599,7 @@ namespace Ludwig {
     assert(!!get_user(page->author()));
     assert(!!get_board(page->board()));
     if (old_page_opt) {
+      spdlog::debug("Updating top-level post {:016x} (board {:016x}, author {:016x})", id, page->board(), page->author());
       auto old_page = *old_page_opt;
       assert(page->author() == old_page->author());
       assert(page->created_at() == old_page->created_at());
@@ -586,6 +609,7 @@ namespace Ludwig {
         decrement(txn.get(), db.dbis[PageCount_Board], old_page->board());
       }
     } else {
+      spdlog::debug("Creating top-level post {:016x} (board {:016x}, author {:016x})", id, page->board(), page->author());
       txn->put(db.dbis[Owner_UserPage], Cursor(page->author(), id).val, { page->author() });
       txn->put(db.dbis[PagesTop_UserKarmaPage], Cursor(page->author(), karma, id).val, id_val);
       txn->put(db.dbis[ChildCount_Post], id_val, { 0ULL });
@@ -600,9 +624,13 @@ namespace Ludwig {
   }
   auto WriteTxn::delete_page(uint64_t id) -> bool {
     auto page_opt = get_page(id);
-    if (!page_opt) return false;
+    if (!page_opt) {
+      spdlog::warn("Tried to delete nonexistent top-level post {:016x}", id);
+      return false;
+    }
     auto page = *page_opt;
 
+    spdlog::debug("Deleting top-level post {:016x} (board {:016x}, author {:016x})", id, page->board(), page->author());
     const MDBInVal id_val(id);
     auto karma = count_karma_of_post(id);
     adjust_karma(txn.get(), db.dbis[Karma_User], page->author(), -karma);
@@ -647,11 +675,13 @@ namespace Ludwig {
     auto old_note_opt = get_note(id);
     assert(!!get_user(note->author()));
     if (old_note_opt) {
+      spdlog::debug("Updating comment {:016x} (parent {:016x}, author {:016x})", id, note->parent(), note->author());
       auto old_note = *old_note_opt;
       assert(note->author() == old_note->author());
       assert(note->parent() == old_note->parent());
       assert(note->created_at() == old_note->created_at());
     } else {
+      spdlog::debug("Creating comment {:016x} (parent {:016x}, author {:016x})", id, note->parent(), note->author());
       txn->put(db.dbis[Owner_UserNote], Cursor(note->author(), id).val, { note->author() });
       txn->put(db.dbis[NotesTop_UserKarmaNote], Cursor(note->author(), karma, id).val, id_val);
       increment(txn.get(), db.dbis[NoteCount_User], note->author());
@@ -677,9 +707,13 @@ namespace Ludwig {
   }
   auto WriteTxn::delete_note(uint64_t id) -> bool {
     auto note_opt = get_note(id);
-    if (!note_opt) return false;
+    if (!note_opt) {
+      spdlog::warn("Tried to delete nonexistent comment {:016x}", id);
+      return false;
+    }
     auto note = *note_opt;
 
+    spdlog::debug("Deleting comment {:016x} (parent {:016x}, author {:016x})", id, note->parent(), note->author());
     const MDBInVal id_val(id);
     auto karma = count_karma_of_post(id);
     adjust_karma(txn.get(), db.dbis[Karma_User], note->author(), -karma);
@@ -698,6 +732,8 @@ namespace Ludwig {
       txn->del(db.dbis[NotesNew_BoardTimeNote], Cursor(board, note->created_at(), id).val);
       txn->del(db.dbis[NotesTop_BoardKarmaNote], Cursor(board, karma_uint(karma), id).val);
       decrement(txn.get(), db.dbis[NoteCount_Board], board);
+    } else {
+      spdlog::warn("Deleted comment {:016x} appears to have been orphaned; cannot determine top-level post or board", id);
     }
 
     delete_range(txn.get(), db.dbis[Vote_PostUser], Cursor(id, 0), Cursor(id, std::numeric_limits<uint64_t>::max()),
@@ -735,6 +771,7 @@ namespace Ludwig {
     auto op_id = page ? (*page)->author() : (*note)->author();
     const auto op = get_user(op_id);
     assert(!!op);
+    spdlog::debug("Setting vote from user {:016x} on post {:016x} to {}", user_id, post_id, (int8_t)vote);
     if (vote) {
       txn->put(db.dbis[Vote_UserPost], Cursor(user_id, post_id).val, { (int8_t)vote });
       txn->put(db.dbis[Vote_PostUser], Cursor(post_id, user_id).val, { (int8_t)vote });

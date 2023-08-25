@@ -3,5 +3,6 @@ vendor/catch2
 vendor/flatbuffers
 vendor/lmdb
 vendor/rapidjson
+vendor/spdlog
 vendor/uWS
 vendor/xxHash

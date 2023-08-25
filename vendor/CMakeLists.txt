@@ -45,6 +45,8 @@ set(RAPIDJSON_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(RAPIDJSON_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(rapidjson)
 
+add_subdirectory(spdlog)
+
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   add_subdirectory(catch2)
 endif ()

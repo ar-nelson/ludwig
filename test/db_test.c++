@@ -1,10 +1,17 @@
 #include <catch2/catch_test_macros.hpp>
+#include <spdlog/spdlog.h>
 #include "util.h++"
 #include "../src/db.h++"
 #include "../src/id.h++"
 
 using namespace Ludwig;
 using namespace flatbuffers;
+
+struct test_init {
+  test_init() {
+    spdlog::set_level(spdlog::level::debug);
+  }
+} test_init_instance;
 
 TEST_CASE("create DB", "[db]") {
   TempFile file;
