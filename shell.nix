@@ -1,5 +1,5 @@
 { pkgs ? import <nixpkgs> {} }:
-  pkgs.clangStdenv.mkDerivation {
+  pkgs.llvmPackages_15.stdenv.mkDerivation {
     name = "clang-nix-shell";
     buildInputs = with pkgs; [
       cmake

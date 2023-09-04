@@ -50,24 +50,16 @@ tasks:
     desc: Run unit test suite
     deps:
       - build-debug
-    env:
-      # Unfortunately necessary because of https://github.com/llvm/llvm-project/issues/55785
-      # Maybe this will be fixed in the future?
-      ASAN_OPTIONS: use_sigaltstack=0
     cmds:
       - ./build.debug/test
   run-debug:
     deps:
       - build-debug
-    env:
-      ASAN_OPTIONS: use_sigaltstack=0
     cmds:
       - ./build.debug/ludwig
   run:
     deps:
       - build-release
-    env:
-      ASAN_OPTIONS: use_sigaltstack=0
     cmds:
       - ./build.release/ludwig
   clean:

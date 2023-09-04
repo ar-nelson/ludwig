@@ -38,13 +38,20 @@ add_library(xxHash INTERFACE)
 target_include_directories(xxHash INTERFACE xxHash/)
 target_compile_definitions(xxHash INTERFACE XXH_INLINE_ALL)
 
+add_library(monocypher STATIC
+  monocypher/monocypher.c
+  monocypher/optional/monocypher-ed25519.c)
+target_include_directories(monocypher PUBLIC monocypher/ monocypher/optional/)
+
+add_library(csprng STATIC
+  csprng/source/csprng.cpp)
+target_include_directories(csprng PUBLIC csprng/source/)
+
+set(BUILD_DOC OFF CACHE BOOL "" FORCE)
+set(BUILD_SANDBOX OFF CACHE BOOL "" FORCE)
+set(SKIP_PERFORMANCE_COMPARISON ON CACHE BOOL "" FORCE)
+add_subdirectory(cereal)
 add_subdirectory(flatbuffers)
-
-set(RAPIDJSON_BUILD_DOC OFF CACHE BOOL "" FORCE)
-set(RAPIDJSON_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(RAPIDJSON_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-add_subdirectory(rapidjson)
-
 add_subdirectory(spdlog)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)

@@ -30,6 +30,7 @@ if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
 endif ()
 
 add_subdirectory(vendor)
+include_directories(vendor/singleheader/)
 
 # Generate flatbuffers headers
 # This must be a custom command to add the right command-line flags
@@ -37,9 +38,9 @@ add_custom_command(
   COMMAND ${PROJECT_BINARY_DIR}/flatc
     -o src/generated/
     -I src/
-    --cpp-str-type std::string_view
     --cpp-std c++17
     --gen-json-emit --strict-json
+    --gen-mutable
     --reflect-types --reflect-names
     -c src/datatypes.fbs
   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
@@ -75,7 +76,8 @@ set (COMPILE_OPTIONS
 )
 
 set (LUDWIG_COMMON_SRC
-  src/id.c++
+  src/base64.c++
+  src/jwt.c++
   src/db.c++
 )
 
@@ -83,11 +85,11 @@ add_executable(ludwig src/ludwig.c++ ${LUDWIG_COMMON_SRC})
 add_dependencies(ludwig flatbuffers_generated)
 target_compile_options(ludwig PRIVATE ${COMPILE_OPTIONS})
 target_link_options(ludwig PRIVATE ${LINK_OPTIONS})
-target_link_libraries(ludwig PRIVATE lmdb FlatBuffers RapidJSON spdlog uWS xxHash)
+target_link_libraries(ludwig PRIVATE cereal csprng FlatBuffers lmdb monocypher spdlog uWS xxHash)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   file(GLOB_RECURSE TEST_FILES "test/*.c++")
   add_executable(test ${LUDWIG_COMMON_SRC} ${TEST_FILES})
   add_dependencies(test flatbuffers_generated)
-  target_link_libraries(test PRIVATE lmdb FlatBuffers RapidJSON spdlog uWS xxHash Catch2::Catch2WithMain)
+  target_link_libraries(test PRIVATE cereal csprng FlatBuffers lmdb monocypher spdlog uWS xxHash Catch2::Catch2WithMain)
 endif ()

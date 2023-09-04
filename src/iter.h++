@@ -1,6 +1,8 @@
 #pragma once
 #include <lmdb-safe.hh>
 #include <xxhash.h>
+#include <spdlog/fmt/fmt.h>
+#include <spdlog/spdlog.h>
 #include <optional>
 #include <string_view>
 #include <assert.h>
@@ -12,106 +14,76 @@
 using std::optional, std::string_view;
 
 namespace Ludwig {
+  constexpr uint64_t ID_MAX = std::numeric_limits<uint64_t>::max();
+
+#  if __BIG_ENDIAN__
+#    define swap_bytes(x) x
+#  else
+#    define swap_bytes(x) bswap_64(x)
+#  endif
+
   class Cursor {
   private:
     uint64_t data[3];
+    uint8_t size;
   public:
-    MDBInVal val = { 0 };
-
     Cursor(const MDBInVal& v) {
-      if (v.d_mdbval.mv_size == sizeof(uint64_t)) {
-        val = MDBInVal(*reinterpret_cast<uint64_t*>(v.d_mdbval.mv_data));
-      } else {
-        assert(v.d_mdbval.mv_size <= sizeof(data));
-        memcpy(data, v.d_mdbval.mv_data, std::min(sizeof(data), v.d_mdbval.mv_size));
-        val = MDBInVal({ .d_mdbval = { v.d_mdbval.mv_size, data } });
-      }
+      assert(v.d_mdbval.mv_size <= sizeof(data));
+      assert(v.d_mdbval.mv_size > 0);
+      assert(v.d_mdbval.mv_size % sizeof(uint64_t) == 0);
+      memcpy(data, v.d_mdbval.mv_data, std::min(sizeof(data), v.d_mdbval.mv_size));
+      size = (uint8_t)(v.d_mdbval.mv_size / sizeof(uint64_t));
     }
-    Cursor(uint64_t a) : val(a) {}
-    Cursor(uint64_t a, uint64_t b) {
-#     if __BIG_ENDIAN__
-      data[0] = a;
-      data[1] = b;
-#     else
-      data[0] = bswap_64(a);
-      data[1] = bswap_64(b);
-#     endif
-      val = MDBInVal({ .d_mdbval = { sizeof(uint64_t) * 2, data } });
+    Cursor(uint64_t a) : data{a}, size(1) {}
+    Cursor(uint64_t a, uint64_t b) : data{swap_bytes(a), swap_bytes(b)}, size(2) {}
+    Cursor(uint64_t a, uint64_t b, uint64_t c) : data{swap_bytes(a), swap_bytes(b), swap_bytes(c)}, size(3) {}
+    Cursor(string_view a, uint64_t hash_seed) : data{XXH3_64bits_withSeed(a.data(), a.length(), hash_seed)}, size(1) {}
+
+    inline auto int_field_0() const -> uint64_t {
+      if (size == 1) return data[0];
+      return swap_bytes(data[0]);
     }
-    Cursor(uint64_t a, uint64_t b, uint64_t c) {
-#     if __BIG_ENDIAN__
-      data[0] = a;
-      data[1] = b;
-      data[2] = c;
-#     else
-      data[0] = bswap_64(a);
-      data[1] = bswap_64(b);
-      data[2] = bswap_64(c);
-#     endif
-      val = MDBInVal({ .d_mdbval = { sizeof(uint64_t) * 3, data } });
+    inline auto int_field_1() const -> uint64_t {
+      assert(size >= 2);
+      return swap_bytes(data[1]);
     }
-    Cursor(string_view a, uint64_t hash_seed) : val(XXH3_64bits_withSeed(a.data(), a.length(), hash_seed)) {}
-    Cursor(string_view a, uint64_t b, uint64_t hash_seed) {
-      data[0] = XXH3_64bits_withSeed(a.data(), a.length(), hash_seed);
-#     if __BIG_ENDIAN__
-      data[1] = b;
-#     else
-      data[1] = bswap_64(b);
-#     endif
-      val = MDBInVal({ .d_mdbval = { sizeof(uint64_t) * 2, data } });
+    inline auto int_field_2() const -> uint64_t {
+      assert(size >= 3);
+      return swap_bytes(data[2]);
     }
-    Cursor(uint64_t a, string_view b, uint64_t hash_seed) {
-#     if __BIG_ENDIAN__
-      data[0] = a;
-#     else
-      data[0] = bswap_64(a);
-#     endif
-      data[1] = XXH3_64bits_withSeed(b.data(), b.length(), hash_seed);
-      val = { { sizeof(uint64_t) * 2, data } };
+    inline auto hash_field_0() const -> uint64_t {
+      return data[0];
     }
-    Cursor(string_view a, string_view b, uint64_t hash_seed) {
-      data[0] = XXH3_64bits_withSeed(a.data(), a.length(), hash_seed);
-      data[1] = XXH3_64bits_withSeed(b.data(), b.length(), hash_seed);
-      val = { { sizeof(uint64_t) * 2, data } };
+    inline auto val() -> MDB_val {
+      return { size * sizeof(uint64_t), data };
+    }
+    inline auto out_val() -> MDBOutVal {
+      return { val() };
+    }
+    inline auto in_val() -> MDBInVal {
+      return { out_val() };
     }
 
-    inline auto int_field_0() -> uint64_t {
-      if (val.d_mdbval.mv_size == sizeof(uint64_t)) {
-        return *reinterpret_cast<uint64_t*>(val.d_mdbval.mv_data);
+    inline friend auto operator<<(std::ostream& lhs, const Cursor& rhs) -> std::ostream& {
+      switch (rhs.size) {
+        case 1:
+          return lhs << "Cursor(" << std::hex << rhs.int_field_0() << std::dec << ")";
+        case 2:
+          return lhs << "Cursor(" << std::hex << rhs.int_field_0() << "," << rhs.int_field_1() << std::dec << ")";
+        case 3:
+          return lhs << "Cursor(" << std::hex << rhs.int_field_0() << "," << rhs.int_field_1() << "," << rhs.int_field_2() << std::dec << ")";
+        default:
+          assert(false);
       }
-#     if __BIG_ENDIAN__
-      return data[0];
-#     else
-      return bswap_64(data[0]);
-#     endif
     }
-    inline auto int_field_1() -> uint64_t {
-#     if __BIG_ENDIAN__
-      return data[1];
-#     else
-      return bswap_64(data[1]);
-#     endif
-    }
-    inline auto int_field_2() -> uint64_t {
-#     if __BIG_ENDIAN__
-      return data[2];
-#     else
-      return bswap_64(data[2]);
-#     endif
-    }
-    inline auto hash_field_0() -> uint64_t {
-      if (val.d_mdbval.mv_size == sizeof(uint64_t)) {
-        return *reinterpret_cast<uint64_t*>(val.d_mdbval.mv_data);
-      }
-      return data[0];
-    }
-    inline auto hash_field_1() -> uint64_t {
-      return data[1];
-    }
-    inline auto hash_field_2() -> uint64_t {
-      return data[2];
+    inline auto to_string() -> std::string {
+      std::ostringstream s;
+      s << *this;
+      return s.str();
     }
   };
+
+# undef swap_bytes
 
   template <typename T> struct DBIter;
   template <typename T> struct PageIter;
@@ -144,13 +116,17 @@ namespace Ludwig {
         return v.get<T>();
       },
       auto (*fn_first)(DBIter<T>&) -> bool = [](DBIter<T>& self) {
-        return (self.from_key
-          ? self.cur.find(self.from_key->val, self.key, self.value)
-          : self.cur.get(self.key, self.value, MDB_FIRST)
-        ) || gte_to_key(self);
+        if (self.from_key) self.key = self.from_key->out_val();
+        auto err = self.cur.get(self.key, self.value, self.from_key ? MDB_SET_RANGE : MDB_FIRST);
+        if (err == MDB_NOTFOUND) return true;
+        if (err) throw std::runtime_error("Iterator failure: " + std::string(mdb_strerror(err)));
+        return gte_to_key(self);
       },
       auto (*fn_next)(DBIter<T>&) -> bool = [](DBIter<T>& self) {
-        return self.cur.get(self.key, self.value, MDB_NEXT) || gte_to_key(self);
+        auto err = self.cur.get(self.key, self.value, MDB_NEXT);
+        if (err == MDB_NOTFOUND) return true;
+        if (err) throw std::runtime_error("Iterator failure: " + std::string(mdb_strerror(err)));
+        return gte_to_key(self);
       }
     ) : dbi(dbi), txn(txn), from_key(from_key), to_key(to_key),
         fn_value(fn_value), fn_first(fn_first), fn_next(fn_next) {
@@ -170,13 +146,13 @@ namespace Ludwig {
     }
     inline auto operator++() -> void {
       if (done) return;
-      else if (fn_next(*this)) done = true;
+      if (fn_next(*this)) done = true;
       else n++;
     }
     auto page(uint64_t size) -> PageIter<T>;
     auto begin() -> PageIter<T>;
     inline auto end() -> IterEnd {
-      return { std::numeric_limits<uint64_t>::max() };
+      return { ID_MAX };
     }
   };
 
@@ -205,31 +181,44 @@ namespace Ludwig {
     return { *this, n + size };
   }
   template <typename T> inline auto DBIter<T>::begin() -> PageIter<T> {
-    return { *this, std::numeric_limits<uint64_t>::max() };
+    return { *this, ID_MAX };
   }
   template <typename T> static inline auto gte_to_key(DBIter<T>& i) -> bool {
-    return i.to_key && mdb_cmp(&*i.txn, i.dbi, &i.key.d_mdbval, &i.to_key->val.d_mdbval) >= 0;
+    if (!i.to_key) return false;
+    auto val = i.to_key->val();
+    return mdb_cmp(&*i.txn, i.dbi, &i.key.d_mdbval, &val) >= 0;
   }
   template <typename T> static inline auto lte_to_key(DBIter<T>& i) -> bool {
-    return i.to_key && mdb_cmp(&*i.txn, i.dbi, &i.key.d_mdbval, &i.to_key->val.d_mdbval) <= 0;
+    if (!i.to_key) return false;
+    auto val = i.to_key->val();
+    return mdb_cmp(&*i.txn, i.dbi, &i.key.d_mdbval, &val) <= 0;
   }
 
   template <typename T> static inline auto DBIterReverse(
     MDBDbi dbi,
     MDBROTransactionImpl& txn,
-    auto (*fn_value)(MDBOutVal& k, MDBOutVal& v) -> T,
     optional<Cursor> from_key = {},
-    optional<Cursor> to_key = {}
+    optional<Cursor> to_key = {},
+    auto (*fn_value)(MDBOutVal&, MDBOutVal&) -> T = [](MDBOutVal&, MDBOutVal& v) {
+      return v.get<T>();
+    }
   ) -> DBIter<T> {
-    return DBIter(dbi, txn, fn_value, from_key, to_key,
+    return DBIter<T>(dbi, txn, from_key, to_key, fn_value,
       [](DBIter<T>& self) {
-        return (self.from_key
-          ? self.cur.find(self.from_key->val, self.key, self.value)
-          : self.cur.get(self.key, self.value, MDB_LAST)
-        ) || lte_to_key(self);
+        if (self.from_key) self.key = self.from_key->out_val();
+        auto err = self.cur.get(self.key, self.value, self.from_key ? MDB_SET : MDB_LAST);
+        if (err == MDB_NOTFOUND) {
+          if (self.from_key) err = self.cur.get(self.key, self.value, MDB_PREV);
+          if (err == MDB_NOTFOUND) return true;
+        }
+        if (err) throw std::runtime_error("Iterator failure: " + std::string(mdb_strerror(err)));
+        return lte_to_key(self);
       },
       [](DBIter<T>& self) {
-        return self.cur.get(self.key, self.value, MDB_PREV) || lte_to_key(self);
+        auto err = self.cur.get(self.key, self.value, MDB_PREV);
+        if (err == MDB_NOTFOUND) return true;
+        if (err) throw std::runtime_error("Iterator failure: " + std::string(mdb_strerror(err)));
+        return lte_to_key(self);
       }
     );
   }

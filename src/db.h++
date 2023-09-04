@@ -1,35 +1,17 @@
 #pragma once
 #include "iter.h++"
+#include "jwt.h++"
 #include "generated/datatypes_generated.h"
 
 namespace Ludwig {
-  enum Sort {
-    Active,
-    Hot,
-    New,
-    Old,
-    MostComments,
-    NewComments,
-    TopAll,
-    TopYear,
-    TopSixMonths,
-    TopThreeMonths,
-    TopMonth,
-    TopWeek,
-    TopDay,
-    TopTwelveHour,
-    TopSixHour,
-    TopHour
-  };
-
   enum Vote {
     Downvote = -1,
     NoVote = 0,
     Upvote = 1
   };
 
+  class ReadTxnBase;
   class ReadTxn;
-  class ReadTxnImpl;
   class WriteTxn;
 
   class DB {
@@ -38,23 +20,25 @@ namespace Ludwig {
     MDBDbi dbis[128];
   public:
     uint64_t seed;
+    uint8_t jwt_secret[JWT_SECRET_SIZE];
     DB(const char* filename);
-    auto open_read_txn() -> ReadTxnImpl;
+    auto open_read_txn() -> ReadTxn;
     auto open_write_txn() -> WriteTxn;
+    friend class ReadTxnBase;
     friend class ReadTxn;
-    friend class ReadTxnImpl;
     friend class WriteTxn;
   };
 
-  class ReadTxn {
+  class ReadTxnBase {
   protected:
     DB& db;
     virtual auto ro_txn() -> MDBROTransactionImpl& = 0;
   public:
-    ReadTxn(DB& db) : db(db) {}
+    ReadTxnBase(DB& db) : db(db) {}
 
     auto get_user_id(std::string_view name) -> std::optional<uint64_t>;
     auto get_user(uint64_t id) -> std::optional<const User*>;
+    auto get_user_stats(uint64_t id) -> std::optional<const UserStats*>;
     auto get_local_user(uint64_t id) -> std::optional<const LocalUser*>;
     auto count_local_users() -> uint64_t;
     auto list_users(const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
@@ -64,6 +48,7 @@ namespace Ludwig {
 
     auto get_board_id(std::string_view name) -> std::optional<uint64_t>;
     auto get_board(uint64_t id) -> std::optional<const Board*>;
+    auto get_board_stats(uint64_t id) -> std::optional<const BoardStats*>;
     auto get_local_board(uint64_t name) -> std::optional<const LocalBoard*>;
     auto count_local_boards() -> uint64_t;
     auto list_boards(const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
@@ -72,16 +57,14 @@ namespace Ludwig {
     auto list_created_boards(uint64_t user_id, const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
 
     auto get_page(uint64_t id) -> std::optional<const Page*>;
-    auto count_pages_of_board(uint64_t board_id) -> uint64_t;
-    auto count_pages_of_user(uint64_t user_id) -> uint64_t;
+    auto get_page_stats(uint64_t id) -> std::optional<const PageStats*>;
     auto list_pages_of_board_new(uint64_t board_id, const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
     auto list_pages_of_board_top(uint64_t board_id, const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
     auto list_pages_of_user_new(uint64_t user_id, const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
     auto list_pages_of_user_top(uint64_t user_id, const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
 
     auto get_note(uint64_t id) -> std::optional<const Note*>;
-    auto count_notes_of_post(uint64_t post_id) -> uint64_t;
-    auto count_notes_of_user(uint64_t user_id) -> uint64_t;
+    auto get_note_stats(uint64_t id) -> std::optional<const NoteStats*>;
     auto list_notes_of_post_new(uint64_t post_id, const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
     auto list_notes_of_post_top(uint64_t post_id, const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
     auto list_notes_of_board_new(uint64_t board_id, const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
@@ -89,8 +72,6 @@ namespace Ludwig {
     auto list_notes_of_user_new(uint64_t user_id, const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
     auto list_notes_of_user_top(uint64_t user_id, const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
 
-    auto count_karma_of_post(uint64_t post_id) -> int64_t;
-    auto count_karma_of_user(uint64_t user_id) -> int64_t;
     auto get_vote_of_user_for_post(uint64_t user_id, uint64_t post_id) -> Vote;
     //auto list_upvoted_posts_of_user(uint64_t user_id, const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
     //auto list_downvoted_posts_of_user(uint64_t user_id, const std::optional<Cursor>& cursor = {}) -> DBIter<uint64_t>;
@@ -98,24 +79,31 @@ namespace Ludwig {
     // TODO: Feeds, DMs, Invites, Blocks, Admins/Mods, Mod Actions
   };
 
-  class ReadTxnImpl : public ReadTxn {
+  class ReadTxn : public ReadTxnBase {
   protected:
     MDBROTransaction txn;
     auto ro_txn() -> MDBROTransactionImpl& {
       return *txn.get();
     }
   public:
-    ReadTxnImpl(DB& db) : ReadTxn(db), txn(db.env.getROTransaction()) {}
+    ReadTxn(DB& db) : ReadTxnBase(db), txn(db.env.getROTransaction()) {}
   };
 
-  class WriteTxn : public ReadTxn {
+  class WriteTxn : public ReadTxnBase {
   protected:
     MDBRWTransaction txn;
     auto ro_txn() -> MDBROTransactionImpl& {
       return *txn.get();
     }
+    auto get_user_stats_rw(uint64_t id) -> optional<UserStats*>;
+    auto get_board_stats_rw(uint64_t id) -> optional<BoardStats*>;
+    auto get_page_stats_rw(uint64_t id) -> optional<PageStats*>;
+    auto get_note_stats_rw(uint64_t id) -> optional<NoteStats*>;
+    auto delete_note_for_page(uint64_t id, uint64_t board_id, std::optional<PageStats*> page_stats) -> bool;
   public:
-    WriteTxn(DB& db): ReadTxn(db), txn(db.env.getRWTransaction()) {};
+    WriteTxn(DB& db): ReadTxnBase(db), txn(db.env.getRWTransaction()) {};
+
+    auto next_id() -> uint64_t;
 
     auto create_user(flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<User> offset) -> uint64_t;
     auto set_user(uint64_t id, flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<User> offset) -> void;
@@ -143,8 +131,8 @@ namespace Ludwig {
     }
   };
 
-  inline auto DB::open_read_txn() -> ReadTxnImpl {
-    return ReadTxnImpl(*this);
+  inline auto DB::open_read_txn() -> ReadTxn {
+    return ReadTxn(*this);
   }
   inline auto DB::open_write_txn() -> WriteTxn {
     return WriteTxn(*this);

@@ -1,8 +1,10 @@
 vendor/asio
 vendor/catch2
+vendor/cereal
+vendor/csprng
 vendor/flatbuffers
 vendor/lmdb
-vendor/rapidjson
+vendor/monocypher
 vendor/spdlog
 vendor/uWS
 vendor/xxHash

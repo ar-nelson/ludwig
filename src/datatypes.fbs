@@ -1,40 +1,84 @@
 namespace Ludwig;
 
-enum ModState : ubyte { Visible, Flagged, Hidden, Removed }
+enum ModState : ubyte { Visible, Flagged, Locked, Hidden, Removed }
 
 table User {
   name: string (required);
   display_name: string;
+  bio: string;
+  actor_id: string;
+  inbox_url: string;
   instance: uint64 = null;
   created_at: uint64;
   updated_at: uint64 = null;
   deleted_at: uint64 = null;
   avatar_media: uint64 = null;
+  admin: bool = false;
   bot: bool = false;
   mod_state: ModState = Visible;
 }
 
+table UserStats {
+  note_count: uint64;
+  note_karma: int64;
+  page_count: uint64;
+  page_karma: int64;
+}
+
+struct Hash {
+  bytes: [ubyte:64];
+}
+struct Salt {
+  bytes: [ubyte:16];
+}
+
 table LocalUser {
   email: string;
-  password_hash: uint64;
-  password_salt: uint64;
+  password_hash: Hash;
+  password_salt: Salt;
+  accepted_application: bool = false;
+  email_verified: bool = false;
+  open_links_in_new_tab: bool = false;
+  send_notifications_to_email: bool = false;
+  show_avatars: bool = true;
+  show_bot_accounts: bool = true;
+  show_new_post_notifs: bool = true;
+  show_nsfw: bool = false;
+  show_read_posts: bool = true;
+  show_scores: bool = true;
+  interface_language: string;
+  theme: string;
+  default_listing_type: ubyte = 0;
+  default_sort_type: ubyte = 0;
 }
 
 table Board {
   name: string (required);
   display_name: string;
+  actor_id: string;
+  inbox_url: string;
   instance: uint64 = null;
   created_at: uint64;
   updated_at: uint64 = null;
   description: string;
-  sidebar: string;
-  avatar_media: uint64 = null;
+  icon_media: uint64 = null;
   banner_media: uint64 = null;
   nsfw: bool = false;
   can_upvote: bool = true;
   can_downvote: bool = true;
   invite_only: bool = false;
   mod_state: ModState = Visible;
+}
+
+table BoardStats {
+  created_at: uint64;
+  page_count: uint64 = 0;
+  note_count: uint64 = 0;
+  subscriber_count: uint64 = 0;
+  users_active_half_year: uint32 = 0;
+  users_active_month: uint32 = 0;
+  users_active_week: uint32 = 0;
+  users_active_day: uint32 = 0;
 }
 
 table LocalBoard {
@@ -50,22 +94,43 @@ table Page {
   created_at: uint64;
   updated_at: uint64 = null;
   instance: uint64 = null;
-  original_url: string;
-  url: string;
-  text: string;
+  activity_url: string;
+  original_post_url: string;
+  content_url: string;
+  content_text: string;
   nsfw: bool = false;
   mod_state: ModState = Visible;
+}
+
+table PageStats {
+  created_at: uint64;
+  newest_comment_time: uint64 = 0;
+  newest_comment_time_necro: uint64 = 0;
+  descendant_count: uint64 = 0;
+  upvotes: uint64 = 0;
+  downvotes: uint64 = 0;
+  karma: int64 = 0;
 }
 
 table Note {
   author: uint64;
   parent: uint64;
+  page: uint64;
   created_at: uint64;
   updated_at: uint64 = null;
   instance: uint64 = null;
-  original_url: string;
+  activity_url: string;
+  original_post_url: string;
   content: string;
   mod_state: ModState = Visible;
+}
+
+table NoteStats {
+  created_at: uint64;
+  child_count: uint64 = 0;
+  upvotes: uint64 = 0;
+  downvotes: uint64 = 0;
+  karma: int64 = 0;
 }
 
 enum MediaCategory : ubyte { Image, Audio, Video }
@@ -116,7 +181,7 @@ enum InviteRole : ubyte {
   ModBoard
 }
 
-table invite {
+table Invite {
   role: InviteRole;
   created_at: uint64;
   from: uint64 = null;

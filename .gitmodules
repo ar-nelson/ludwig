@@ -4,12 +4,15 @@
 [submodule "vendor/flatbuffers"]
 	path = vendor/flatbuffers
 	url = https://github.com/google/flatbuffers.git
-[submodule "vendor/rapidjson"]
-	path = vendor/rapidjson
-	url = https://github.com/Tencent/rapidjson.git
 [submodule "vendor/xxHash"]
 	path = vendor/xxHash
 	url = https://github.com/Cyan4973/xxHash.git
 [submodule "vendor/spdlog"]
 	path = vendor/spdlog
 	url = https://github.com/gabime/spdlog.git
+[submodule "vendor/csprng"]
+	path = vendor/csprng
+	url = https://github.com/Duthomhas/CSPRNG.git
+[submodule "vendor/cereal"]
+	path = vendor/cereal
+	url = git@github.com:ar-nelson/cereal.git
