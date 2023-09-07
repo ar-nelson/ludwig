@@ -56,11 +56,6 @@ namespace Ludwig {
     LinkCardContains_MediaUrl
   };
 
-  static const MDBInVal
-    K_NEXT_ID { "next_id" },
-    K_HASH_SEED { "hash_seed" },
-    K_JWT_SECRET { "jwt_secret" };
-
   DB::DB(const char* filename) : env(filename, MDB_NOSUBDIR | MDB_WRITEMAP, 0600) {
 #   define MK_DBI(NAME, FLAGS) dbis[NAME] = env.openDB(#NAME, FLAGS | MDB_CREATE);
     MK_DBI(Settings, 0)
@@ -113,18 +108,28 @@ namespace Ludwig {
     // Load the secrets, or generate them if missing
     MDBOutVal val;
     auto txn = env.getRWTransaction();
-    if (txn->get(dbis[Settings], K_HASH_SEED, val)) {
+    if (txn->get(dbis[Settings], SettingsKey::hash_seed, val)) {
       spdlog::info("Opened database {} for the first time, generating secrets", filename);
       duthomhas::csprng rng;
       rng(seed);
       rng(jwt_secret);
-      txn->put(dbis[Settings], K_NEXT_ID, { 1ULL });
-      txn->put(dbis[Settings], K_HASH_SEED, { seed });
-      txn->put(dbis[Settings], K_JWT_SECRET, MDBInVal({ .d_mdbval = { JWT_SECRET_SIZE, jwt_secret } }));
+      const auto now = now_s();
+      txn->put(dbis[Settings], SettingsKey::next_id, { 1ULL });
+      txn->put(dbis[Settings], SettingsKey::hash_seed, { seed });
+      txn->put(dbis[Settings], SettingsKey::jwt_secret, MDBInVal({ .d_mdbval = { JWT_SECRET_SIZE, jwt_secret } }));
+      txn->put(dbis[Settings], SettingsKey::domain, { "http://localhost:2023" });
+      txn->put(dbis[Settings], SettingsKey::created_at, { now });
+      txn->put(dbis[Settings], SettingsKey::updated_at, { now });
+      txn->put(dbis[Settings], SettingsKey::name, { "Ludwig" });
+      txn->put(dbis[Settings], SettingsKey::description, { "A new Ludwig server" });
+      txn->put(dbis[Settings], SettingsKey::post_max_length, { 1024 * 1024 });
+      txn->put(dbis[Settings], SettingsKey::media_upload_enabled, { 0ULL });
+      txn->put(dbis[Settings], SettingsKey::board_creation_admin_only, { 1ULL });
+      txn->put(dbis[Settings], SettingsKey::federation_enabled, { 0ULL });
     } else {
       spdlog::debug("Loaded existing database {}", filename);
       seed = val.get<uint64_t>();
-      auto err = txn->get(dbis[Settings], K_JWT_SECRET, val);
+      auto err = txn->get(dbis[Settings], SettingsKey::jwt_secret, val);
       assert_fmt(!err, "Failed to load JWT secret from database {}: {}", filename, mdb_strerror(err));
       assert_fmt(val.d_mdbval.mv_size == JWT_SECRET_SIZE, "jwt_secret is wrong size: expected {}, got {}", JWT_SECRET_SIZE, val.d_mdbval.mv_size);
       memcpy(jwt_secret, val.d_mdbval.mv_data, JWT_SECRET_SIZE);
@@ -150,6 +155,17 @@ namespace Ludwig {
       ++iter;
     }
     return n;
+  }
+
+  auto ReadTxnBase::get_setting_str(MDBInVal key) -> std::string_view {
+    MDBOutVal v;
+    if (ro_txn().get(db.dbis[Settings], key, v)) return {};
+    return v.get<std::string_view>();
+  }
+  auto ReadTxnBase::get_setting_int(MDBInVal key) -> uint64_t {
+    MDBOutVal v;
+    if (ro_txn().get(db.dbis[Settings], key, v)) return {};
+    return v.get<uint64_t>();
   }
 
   auto ReadTxnBase::get_user_id(std::string_view name) -> optional<uint64_t> {
@@ -398,7 +414,7 @@ namespace Ludwig {
 
   auto WriteTxn::next_id() -> uint64_t {
     MDBOutVal v;
-    txn->get(db.dbis[Settings], K_NEXT_ID, v);
+    txn->get(db.dbis[Settings], SettingsKey::next_id, v);
     return (*reinterpret_cast<uint64_t*>(v.d_mdbval.mv_data))++;
   }
   auto WriteTxn::create_user(FlatBufferBuilder&& builder, Offset<User> offset) -> uint64_t {

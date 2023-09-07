@@ -10,6 +10,29 @@ namespace Ludwig {
     Upvote = 1
   };
 
+  class SettingsKey {
+  public:
+    inline static const MDBInVal
+      next_id {"next_id"},
+      hash_seed {"hash_seed"},
+      jwt_secret {"jwt_secret"},
+      private_key {"private_key"},
+      public_key {"public_key"},
+      domain {"domain"},
+      created_at {"created_at"},
+      updated_at {"updated_at"},
+      name {"name"},
+      description {"description"},
+      icon_url {"icon_url"},
+      banner_url {"banner_url"},
+      post_max_length {"post_max_length"},
+      media_upload_enabled {"media_upload_enabled"},
+      image_max_bytes {"image_max_bytes"},
+      video_max_bytes {"video_max_bytes"},
+      board_creation_admin_only {"board_creation_admin_only"},
+      federation_enabled {"federation_enabled"};
+  };
+
   class ReadTxnBase;
   class ReadTxn;
   class WriteTxn;
@@ -35,6 +58,9 @@ namespace Ludwig {
     virtual auto ro_txn() -> MDBROTransactionImpl& = 0;
   public:
     ReadTxnBase(DB& db) : db(db) {}
+
+    auto get_setting_str(MDBInVal key) -> std::string_view;
+    auto get_setting_int(MDBInVal key) -> uint64_t;
 
     auto get_user_id(std::string_view name) -> std::optional<uint64_t>;
     auto get_user(uint64_t id) -> std::optional<const User*>;
@@ -104,6 +130,8 @@ namespace Ludwig {
     WriteTxn(DB& db): ReadTxnBase(db), txn(db.env.getRWTransaction()) {};
 
     auto next_id() -> uint64_t;
+    auto set_setting_str(MDBInVal key, std::string_view value) -> void;
+    auto set_setting_int(MDBInVal key, uint64_t value) -> void;
 
     auto create_user(flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<User> offset) -> uint64_t;
     auto set_user(uint64_t id, flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<User> offset) -> void;

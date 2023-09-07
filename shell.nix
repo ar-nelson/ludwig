@@ -5,5 +5,6 @@
       cmake
       go-task
       zlib
+      xxd
     ];
 }

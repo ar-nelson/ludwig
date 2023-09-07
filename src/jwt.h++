@@ -29,7 +29,7 @@ namespace Ludwig {
 
   auto make_jwt(uint64_t user_id, uint64_t duration_seconds, const uint8_t secret[JWT_SECRET_SIZE]) -> std::string;
 
-  auto parse_jwt(std::string jwt, const uint8_t secret[JWT_SECRET_SIZE]) -> std::optional<JwtPayload>;
+  auto parse_jwt(std::string_view jwt, const uint8_t secret[JWT_SECRET_SIZE]) -> std::optional<JwtPayload>;
 
   static inline auto now_s() -> uint64_t {
     return static_cast<uint64_t>(

@@ -44,7 +44,7 @@ namespace Ludwig {
     return { payload };
   }
 
-  auto parse_jwt(std::string jwt, const uint8_t secret[JWT_SECRET_SIZE]) -> std::optional<JwtPayload> {
+  auto parse_jwt(std::string_view jwt, const uint8_t secret[JWT_SECRET_SIZE]) -> std::optional<JwtPayload> {
     const auto len = jwt.length(), header_len = JWT_HEADER.size();
     // Avoid DOS from impossibly huge strings
     if (len > 2048) {

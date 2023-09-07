@@ -3,3 +3,5 @@ build.*/
 .cache/
 .task/
 /src/generated/
+*.mdb
+*.mdb-lock

@@ -29,6 +29,25 @@ if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
   add_link_options (-llog)
 endif ()
 
+# Generate static files
+set(static_depends)
+find_program(resource_compiler xxd)
+file(GLOB_RECURSE static_files "static/*")
+foreach (static_path IN ITEMS ${static_files})
+  cmake_path(GET static_path FILENAME static_basename)
+  string(REGEX REPLACE "[./-]" "_" static_symbol ${static_basename})
+  set(static_outname "${PROJECT_SOURCE_DIR}/src/generated/${static_basename}.h")
+  add_custom_command(
+    COMMAND ${resource_compiler} -i -n ${static_symbol} ${static_path} ${static_outname}
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    DEPENDS ${static_path}
+    OUTPUT ${static_outname}
+    VERBATIM
+  )
+  list(APPEND static_depends ${static_outname})
+endforeach ()
+add_custom_target(static_generated DEPENDS ${static_depends})
+
 add_subdirectory(vendor)
 include_directories(vendor/singleheader/)
 
@@ -79,10 +98,12 @@ set (LUDWIG_COMMON_SRC
   src/base64.c++
   src/jwt.c++
   src/db.c++
+  src/controller.c++
+  src/webapp_routes.c++
 )
 
 add_executable(ludwig src/ludwig.c++ ${LUDWIG_COMMON_SRC})
-add_dependencies(ludwig flatbuffers_generated)
+add_dependencies(ludwig static_generated flatbuffers_generated)
 target_compile_options(ludwig PRIVATE ${COMPILE_OPTIONS})
 target_link_options(ludwig PRIVATE ${LINK_OPTIONS})
 target_link_libraries(ludwig PRIVATE cereal csprng FlatBuffers lmdb monocypher spdlog uWS xxHash)
@@ -90,6 +111,6 @@ target_link_libraries(ludwig PRIVATE cereal csprng FlatBuffers lmdb monocypher s
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   file(GLOB_RECURSE TEST_FILES "test/*.c++")
   add_executable(test ${LUDWIG_COMMON_SRC} ${TEST_FILES})
-  add_dependencies(test flatbuffers_generated)
+  add_dependencies(test static_generated flatbuffers_generated)
   target_link_libraries(test PRIVATE cereal csprng FlatBuffers lmdb monocypher spdlog uWS xxHash Catch2::Catch2WithMain)
 endif ()
