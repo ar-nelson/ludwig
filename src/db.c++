@@ -126,6 +126,7 @@ namespace Ludwig {
       txn->put(dbis[Settings], SettingsKey::media_upload_enabled, { 0ULL });
       txn->put(dbis[Settings], SettingsKey::board_creation_admin_only, { 1ULL });
       txn->put(dbis[Settings], SettingsKey::federation_enabled, { 0ULL });
+      txn->put(dbis[Settings], SettingsKey::nsfw_allowed, { 1ULL });
     } else {
       spdlog::debug("Loaded existing database {}", filename);
       seed = val.get<uint64_t>();

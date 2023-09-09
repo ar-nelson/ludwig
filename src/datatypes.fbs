@@ -64,6 +64,7 @@ table Board {
   icon_media: uint64 = null;
   banner_media: uint64 = null;
   nsfw: bool = false;
+  restricted_posting: bool = false;
   can_upvote: bool = true;
   can_downvote: bool = true;
   invite_only: bool = false;

@@ -38,8 +38,9 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  Ludwig::DB db(dbfile);
-  Ludwig::Controller controller(db);
+  auto db = std::make_shared<Ludwig::DB>(dbfile);
+  auto io = std::make_shared<asio::io_context>();
+  auto controller = std::make_shared<Ludwig::Controller>(db, io);
 
   struct sigaction sigint_handler { .sa_flags = 0 }, sigterm_handler { .sa_flags = 0 };
   sigint_handler.sa_handler = signal_handler;
@@ -50,7 +51,7 @@ int main(int argc, char** argv) {
   sigaction(SIGTERM, &sigterm_handler, nullptr);
 
   uWS::App app;
-  Ludwig::webapp_routes(app, controller);
+  webapp_routes(app, controller);
   app.listen(port, [port](auto *listen_socket) {
     if (listen_socket) {
       global_socket = listen_socket;

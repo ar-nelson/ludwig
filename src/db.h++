@@ -30,7 +30,8 @@ namespace Ludwig {
       image_max_bytes {"image_max_bytes"},
       video_max_bytes {"video_max_bytes"},
       board_creation_admin_only {"board_creation_admin_only"},
-      federation_enabled {"federation_enabled"};
+      federation_enabled {"federation_enabled"},
+      nsfw_allowed {"nsfw_allowed"};
   };
 
   class ReadTxnBase;
@@ -46,6 +47,7 @@ namespace Ludwig {
     uint8_t jwt_secret[JWT_SECRET_SIZE];
     DB(const char* filename);
     auto open_read_txn() -> ReadTxn;
+    auto open_read_txn_shared() -> std::shared_ptr<ReadTxn>;
     auto open_write_txn() -> WriteTxn;
     friend class ReadTxnBase;
     friend class ReadTxn;
@@ -161,6 +163,9 @@ namespace Ludwig {
 
   inline auto DB::open_read_txn() -> ReadTxn {
     return ReadTxn(*this);
+  }
+  inline auto DB::open_read_txn_shared() -> std::shared_ptr<ReadTxn> {
+    return std::make_shared<ReadTxn>(*this);
   }
   inline auto DB::open_write_txn() -> WriteTxn {
     return WriteTxn(*this);
