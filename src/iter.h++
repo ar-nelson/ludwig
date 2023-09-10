@@ -1,14 +1,14 @@
 #pragma once
-#include <lmdb-safe.hh>
+#include <lmdb.h>
 #include <xxhash.h>
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
 #include <optional>
+#include <sstream>
 #include <string_view>
 #include <assert.h>
 #include <byteswap.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 
 using std::optional, std::string_view;
@@ -27,12 +27,12 @@ namespace Ludwig {
     uint64_t data[3];
     uint8_t size;
   public:
-    Cursor(const MDBInVal& v) {
-      assert(v.d_mdbval.mv_size <= sizeof(data));
-      assert(v.d_mdbval.mv_size > 0);
-      assert(v.d_mdbval.mv_size % sizeof(uint64_t) == 0);
-      memcpy(data, v.d_mdbval.mv_data, std::min(sizeof(data), v.d_mdbval.mv_size));
-      size = (uint8_t)(v.d_mdbval.mv_size / sizeof(uint64_t));
+    Cursor(const MDB_val& v) {
+      assert(v.mv_size <= sizeof(data));
+      assert(v.mv_size > 0);
+      assert(v.mv_size % sizeof(uint64_t) == 0);
+      memcpy(data, v.mv_data, std::min(sizeof(data), v.mv_size));
+      size = (uint8_t)(v.mv_size / sizeof(uint64_t));
     }
     Cursor(uint64_t a) : data{a}, size(1) {}
     Cursor(uint64_t a, uint64_t b) : data{swap_bytes(a), swap_bytes(b)}, size(2) {}
@@ -56,12 +56,6 @@ namespace Ludwig {
     }
     inline auto val() -> MDB_val {
       return { size * sizeof(uint64_t), data };
-    }
-    inline auto out_val() -> MDBOutVal {
-      return { val() };
-    }
-    inline auto in_val() -> MDBInVal {
-      return { out_val() };
     }
 
     inline friend auto operator<<(std::ostream& lhs, const Cursor& rhs) -> std::ostream& {
@@ -92,66 +86,98 @@ namespace Ludwig {
     uint64_t n;
   };
 
-  template <typename T> static auto gte_to_key(DBIter<T>& iter) -> bool;
-  template <typename T> static auto lte_to_key(DBIter<T>& iter) -> bool;
+  template <typename T> static auto gte_to_key(DBIter<T>& iter) noexcept -> bool;
+  template <typename T> static auto lte_to_key(DBIter<T>& iter) noexcept -> bool;
+
+  template <class T, typename std::enable_if<std::is_arithmetic<T>::value, T>::type* = nullptr>
+  inline auto val_as(const MDB_val& v) noexcept -> T {
+    T ret;
+    assert(v.mv_size == sizeof(T));
+    memcpy(&ret, v.mv_data, sizeof(T));
+    return ret;
+  }
+
+  template <class T, typename std::enable_if<std::is_pointer<T>::value,T>::type* = nullptr>
+  inline auto val_as(const MDB_val& v) noexcept -> T {
+    return static_cast<T>(v.mv_data);
+  }
 
   template <typename T> struct DBIter {
-    MDBDbi dbi;
-    MDBROTransactionImpl& txn;
-    MDBROCursor cur;
+    MDB_dbi dbi;
+    MDB_txn* txn = nullptr;
+    MDB_cursor* cur = nullptr;
     uint64_t n = 0;
     bool done = false;
     optional<Cursor> from_key, to_key;
-    MDBOutVal key, value;
-    auto (*fn_value)(MDBOutVal&, MDBOutVal&) -> T;
+    MDB_val key, value;
+    auto (*fn_value)(MDB_val&, MDB_val&) -> T;
     auto (*fn_first)(DBIter<T>&) -> bool;
     auto (*fn_next)(DBIter<T>&) -> bool;
 
+    bool failed = false;
     DBIter(
-      MDBDbi dbi,
-      MDBROTransactionImpl& txn,
+      MDB_dbi dbi,
+      MDB_txn* txn,
       optional<Cursor> from_key = {},
       optional<Cursor> to_key = {},
-      auto (*fn_value)(MDBOutVal&, MDBOutVal&) -> T = [](MDBOutVal&, MDBOutVal& v) {
-        return v.get<T>();
+      auto (*fn_value)(MDB_val&, MDB_val&) -> T = [](MDB_val&, MDB_val& v) noexcept {
+        return val_as<T>(v);
       },
-      auto (*fn_first)(DBIter<T>&) -> bool = [](DBIter<T>& self) {
-        if (self.from_key) self.key = self.from_key->out_val();
-        auto err = self.cur.get(self.key, self.value, self.from_key ? MDB_SET_RANGE : MDB_FIRST);
-        if (err == MDB_NOTFOUND) return true;
-        if (err) throw std::runtime_error("Iterator failure: " + std::string(mdb_strerror(err)));
+      auto (*fn_first)(DBIter<T>&) -> bool = [](DBIter<T>& self) noexcept {
+        if (self.from_key) self.key = self.from_key->val();
+        if (auto err = mdb_cursor_get(self.cur, &self.key, &self.value, self.from_key ? MDB_SET_RANGE : MDB_FIRST)) {
+          if (err != MDB_NOTFOUND) {
+            self.failed = true;
+            spdlog::error("Database error in iterator: {}", mdb_strerror(err));
+          }
+          return true;
+        }
         return gte_to_key(self);
       },
-      auto (*fn_next)(DBIter<T>&) -> bool = [](DBIter<T>& self) {
-        auto err = self.cur.get(self.key, self.value, MDB_NEXT);
-        if (err == MDB_NOTFOUND) return true;
-        if (err) throw std::runtime_error("Iterator failure: " + std::string(mdb_strerror(err)));
+      auto (*fn_next)(DBIter<T>&) -> bool = [](DBIter<T>& self) noexcept {
+        if (auto err = mdb_cursor_get(self.cur, &self.key, &self.value, MDB_NEXT)) {
+          if (err != MDB_NOTFOUND) {
+            self.failed = true;
+            spdlog::error("Database error in iterator: {}", mdb_strerror(err));
+          }
+          return true;
+        }
         return gte_to_key(self);
       }
     ) : dbi(dbi), txn(txn), from_key(from_key), to_key(to_key),
         fn_value(fn_value), fn_first(fn_first), fn_next(fn_next) {
-      cur = txn.getROCursor(dbi);
-      done = fn_first(*this);
+      auto err = mdb_cursor_open(txn, dbi, &cur);
+      if (err) {
+        spdlog::error("Failed to create iterator: {}", mdb_strerror(err));
+        failed = true;
+        done = true;
+      } else {
+        done = fn_first(*this);
+      }
+    }
+    ~DBIter() {
+      if (cur != nullptr) mdb_cursor_close(cur);
     }
 
-    inline auto get_cursor() const -> optional<Cursor> {
+    inline auto get_cursor() const noexcept -> optional<Cursor> {
       if (done) return {};
       return { Cursor(key) };
     }
-    inline auto is_done() const -> bool {
+    inline auto is_done() const noexcept -> bool {
       return done;
     }
-    inline auto operator*() -> T {
+    inline auto operator*() noexcept -> T {
+      assert(!done);
       return fn_value(key, value);
     }
-    inline auto operator++() -> void {
+    inline auto operator++() noexcept -> void {
       if (done) return;
       if (fn_next(*this)) done = true;
       else n++;
     }
-    auto page(uint64_t size) -> PageIter<T>;
-    auto begin() -> PageIter<T>;
-    inline auto end() -> IterEnd {
+    auto page(uint64_t size) noexcept -> PageIter<T>;
+    auto begin() noexcept -> PageIter<T>;
+    inline auto end() noexcept -> IterEnd {
       return { ID_MAX };
     }
   };
@@ -160,64 +186,73 @@ namespace Ludwig {
     DBIter<T>& iter;
     uint64_t limit;
 
-    inline auto operator*() -> T {
+    inline auto operator*() noexcept -> T {
       return *iter;
     }
-    inline auto operator++() -> void {
+    inline auto operator++() noexcept -> void {
       ++iter;
     }
-    inline auto begin() -> PageIter<T> {
+    inline auto begin() noexcept -> PageIter<T> {
       return *this;
     }
-    inline auto end() -> IterEnd {
+    inline auto end() noexcept -> IterEnd {
       return { limit };
     }
-    inline friend auto operator!=(const PageIter<T> &lhs, IterEnd rhs) -> bool {
+    inline friend auto operator!=(const PageIter<T> &lhs, IterEnd rhs) noexcept -> bool {
       return !lhs.iter.done && lhs.iter.n < rhs.n;
     }
   };
 
-  template <typename T> inline auto DBIter<T>::page(uint64_t size) -> PageIter<T> {
+  template <typename T> inline auto DBIter<T>::page(uint64_t size) noexcept -> PageIter<T> {
     return { *this, n + size };
   }
-  template <typename T> inline auto DBIter<T>::begin() -> PageIter<T> {
+  template <typename T> inline auto DBIter<T>::begin() noexcept -> PageIter<T> {
     return { *this, ID_MAX };
   }
-  template <typename T> static inline auto gte_to_key(DBIter<T>& i) -> bool {
+  template <typename T> static inline auto gte_to_key(DBIter<T>& i) noexcept -> bool {
     if (!i.to_key) return false;
     auto val = i.to_key->val();
-    return mdb_cmp(&*i.txn, i.dbi, &i.key.d_mdbval, &val) >= 0;
+    return mdb_cmp(i.txn, i.dbi, &i.key, &val) >= 0;
   }
-  template <typename T> static inline auto lte_to_key(DBIter<T>& i) -> bool {
+  template <typename T> static inline auto lte_to_key(DBIter<T>& i) noexcept -> bool {
     if (!i.to_key) return false;
     auto val = i.to_key->val();
-    return mdb_cmp(&*i.txn, i.dbi, &i.key.d_mdbval, &val) <= 0;
+    return mdb_cmp(i.txn, i.dbi, &i.key, &val) <= 0;
   }
 
   template <typename T> static inline auto DBIterReverse(
-    MDBDbi dbi,
-    MDBROTransactionImpl& txn,
+    MDB_dbi dbi,
+    MDB_txn* txn,
     optional<Cursor> from_key = {},
     optional<Cursor> to_key = {},
-    auto (*fn_value)(MDBOutVal&, MDBOutVal&) -> T = [](MDBOutVal&, MDBOutVal& v) {
-      return v.get<T>();
+    auto (*fn_value)(MDB_val&, MDB_val&) -> T = [](MDB_val&, MDB_val& v) noexcept {
+      return val_as<T>(v);
     }
   ) -> DBIter<T> {
     return DBIter<T>(dbi, txn, from_key, to_key, fn_value,
-      [](DBIter<T>& self) {
-        if (self.from_key) self.key = self.from_key->out_val();
-        auto err = self.cur.get(self.key, self.value, self.from_key ? MDB_SET : MDB_LAST);
+      [](DBIter<T>& self) noexcept {
+        if (self.from_key) self.key = self.from_key->val();
+        auto err = mdb_cursor_get(self.cur, &self.key, &self.value, self.from_key ? MDB_SET : MDB_LAST);
         if (err == MDB_NOTFOUND) {
-          if (self.from_key) err = self.cur.get(self.key, self.value, MDB_PREV);
-          if (err == MDB_NOTFOUND) return true;
+          if (self.from_key) err = mdb_cursor_get(self.cur, &self.key, &self.value, MDB_PREV);
         }
-        if (err) throw std::runtime_error("Iterator failure: " + std::string(mdb_strerror(err)));
+        if (err) {
+          if (err != MDB_NOTFOUND) {
+            self.failed = true;
+            spdlog::error("Database error in iterator: {}", mdb_strerror(err));
+          }
+          return true;
+        }
         return lte_to_key(self);
       },
-      [](DBIter<T>& self) {
-        auto err = self.cur.get(self.key, self.value, MDB_PREV);
-        if (err == MDB_NOTFOUND) return true;
-        if (err) throw std::runtime_error("Iterator failure: " + std::string(mdb_strerror(err)));
+      [](DBIter<T>& self) noexcept {
+        if (auto err = mdb_cursor_get(self.cur, &self.key, &self.value, MDB_PREV)) {
+          if (err != MDB_NOTFOUND) {
+            self.failed = true;
+            spdlog::error("Database error in iterator: {}", mdb_strerror(err));
+          }
+          return true;
+        }
         return lte_to_key(self);
       }
     );

@@ -12,7 +12,12 @@ using std::optional, std::string, std::string_view;
 namespace Ludwig {
   static constexpr std::string_view
     ESCAPED = "<>'\"&",
-    HTML_FOOTER = R"(<footer>Powered by Ludwig</body></html>)";
+    HTML_FOOTER = R"(<footer>Powered by Ludwig</body></html>)",
+    LOGIN_FORM = R"(<main class="full-width"><form class="form-page">)"
+      R"(<label for="username"><span>Username or email</span><input type="text" name="username" id="username"></label>)"
+      R"(<label for="password"><span>Password</span><input type="password" name="password" id="password"></label>)"
+      R"(<input type="submit" value="Login">)"
+      R"(</form></main>)";
   static const std::regex cookie_regex(
     R"((^|;)\s*)" COOKIE_NAME R"(\s*=\s*([^;]+))",
     std::regex_constants::ECMAScript
@@ -247,7 +252,7 @@ namespace Ludwig {
     ) noexcept -> void {
       rsp << R"(<aside id="sidebar"><section id="search-section"><h2>Search</h2>)"
         R"(<form action="/search" id="search-form">)"
-        R"(<label for="search"><input type="search" name="search" id="search" placeholder="Search"><input type="submit" value="Search"></label>)";
+        R"(<label for="search"><span class="a11y">Search</span><input type="search" name="search" id="search" placeholder="Search"><input type="submit" value="Search"></label>)";
       const auto nsfw = nsfw_allowed(site, logged_in_user);
       if (board) rsp << R"(<input type="hidden" name="board" value=")" << board->id << R"(">)";
       if (nsfw || board) {
@@ -266,8 +271,8 @@ namespace Ludwig {
       if (!logged_in_user) {
         rsp << R"(<section id="login-section"><h2>Login</h2>)"
           R"(<form method="post" action="/do/login" id="login-form">)"
-          R"(<label for="username"><span>Username:</span> <input type="text" name="username" id="username"></label>)"
-          R"(<label for="password"><span>Password:</span> <input type="password" name="password" id="password"></label>)"
+          R"(<label for="username"><span class="a11y">Username or email</span><input type="text" name="username" id="username" placeholder="Username or email"></label>)"
+          R"(<label for="password"><span class="a11y">Password</span><input type="password" name="password" id="password" placeholder="Password"></label>)"
           R"(<input type="submit" value="Login" class="big-button"></form>)"
           R"(<a href="/register" class="big-button">Register</a>)"
           "</section>";
@@ -308,7 +313,7 @@ namespace Ludwig {
       const auto hash = hexstring(XXH3_64bits(src, len), true);
       app.get("/static/" + filename, [src, len, mimetype, hash](auto* res, auto* req) {
         if (req->getHeader("if-none-match") == hash) {
-          res->writeStatus("304 Not Modified")->end();
+          res->writeStatus(http_status(304))->end();
         } else {
           res->writeHeader("Content-Type", mimetype)
             ->writeHeader("Etag", hash)
@@ -330,6 +335,24 @@ namespace Ludwig {
           rsp << "<main>Hello, world!</main>";
           write_sidebar(rsp, site, login);
           rsp.end(HTML_FOOTER);
+        });
+      }));
+      app.get("/login", safe_page([](auto self, auto page) {
+        const SiteDetail* site;
+        bool logged_in;
+        page([&](auto& req) {
+          auto txn = self->controller->open_read_txn();
+          site = self->controller->site_detail();
+          logged_in = !!self->get_logged_in_user(txn, req);
+        }, [&](auto& rsp) {
+          if (logged_in) {
+            rsp.writeStatus(http_status(302));
+            rsp.writeHeader("Location", "/");
+          } else {
+            write_html_header(rsp, site, {}, {"/login"}, {"Login"});
+            rsp << LOGIN_FORM;
+            rsp.end(HTML_FOOTER);
+          }
         });
       }));
       serve_static(app, "default-theme.css", "text/css; charset=utf-8", default_theme_css, default_theme_css_len);

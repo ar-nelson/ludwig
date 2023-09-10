@@ -1,4 +1,4 @@
-#include "lmdb-safe.hh"
+#include <lmdb.h>
 #include <memory>
 #include <string>
 
@@ -17,11 +17,27 @@ struct TempFile {
 
 struct TempDB {
   TempFile file;
-  std::shared_ptr<MDBEnv> env;
-  MDBDbi dbi;
+  MDB_env* env;
+  MDB_dbi dbi;
 
   TempDB() {
-    env = getMDBEnv(file.name, MDB_NOSUBDIR, 0600);
-    dbi = env->openDB("test", MDB_CREATE);
+    int err = mdb_env_create(&env);
+    if (err) throw std::runtime_error(mdb_strerror(err));
+    err = mdb_env_set_maxdbs(env, 1);
+    if (err) throw std::runtime_error(mdb_strerror(err));
+    err = mdb_env_set_mapsize(env, 1024 * 1024 * 10);
+    if (err) throw std::runtime_error(mdb_strerror(err));
+    err = mdb_env_open(env, file.name, MDB_NOSUBDIR, 0600);
+    if (err) throw std::runtime_error(mdb_strerror(err));
+    MDB_txn* txn;
+    err = mdb_txn_begin(env, nullptr, 0, &txn);
+    if (err) throw std::runtime_error(mdb_strerror(err));
+    err = mdb_dbi_open(txn, "test", MDB_CREATE, &dbi);
+    if (err) throw std::runtime_error(mdb_strerror(err));
+    err = mdb_txn_commit(txn);
+    if (err) throw std::runtime_error(mdb_strerror(err));
+  }
+  ~TempDB() {
+    mdb_env_close(env);
   }
 };

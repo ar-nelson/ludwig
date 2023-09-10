@@ -8,7 +8,7 @@
 #include "db.h++"
 
 namespace Ludwig {
-  constexpr size_t PAGE_SIZE = 20;
+  constexpr size_t ITEMS_PER_PAGE = 20;
 
   enum class SortType : uint8_t {
     Active,
@@ -117,25 +117,25 @@ namespace Ludwig {
   };
 
   struct ListUsersResponse {
-    std::array<UserListEntry, PAGE_SIZE> page;
+    std::array<UserListEntry, ITEMS_PER_PAGE> page;
     size_t size;
     std::optional<uint64_t> next;
   };
 
   struct ListBoardsResponse {
-    std::array<BoardListEntry, PAGE_SIZE> page;
+    std::array<BoardListEntry, ITEMS_PER_PAGE> page;
     size_t size;
     std::optional<uint64_t> next;
   };
 
   struct ListPagesResponse {
-    std::array<PageListEntry, PAGE_SIZE> page;
+    std::array<PageListEntry, ITEMS_PER_PAGE> page;
     size_t size;
     std::optional<uint64_t> next;
   };
 
   struct ListNotesResponse {
-    std::array<NoteListEntry, PAGE_SIZE> page;
+    std::array<NoteListEntry, ITEMS_PER_PAGE> page;
     size_t size;
     std::optional<uint64_t> next;
   };

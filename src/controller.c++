@@ -53,7 +53,7 @@ namespace Ludwig {
       }
       const auto timestamp = active ? (*stats)->newest_comment_time() : (*page)->created_at();
       const auto denominator = rank_denominator(timestamp < now ? now - timestamp : 0);
-      if (sorted_pages.size() >= PAGE_SIZE) {
+      if (sorted_pages.size() >= ITEMS_PER_PAGE) {
         const double max_possible_rank = max_possible_numerator / denominator;
         auto last = std::prev(sorted_pages.end());
         if (max_possible_rank <= last->rank) break;
@@ -81,7 +81,7 @@ namespace Ludwig {
       }
       const auto timestamp = (*note)->created_at();
       const auto denominator = rank_denominator(timestamp < now ? now - timestamp : 0);
-      if (sorted_notes.size() >= PAGE_SIZE) {
+      if (sorted_notes.size() >= ITEMS_PER_PAGE) {
         const double max_possible_rank = max_possible_numerator / denominator;
         auto last = std::prev(sorted_notes.end());
         if (max_possible_rank <= last->rank) break;
@@ -189,9 +189,9 @@ namespace Ludwig {
         continue;
       }
       out.page[out.size] = { id, *user };
-      if (++out.size >= PAGE_SIZE) break;
+      if (++out.size >= ITEMS_PER_PAGE) break;
     }
-    if (!iter.done) out.next = { iter.get_cursor()->int_field_0() };
+    if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
     return out;
   }
   auto Controller::list_local_boards(ReadTxn& txn, uint64_t from_id) -> ListBoardsResponse {
@@ -204,9 +204,9 @@ namespace Ludwig {
         continue;
       }
       out.page[out.size] = { id, *board };
-      if (++out.size >= PAGE_SIZE) break;
+      if (++out.size >= ITEMS_PER_PAGE) break;
     }
-    if (!iter.done) out.next = { iter.get_cursor()->int_field_0() };
+    if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
     return out;
   }
   auto Controller::list_board_pages(ReadTxn& txn, uint64_t board_id, SortType sort, uint64_t from_id) -> ListPagesResponse {
@@ -222,9 +222,9 @@ namespace Ludwig {
             continue;
           }
           out.page[out.size] = { page_id, 0, *page, *stats };
-          if (++out.size >= PAGE_SIZE) break;
+          if (++out.size >= ITEMS_PER_PAGE) break;
         }
-        if (!iter.done) out.next = { iter.get_cursor()->int_field_0() };
+        if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
         break;
       }
       case SortType::TopAll:
@@ -279,9 +279,9 @@ namespace Ludwig {
           }
           if ((*page)->created_at() < earliest) continue;
           out.page[out.size] = { page_id, 0, *page, *stats };
-          if (++out.size >= PAGE_SIZE) break;
+          if (++out.size >= ITEMS_PER_PAGE) break;
         }
-        if (!iter.done) out.next = { iter.get_cursor()->int_field_0() };
+        if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
         break;
       }
       case SortType::Hot: {
@@ -293,9 +293,9 @@ namespace Ludwig {
         }
         for (auto entry : page_of_ranked_pages(txn, txn.list_pages_of_board_new(board_id, {Cursor(from_id)}), highest_karma, false)) {
           out.page[out.size] = entry;
-          if (++out.size >= PAGE_SIZE) break;
+          if (++out.size >= ITEMS_PER_PAGE) break;
         }
-        if (out.size >= PAGE_SIZE) {
+        if (out.size >= ITEMS_PER_PAGE) {
           for (auto page_id : txn.list_pages_of_board_new(board_id, {Cursor(from_id)})) {
             if (std::none_of(out.page.begin(), out.page.end(), [page_id](const PageListEntry& e) { return e.id == page_id; })) {
               out.next = { page_id };
@@ -325,9 +325,9 @@ namespace Ludwig {
       }
       for (auto entry : page_of_ranked_notes(txn, std::move(iter), highest_karma)) {
         out.page[out.size] = entry;
-        if (++out.size >= PAGE_SIZE) break;
+        if (++out.size >= ITEMS_PER_PAGE) break;
       }
-      if (out.size >= PAGE_SIZE) {
+      if (out.size >= ITEMS_PER_PAGE) {
         for (auto note_id : txn.list_notes_of_board_new(board_id, {Cursor(from_id)})) {
           if (std::none_of(out.page.begin(), out.page.end(), [note_id](const NoteListEntry& e) { return e.id == note_id; })) {
             out.next = { note_id };
@@ -344,9 +344,9 @@ namespace Ludwig {
           continue;
         }
         out.page[out.size] = { note_id, 0, *note, *stats };
-        if (++out.size >= PAGE_SIZE) break;
+        if (++out.size >= ITEMS_PER_PAGE) break;
       }
-      if (!iter.done) out.next = { iter.get_cursor()->int_field_0() };
+      if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
     }
     return out;
   }
@@ -365,9 +365,9 @@ namespace Ludwig {
       }
       for (auto entry : page_of_ranked_notes(txn, std::move(iter), highest_karma)) {
         out.page[out.size] = entry;
-        if (++out.size >= PAGE_SIZE) break;
+        if (++out.size >= ITEMS_PER_PAGE) break;
       }
-      if (out.size >= PAGE_SIZE) {
+      if (out.size >= ITEMS_PER_PAGE) {
         for (auto note_id : txn.list_notes_of_post_new(parent_id, {Cursor(from_id)})) {
           if (std::none_of(out.page.begin(), out.page.end(), [note_id](const NoteListEntry& e) { return e.id == note_id; })) {
             out.next = { note_id };
@@ -384,9 +384,9 @@ namespace Ludwig {
           continue;
         }
         out.page[out.size] = { note_id, 0, *note, *stats };
-        if (++out.size >= PAGE_SIZE) break;
+        if (++out.size >= ITEMS_PER_PAGE) break;
       }
-      if (!iter.done) out.next = { iter.get_cursor()->int_field_0() };
+      if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
     }
     return out;
   }
@@ -404,9 +404,9 @@ namespace Ludwig {
         continue;
       }
       out.page[out.size] = { page_id, 0, *page, *stats };
-      if (++out.size >= PAGE_SIZE) break;
+      if (++out.size >= ITEMS_PER_PAGE) break;
     }
-    if (!iter.done) out.next = { iter.get_cursor()->int_field_0() };
+    if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
     return out;
   }
   auto Controller::list_user_notes(ReadTxn& txn, uint64_t user_id, UserPostSortType sort, uint64_t from_id) -> ListNotesResponse {
@@ -423,9 +423,9 @@ namespace Ludwig {
         continue;
       }
       out.page[out.size] = { note_id, 0, *note, *stats };
-      if (++out.size >= PAGE_SIZE) break;
+      if (++out.size >= ITEMS_PER_PAGE) break;
     }
-    if (!iter.done) out.next = { iter.get_cursor()->int_field_0() };
+    if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
     return out;
   }
   auto Controller::create_local_user(
@@ -442,37 +442,38 @@ namespace Ludwig {
     if (password.str.length() < 8) {
       throw ControllerError("Password must be at least 8 characters", 400);
     }
-    auto txn = db->open_write_txn();
-    if (txn.get_user_id(username)) {
-      throw ControllerError("A user with this name already exists on this instance", 409);
-    }
-    // TODO: Check if email already exists
-    uint8_t salt[16], hash[64];
-    duthomhas::csprng rng;
-    rng(salt);
-    hash_password(std::move(password), salt, hash);
-    auto now = now_s();
-    uint64_t user_id;
-    {
-      flatbuffers::FlatBufferBuilder fbb;
-      user_id = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
-        username,
-        nullptr,
-        "",
-        nullptr,
-        nullptr,
-        {},
-        now
-      ));
-    }
-    {
-      flatbuffers::FlatBufferBuilder fbb;
-      Hash hash_struct(hash);
-      Salt salt_struct(salt);
-      txn.set_local_user(user_id, std::move(fbb), CreateLocalUserDirect(fbb, email, &hash_struct, &salt_struct));
-    }
-    txn.commit();
-    return user_id;
+    return db->open_write_txn([&](WriteTxn txn) {
+      if (txn.get_user_id(username)) {
+        throw ControllerError("A user with this name already exists on this instance", 409);
+      }
+      // TODO: Check if email already exists
+      uint8_t salt[16], hash[64];
+      duthomhas::csprng rng;
+      rng(salt);
+      hash_password(std::move(password), salt, hash);
+      auto now = now_s();
+      uint64_t user_id;
+      {
+        flatbuffers::FlatBufferBuilder fbb;
+        user_id = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
+          username,
+          nullptr,
+          "",
+          nullptr,
+          nullptr,
+          {},
+          now
+        ));
+      }
+      {
+        flatbuffers::FlatBufferBuilder fbb;
+        Hash hash_struct(hash);
+        Salt salt_struct(salt);
+        txn.set_local_user(user_id, std::move(fbb), CreateLocalUserDirect(fbb, email, &hash_struct, &salt_struct));
+      }
+      txn.commit();
+      return user_id;
+    });
   }
   auto Controller::create_local_board(
     uint64_t owner,
@@ -489,44 +490,45 @@ namespace Ludwig {
     if (display_name && strlen(*display_name) > 1024) {
       throw ControllerError("Display name cannot be longer than 1024 bytes", 400);
     }
-    auto txn = db->open_write_txn();
-    if (txn.get_board_id(name)) {
-      throw ControllerError("A board with this name already exists on this instance", 409);
-    }
-    if (is_nsfw && !txn.get_setting_int(SettingsKey::nsfw_allowed)) {
-      throw ControllerError("This instance does not allow NSFW content", 400);
-    }
-    if (!txn.get_local_user(owner)) {
-      throw ControllerError("Board owner is not a user on this instance", 400);
-    }
-    // TODO: Check if user is allowed to create boards
-    auto now = now_s();
-    uint64_t board_id;
-    {
-      flatbuffers::FlatBufferBuilder fbb;
-      board_id = txn.create_board(std::move(fbb), CreateBoardDirect(fbb,
-        name,
-        display_name.value_or(nullptr),
-        nullptr,
-        nullptr,
-        {},
-        now,
-        {},
-        nullptr,
-        {},
-        {},
-        is_nsfw,
-        is_restricted_posting
-      ));
-    }
-    {
-      flatbuffers::FlatBufferBuilder fbb;
-      txn.set_local_board(board_id, std::move(fbb),
-        CreateLocalBoard(fbb, owner, !is_local_only, is_private)
-      );
-    }
-    txn.commit();
-    return board_id;
+    return db->open_write_txn([&](WriteTxn txn) {
+      if (txn.get_board_id(name)) {
+        throw ControllerError("A board with this name already exists on this instance", 409);
+      }
+      if (is_nsfw && !txn.get_setting_int(SettingsKey::nsfw_allowed)) {
+        throw ControllerError("This instance does not allow NSFW content", 400);
+      }
+      if (!txn.get_local_user(owner)) {
+        throw ControllerError("Board owner is not a user on this instance", 400);
+      }
+      // TODO: Check if user is allowed to create boards
+      auto now = now_s();
+      uint64_t board_id;
+      {
+        flatbuffers::FlatBufferBuilder fbb;
+        board_id = txn.create_board(std::move(fbb), CreateBoardDirect(fbb,
+          name,
+          display_name.value_or(nullptr),
+          nullptr,
+          nullptr,
+          {},
+          now,
+          {},
+          nullptr,
+          {},
+          {},
+          is_nsfw,
+          is_restricted_posting
+        ));
+      }
+      {
+        flatbuffers::FlatBufferBuilder fbb;
+        txn.set_local_board(board_id, std::move(fbb),
+          CreateLocalBoard(fbb, owner, !is_local_only, is_private)
+        );
+      }
+      txn.commit();
+      return board_id;
+    });
   }
   auto Controller::create_local_page(
     uint64_t author,
@@ -563,8 +565,7 @@ namespace Ludwig {
       throw ControllerError("Post title cannot be blank", 400);
     }
     uint64_t page_id;
-    {
-      auto txn = db->open_write_txn();
+    db->open_write_txn([&](WriteTxn txn) {
       if (!txn.get_local_user(author)) {
         throw ControllerError("Post author is not a user on this instance", 400);
       }
@@ -594,7 +595,7 @@ namespace Ludwig {
       }
       txn.set_vote(author, page_id, Upvote);
       txn.commit();
-    }
+    });
     dispatch_event(Event::UserStatsUpdate, author);
     dispatch_event(Event::BoardStatsUpdate, board);
     return page_id;
@@ -612,8 +613,7 @@ namespace Ludwig {
       throw ControllerError("Comment text content cannot be blank", 400);
     }
     uint64_t note_id, page_id, board_id;
-    {
-      auto txn = db->open_write_txn();
+    db->open_write_txn([&](WriteTxn txn) {
       if (!txn.get_local_user(author)) {
         throw ControllerError("Comment author is not a user on this instance", 400);
       }
@@ -642,7 +642,7 @@ namespace Ludwig {
       }
       txn.set_vote(author, note_id, Upvote);
       txn.commit();
-    }
+    });
     dispatch_event(Event::UserStatsUpdate, author);
     dispatch_event(Event::BoardStatsUpdate, board_id);
     dispatch_event(Event::PageStatsUpdate, page_id);
@@ -650,33 +650,35 @@ namespace Ludwig {
     return note_id;
   }
   auto Controller::vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void {
-    auto txn = db->open_write_txn();
-    if (!txn.get_user(user_id)) {
-      throw ControllerError("User does not exist", 400);
-    }
-    const auto page = txn.get_page(post_id);
-    const auto note = !page ? txn.get_note(post_id) : std::nullopt;
-    if (!page && !note) {
-      throw ControllerError("Post does not exist", 400);
-    }
-    const auto op = page ? (*page)->author() : (*note)->author();
-    txn.set_vote(user_id, post_id, vote);
-    txn.commit();
+    db->open_write_txn([&](WriteTxn txn) {
+      if (!txn.get_user(user_id)) {
+        throw ControllerError("User does not exist", 400);
+      }
+      const auto page = txn.get_page(post_id);
+      const auto note = !page ? txn.get_note(post_id) : std::nullopt;
+      if (!page && !note) {
+        throw ControllerError("Post does not exist", 400);
+      }
+      const auto op = page ? (*page)->author() : (*note)->author();
+      txn.set_vote(user_id, post_id, vote);
+      txn.commit();
 
-    dispatch_event(Event::UserStatsUpdate, op);
-    if (page) dispatch_event(Event::PageStatsUpdate, post_id);
-    if (note) dispatch_event(Event::NoteStatsUpdate, post_id);
+      dispatch_event(Event::UserStatsUpdate, op);
+      if (page) dispatch_event(Event::PageStatsUpdate, post_id);
+      if (note) dispatch_event(Event::NoteStatsUpdate, post_id);
+    });
   }
   auto Controller::subscribe(uint64_t user_id, uint64_t board_id, bool subscribed) -> void {
-    auto txn = db->open_write_txn();
-    if (!txn.get_user(user_id)) {
-      throw ControllerError("User does not exist", 400);
-    }
-    if (!txn.get_board(board_id)) {
-      throw ControllerError("Board does not exist", 400);
-    }
-    txn.set_subscription(user_id, board_id, subscribed);
-    txn.commit();
+    db->open_write_txn([&](WriteTxn txn) {
+      if (!txn.get_user(user_id)) {
+        throw ControllerError("User does not exist", 400);
+      }
+      if (!txn.get_board(board_id)) {
+        throw ControllerError("Board does not exist", 400);
+      }
+      txn.set_subscription(user_id, board_id, subscribed);
+      txn.commit();
+    });
 
     dispatch_event(Event::UserStatsUpdate, user_id);
     dispatch_event(Event::BoardStatsUpdate, board_id);
