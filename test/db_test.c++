@@ -25,7 +25,7 @@ TEST_CASE("create and get user", "[db]") {
   TempFile file;
   DB db(file.name);
   uint64_t id;
-  db.open_write_txn([&](WriteTxn txn) {
+  {
     FlatBufferBuilder fbb;
     auto offset = CreateUserDirect(fbb,
       "testuser",
@@ -36,9 +36,10 @@ TEST_CASE("create and get user", "[db]") {
       {},
       now_s()
     );
+    auto txn = db.open_write_txn();
     id = txn.create_user(std::move(fbb), offset);
     txn.commit();
-  });
+  }
   {
     auto txn = db.open_read_txn();
     auto user = txn.get_user(id);
@@ -49,84 +50,82 @@ TEST_CASE("create and get user", "[db]") {
 }
 
 static inline auto create_users(DB& db, uint64_t ids[3]) {
-  db.open_write_txn([&](WriteTxn txn) {
-    {
-      FlatBufferBuilder fbb;
-      ids[0] = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
-        "user1",
-        "User 1",
-        "",
-        "",
-        "",
-        {},
-        now_s()
-      ));
-    }
-    {
-      FlatBufferBuilder fbb;
-      ids[1] = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
-        "user2",
-        "User 2",
-        "",
-        "",
-        "",
-        {},
-        now_s()
-      ));
-    }
-    {
-      FlatBufferBuilder fbb;
-      ids[2] = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
-        "user3",
-        "User 3",
-        "",
-        "",
-        "",
-        {},
-        now_s()
-      ));
-    }
-    txn.commit();
-  });
+  auto txn = db.open_write_txn();
+  {
+    FlatBufferBuilder fbb;
+    ids[0] = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
+      "user1",
+      "User 1",
+      "",
+      "",
+      "",
+      {},
+      now_s()
+    ));
+  }
+  {
+    FlatBufferBuilder fbb;
+    ids[1] = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
+      "user2",
+      "User 2",
+      "",
+      "",
+      "",
+      {},
+      now_s()
+    ));
+  }
+  {
+    FlatBufferBuilder fbb;
+    ids[2] = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
+      "user3",
+      "User 3",
+      "",
+      "",
+      "",
+      {},
+      now_s()
+    ));
+  }
+  txn.commit();
 }
 
 static inline auto create_boards(DB& db, uint64_t ids[3]) {
-  db.open_write_txn([&](WriteTxn txn) {
-    {
-      FlatBufferBuilder fbb;
-      ids[0] = txn.create_board(std::move(fbb), CreateBoardDirect(fbb,
-        "lions",
-        "Lions",
-        "",
-        "",
-        {},
-        now_s()
-      ));
-    }
-    {
-      FlatBufferBuilder fbb;
-      ids[1] = txn.create_board(std::move(fbb), CreateBoardDirect(fbb,
-        "tigers",
-        "Tigers",
-        "",
-        "",
-        {},
-        now_s()
-      ));
-    }
-    {
-      FlatBufferBuilder fbb;
-      ids[2] = txn.create_board(std::move(fbb), CreateBoardDirect(fbb,
-        "bears",
-        "Bears",
-        "",
-        "",
-        {},
-        now_s()
-      ));
-    }
-    txn.commit();
-  });
+  auto txn = db.open_write_txn();
+  {
+    FlatBufferBuilder fbb;
+    ids[0] = txn.create_board(std::move(fbb), CreateBoardDirect(fbb,
+      "lions",
+      "Lions",
+      "",
+      "",
+      {},
+      now_s()
+    ));
+  }
+  {
+    FlatBufferBuilder fbb;
+    ids[1] = txn.create_board(std::move(fbb), CreateBoardDirect(fbb,
+      "tigers",
+      "Tigers",
+      "",
+      "",
+      {},
+      now_s()
+    ));
+  }
+  {
+    FlatBufferBuilder fbb;
+    ids[2] = txn.create_board(std::move(fbb), CreateBoardDirect(fbb,
+      "bears",
+      "Bears",
+      "",
+      "",
+      {},
+      now_s()
+    ));
+  }
+  txn.commit();
 }
 
 TEST_CASE("create and list users", "[db]") {
@@ -165,7 +164,8 @@ TEST_CASE("create users and boards, subscribe and unsubscribe", "[db]") {
   uint64_t user_ids[3], board_ids[3];
   create_users(db, user_ids);
   create_boards(db, board_ids);
-  db.open_write_txn([&](WriteTxn txn) {
+  {
+    auto txn = db.open_write_txn();
     txn.set_subscription(user_ids[0], board_ids[0], true);
     txn.set_subscription(user_ids[1], board_ids[0], true);
     txn.set_subscription(user_ids[2], board_ids[0], true);
@@ -173,7 +173,7 @@ TEST_CASE("create users and boards, subscribe and unsubscribe", "[db]") {
     txn.set_subscription(user_ids[1], board_ids[1], true);
     txn.set_subscription(user_ids[0], board_ids[2], true);
     txn.commit();
-  });
+  }
   {
     auto txn = db.open_read_txn();
     auto stats0 = *txn.get_board_stats(board_ids[0]),
@@ -192,12 +192,13 @@ TEST_CASE("create users and boards, subscribe and unsubscribe", "[db]") {
     REQUIRE(!txn.user_is_subscribed(user_ids[1], board_ids[2]));
     REQUIRE(!txn.user_is_subscribed(user_ids[2], board_ids[2]));
   }
-  db.open_write_txn([&](WriteTxn txn) {
+  {
+    auto txn = db.open_write_txn();
     txn.set_subscription(user_ids[0], board_ids[0], false);
     txn.set_subscription(user_ids[0], board_ids[1], false);
     txn.set_subscription(user_ids[0], board_ids[2], false);
     txn.commit();
-  });
+  }
   {
     auto txn = db.open_read_txn();
     auto stats0 = *txn.get_board_stats(board_ids[0]),
@@ -239,7 +240,8 @@ TEST_CASE("create and list posts", "[db]") {
   uint64_t user_ids[3], board_ids[3], page_ids[12];
   create_users(db, user_ids);
   create_boards(db, board_ids);
-  db.open_write_txn([&](WriteTxn txn) {
+  {
+    auto txn = db.open_write_txn();
     page_ids[0] = create_page(txn, user_ids[0], board_ids[0], "post 1", "http://example.com");
     page_ids[1] = create_page(txn, user_ids[0], board_ids[0], "post 2", "http://example.com");
     page_ids[2] = create_page(txn, user_ids[0], board_ids[0], "post 3", "http://example.com");
@@ -253,7 +255,7 @@ TEST_CASE("create and list posts", "[db]") {
     page_ids[10] = create_page(txn, user_ids[2], board_ids[1], "post 11", "http://example.com");
     page_ids[11] = create_page(txn, user_ids[2], board_ids[2], "post 12", "http://example.com");
     txn.commit();
-  });
+  }
   {
     auto txn = db.open_read_txn();
     REQUIRE((*txn.get_user_stats(user_ids[0]))->page_count() == 6);
@@ -330,8 +332,8 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
   std::array<uint64_t, RND_SIZE / 10> users;
   std::array<uint64_t, RND_SIZE> pages, notes;
   auto now = now_s();
-  db.open_write_txn([&](WriteTxn txn) {
-    spdlog::info("Generating users");
+  {
+    auto txn = db.open_write_txn();
     for (size_t i = 0; i < RND_SIZE / 10; i++) {
       FlatBufferBuilder fbb;
       users[i] = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
@@ -345,9 +347,9 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       ));
     }
     txn.commit();
-  });
-  db.open_write_txn([&](WriteTxn txn) {
-    spdlog::info("Generating pages");
+  }
+  {
+    auto txn = db.open_write_txn();
     for (size_t i = 0; i < RND_SIZE; i++) {
       auto author = users[random_int(gen, RND_SIZE / 10)];
       auto board = boards[random_int(gen, 3)];
@@ -365,9 +367,9 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       ));
     }
     txn.commit();
-  });
-  db.open_write_txn([&](WriteTxn txn) {
-    spdlog::info("Generating notes");
+  }
+  {
+    auto txn = db.open_write_txn();
     for (size_t i = 0; i < RND_SIZE; i++) {
       auto author = users[random_int(gen, RND_SIZE / 10)],
         parent_ix = random_int(gen, RND_SIZE + i),
@@ -387,46 +389,47 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       ));
     }
     txn.commit();
-  });
-  spdlog::info("Generating votes");
-  for (size_t i = 0; i < RND_SIZE / 10; i++) {
-    auto user = users[i];
-    for (size_t ii = 0; ii < RND_SIZE; ii++) {
-      switch (random_int(gen, 5)) {
-        case 0:
-          db.open_write_txn([&](WriteTxn txn) {
+  }
+  {
+    for (size_t i = 0; i < RND_SIZE / 10; i++) {
+      auto user = users[i];
+      for (size_t ii = 0; ii < RND_SIZE; ii++) {
+        switch (random_int(gen, 5)) {
+          case 0: {
+            auto txn = db.open_write_txn();
             txn.set_vote(user, pages[ii], Downvote);
             txn.commit();
-          });
-          break;
-        case 3:
-        case 4:
-          db.open_write_txn([&](WriteTxn txn) {
+            break;
+          }
+          case 3:
+          case 4: {
+            auto txn = db.open_write_txn();
             txn.set_vote(user, pages[ii], Upvote);
             txn.commit();
-          });
-          break;
-        default:
-          break;
+            break;
+          }
+          default:
+            break;
+        }
       }
-    }
-    for (size_t ii = 0; ii < RND_SIZE; ii++) {
-      switch (random_int(gen, 5)) {
-        case 0:
-          db.open_write_txn([&](WriteTxn txn) {
+      for (size_t ii = 0; ii < RND_SIZE; ii++) {
+        switch (random_int(gen, 5)) {
+          case 0: {
+            auto txn = db.open_write_txn();
             txn.set_vote(user, notes[ii], Downvote);
             txn.commit();
-          });
-          break;
-        case 3:
-        case 4:
-          db.open_write_txn([&](WriteTxn txn) {
+            break;
+          }
+          case 3:
+          case 4: {
+            auto txn = db.open_write_txn();
             txn.set_vote(user, notes[ii], Upvote);
             txn.commit();
-          });
-          break;
-        default:
-          break;
+            break;
+          }
+          default:
+            break;
+        }
       }
     }
   }
@@ -484,11 +487,12 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
   std::set<uint64_t> del_pages, del_notes;
   std::sample(pages.begin(), pages.end(), std::inserter(del_pages, del_pages.begin()), RND_SIZE / 20, gen);
   std::sample(notes.begin(), notes.end(), std::inserter(del_notes, del_notes.begin()), RND_SIZE / 20, gen);
-  db.open_write_txn([&](WriteTxn txn) {
+  {
+    auto txn = db.open_write_txn();
     for (auto page : del_pages) { REQUIRE(txn.delete_page(page) == true); }
     for (auto note : del_notes) txn.delete_note(note);
     txn.commit();
-  });
+  }
   {
     auto txn = db.open_read_txn();
     size_t total_pages = 0;
@@ -550,6 +554,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       REQUIRE(stats->note_count() == new_notes);
       total_pages += new_pages;
     }
-    REQUIRE(total_pages == RND_SIZE - (RND_SIZE / 20));
+    REQUIRE(total_pages == RND_SIZE- (RND_SIZE / 20));
   }
 }
+

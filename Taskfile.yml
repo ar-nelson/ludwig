@@ -51,7 +51,7 @@ tasks:
     deps:
       - build-debug
     cmds:
-      - ./build.debug/test
+      - gdb -quiet -ex='set confirm on' -ex=run -ex=quit --args ./build.debug/test -b
   run-debug:
     deps:
       - build-debug

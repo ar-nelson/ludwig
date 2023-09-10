@@ -10,6 +10,8 @@ using std::optional, flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot, flatb
 #define assert_fmt(CONDITION, ...) if (!(CONDITION)) { spdlog::critical(__VA_ARGS__); throw std::runtime_error("Assertion failed: " #CONDITION); }
 
 namespace Ludwig {
+  static constexpr uint64_t ACTIVE_COMMENT_MAX_AGE = 86400 * 2; // 2 days
+
   enum Dbi {
     Settings,
 
@@ -77,14 +79,8 @@ namespace Ludwig {
   }
 
   inline auto db_put(MDB_txn* txn, MDB_dbi dbi, MDB_val& k, MDB_val& v, unsigned flags = 0) -> void {
-    int err = mdb_put(txn, dbi, &k, &v, flags);
-    switch (err) {
-      case 0:
-        return;
-      case MDB_MAP_FULL:
-        throw DBResizeError();
-      default:
-        throw DBError("Write failed", err);
+    if (auto err = mdb_put(txn, dbi, &k, &v, flags)) {
+      throw DBError("Write failed", err);
     }
   }
 
@@ -111,6 +107,12 @@ namespace Ludwig {
     db_put(txn, dbi, kval, vval, flags);
   }
 
+  inline auto db_put(MDB_txn* txn, MDB_dbi dbi, uint64_t k, FlatBufferBuilder& fbb, unsigned flags = 0) -> void {
+    MDB_val kval { sizeof(uint64_t), &k };
+    MDB_val vval { fbb.GetSize(), fbb.GetBufferPointer() };
+    db_put(txn, dbi, kval, vval, flags);
+  }
+
   inline auto db_put(MDB_txn* txn, MDB_dbi dbi, Cursor k, MDB_val& v, unsigned flags = 0) -> void {
     MDB_val kval = k.val();
     db_put(txn, dbi, kval, v, flags);
@@ -123,19 +125,22 @@ namespace Ludwig {
     }
   }
 
-  DB::DB(const char* filename) :
-    map_size(1024 * (size_t)sysconf(_SC_PAGESIZE)),
-    max_txns(std::min<unsigned>(126, std::thread::hardware_concurrency() + 1)),
-    txn_semaphore((ptrdiff_t)max_txns)
-  {
+  inline auto db_del(MDB_txn* txn, MDB_dbi dbi, uint64_t k) -> void {
+    MDB_val kval = { sizeof(uint64_t), &k };
+    if (auto err = mdb_del(txn, dbi, &kval, nullptr)) {
+      if (err != MDB_NOTFOUND) throw DBError("Delete failed", err);
+    }
+  }
+
+  DB::DB(const char* filename, size_t map_size_mb) :
+    map_size(map_size_mb * 1024 * 1024 - (map_size_mb * 1024 * 2014) % (size_t)sysconf(_SC_PAGESIZE)) {
     int err;
     MDB_txn* txn = nullptr;
-    spdlog::debug("Map size: {} bytes", map_size);
     if ((err =
       mdb_env_create(&env) ||
       mdb_env_set_maxdbs(env, 128) ||
       mdb_env_set_mapsize(env, map_size) ||
-      mdb_env_open(env, filename, MDB_NOSUBDIR | MDB_WRITEMAP | MDB_NOSYNC, 0600) ||
+      mdb_env_open(env, filename, MDB_NOSUBDIR | MDB_NOSYNC, 0600) ||
       mdb_txn_begin(env, nullptr, 0, &txn)
     )) goto die;
 #   define MK_DBI(NAME, FLAGS) if ((err = mdb_dbi_open(txn, #NAME, FLAGS | MDB_CREATE, dbis + NAME))) goto die;
@@ -224,16 +229,6 @@ namespace Ludwig {
 
   DB::~DB() {
     mdb_env_close(env);
-  }
-
-  auto DB::grow() -> void {
-    spdlog::warn("Exceeded current max database size of {} bytes; blocking all transactions to expand database", map_size);
-    for (unsigned i = 0; i < max_txns; i++) txn_semaphore.acquire();
-    map_size *= 2;
-    spdlog::info("No open transactions left; resizing database to {} bytes", map_size);
-    int err = mdb_env_set_mapsize(env, map_size);
-    if (err) throw DBError("Could not grow database", err);
-    for (unsigned i = 0; i < max_txns; i++) txn_semaphore.release();
   }
 
   static auto int_key(MDB_val& k, MDB_val&) -> uint64_t {
@@ -488,34 +483,12 @@ namespace Ludwig {
     }
   }
 
-# define INCREMENT_FIELD_OPT(OPT, FIELD, N) (*OPT)->mutate_##FIELD(std::max((*OPT)->FIELD(),(*OPT)->FIELD()+(N)))
-# define DECREMENT_FIELD_OPT(OPT, FIELD, N) (*OPT)->mutate_##FIELD(std::min((*OPT)->FIELD(),(*OPT)->FIELD()-(N)))
-
-  auto WriteTxn::get_user_stats_rw(uint64_t id) -> optional<UserStats*> {
-    MDB_val v;
-    if (db_get(txn, db.dbis[UserStats_User], id, v)) return {};
-    return { flatbuffers::GetMutableRoot<UserStats>(v.mv_data) };
-  }
-  auto WriteTxn::get_board_stats_rw(uint64_t id) -> optional<BoardStats*> {
-    MDB_val v;
-    if (db_get(txn, db.dbis[BoardStats_Board], id, v)) return {};
-    return { flatbuffers::GetMutableRoot<BoardStats>(v.mv_data) };
-  }
-  auto WriteTxn::get_page_stats_rw(uint64_t id) -> optional<PageStats*> {
-    MDB_val v;
-    if (db_get(txn, db.dbis[PageStats_Page], id, v)) return {};
-    return { flatbuffers::GetMutableRoot<PageStats>(v.mv_data) };
-  }
-  auto WriteTxn::get_note_stats_rw(uint64_t id) -> optional<NoteStats*> {
-    MDB_val v;
-    if (db_get(txn, db.dbis[NoteStats_Note], id, v)) return {};
-    return { flatbuffers::GetMutableRoot<NoteStats>(v.mv_data) };
-  }
-
   auto WriteTxn::next_id() -> uint64_t {
     MDB_val v;
     db_get(txn, db.dbis[Settings], SettingsKey::next_id, v);
-    return (*static_cast<uint64_t*>(v.mv_data))++;
+    const auto id = *static_cast<uint64_t*>(v.mv_data);
+    db_put(txn, db.dbis[Settings], SettingsKey::next_id, id + 1);
+    return id;
   }
   auto WriteTxn::create_user(FlatBufferBuilder&& builder, Offset<User> offset) -> uint64_t {
     uint64_t id = next_id();
@@ -524,7 +497,6 @@ namespace Ludwig {
   }
   auto WriteTxn::set_user(uint64_t id, FlatBufferBuilder&& builder, Offset<User> offset) -> void {
     builder.Finish(offset);
-    MDB_val id_val{ sizeof(uint64_t), &id }, v{ builder.GetSize(), builder.GetBufferPointer() };
     auto user = GetRoot<User>(builder.GetBufferPointer());
     auto old_user_opt = get_user(id);
     if (old_user_opt) {
@@ -538,18 +510,16 @@ namespace Ludwig {
       FlatBufferBuilder fbb;
       fbb.ForceDefaults(true);
       fbb.Finish(CreateUserStats(fbb));
-      MDB_val stats_val{ fbb.GetSize(), fbb.GetBufferPointer() };
-      db_put(txn, db.dbis[UserStats_User], id_val, stats_val);
+      db_put(txn, db.dbis[UserStats_User], id, fbb);
     }
-    db_put(txn, db.dbis[User_User], id_val, v);
-    db_put(txn, db.dbis[User_Name], Cursor(user->name()->string_view(), db.seed), id_val);
+    db_put(txn, db.dbis[User_User], id, builder);
+    db_put(txn, db.dbis[User_Name], Cursor(user->name()->string_view(), db.seed), id);
 
     // TODO: Handle media (avatar)
   }
   auto WriteTxn::set_local_user(uint64_t id, FlatBufferBuilder&& builder, Offset<LocalUser> offset) -> void {
     builder.Finish(offset);
-    MDB_val id_val{ sizeof(uint64_t), &id }, v{ builder.GetSize(), builder.GetBufferPointer() };
-    db_put(txn, db.dbis[LocalUser_User], id_val, v);
+    db_put(txn, db.dbis[LocalUser_User], id, builder);
   }
   auto WriteTxn::delete_user(uint64_t id) -> bool {
     auto user_opt = get_user(id);
@@ -559,19 +529,32 @@ namespace Ludwig {
     }
 
     spdlog::debug("Deleting user {:x}", id);
-    MDB_val id_val{ sizeof(uint64_t), &id };
-    db_del(txn, db.dbis[User_User], id_val);
+    db_del(txn, db.dbis[User_User], id);
     db_del(txn, db.dbis[User_Name], Cursor((*user_opt)->name()->string_view(), db.seed));
-    db_del(txn, db.dbis[UserStats_User], id_val);
-    db_del(txn, db.dbis[LocalUser_User], id_val);
+    db_del(txn, db.dbis[UserStats_User], id);
+    db_del(txn, db.dbis[LocalUser_User], id);
 
     delete_range(txn, db.dbis[Subscription_UserBoard], Cursor(id, 0), Cursor(id, ID_MAX),
-      [this](MDB_val& k, MDB_val&) {
+      [&](MDB_val& k, MDB_val&) {
         Cursor c(k);
         auto board = c.int_field_1();
-        auto board_stats = get_board_stats_rw(board);
+        auto board_stats = get_board_stats(board);
         db_del(txn, db.dbis[Subscription_BoardUser], Cursor(board, c.int_field_0()));
-        if (board_stats) DECREMENT_FIELD_OPT(board_stats, subscriber_count, 1);
+        if (board_stats) {
+          auto s = *board_stats;
+          FlatBufferBuilder fbb;
+          fbb.Finish(CreateBoardStats(fbb,
+            s->created_at(),
+            s->page_count(),
+            s->note_count(),
+            std::min(s->subscriber_count(), s->subscriber_count() - 1),
+            s->users_active_half_year(),
+            s->users_active_month(),
+            s->users_active_week(),
+            s->users_active_day()
+          ));
+          db_put(txn, db.dbis[BoardStats_Board], id, fbb);
+        }
       }
     );
     delete_range(txn, db.dbis[Owner_UserPage], Cursor(id, 0), Cursor(id, ID_MAX));
@@ -582,7 +565,7 @@ namespace Ludwig {
     delete_range(txn, db.dbis[PagesTop_UserKarmaPage], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
     delete_range(txn, db.dbis[NotesTop_UserKarmaNote], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
     delete_range(txn, db.dbis[Vote_UserPost], Cursor(id, 0), Cursor(id, ID_MAX),
-      [this](MDB_val& k, MDB_val&) {
+      [&](MDB_val& k, MDB_val&) {
         Cursor c(k);
         db_del(txn, db.dbis[Vote_PostUser], Cursor(c.int_field_1(), c.int_field_0()));
       }
@@ -600,7 +583,6 @@ namespace Ludwig {
   }
   auto WriteTxn::set_board(uint64_t id, FlatBufferBuilder&& builder, Offset<Board> offset) -> void {
     builder.Finish(offset);
-    MDB_val id_val{ sizeof(uint64_t), &id }, v{ builder.GetSize(), builder.GetBufferPointer() };
     auto board = GetRoot<Board>(builder.GetBufferPointer());
     auto old_board_opt = get_board(id);
     if (old_board_opt) {
@@ -614,17 +596,15 @@ namespace Ludwig {
       FlatBufferBuilder fbb;
       fbb.ForceDefaults(true);
       fbb.Finish(CreateBoardStats(fbb, board->created_at()));
-      MDB_val stats_val{ fbb.GetSize(), fbb.GetBufferPointer() };
-      db_put(txn, db.dbis[BoardStats_Board], id_val, stats_val);
+      db_put(txn, db.dbis[BoardStats_Board], id, fbb);
     }
-    db_put(txn, db.dbis[Board_Board], id_val, v);
-    db_put(txn, db.dbis[Board_Name], Cursor(board->name()->string_view(), db.seed), id_val);
+    db_put(txn, db.dbis[Board_Board], id, builder);
+    db_put(txn, db.dbis[Board_Name], Cursor(board->name()->string_view(), db.seed), id);
 
     // TODO: Handle media (avatar, banner)
   }
   auto WriteTxn::set_local_board(uint64_t id, FlatBufferBuilder&& builder, Offset<LocalBoard> offset) -> void {
     builder.Finish(offset);
-    MDB_val id_val{ sizeof(uint64_t), &id }, v{ builder.GetSize(), builder.GetBufferPointer() };
     auto board = GetRoot<LocalBoard>(builder.GetBufferPointer());
     assert_fmt(!!get_user(board->owner()), "set_local_board: board {:x} owner user {:x} does not exist", id, board->owner());
     auto old_board_opt = get_local_board(id);
@@ -639,7 +619,7 @@ namespace Ludwig {
       spdlog::debug("Updating local board {:x}", id);
     }
     db_put(txn, db.dbis[Owner_UserBoard], Cursor(board->owner(), id), board->owner());
-    db_put(txn, db.dbis[LocalBoard_Board], id_val, v);
+    db_put(txn, db.dbis[LocalBoard_Board], id, builder);
   }
   auto WriteTxn::delete_board(uint64_t id) -> bool {
     auto board_opt = get_board(id);
@@ -657,7 +637,7 @@ namespace Ludwig {
     // TODO: Owner_UserBoard
 
     delete_range(txn, db.dbis[Subscription_BoardUser], Cursor(id, 0), Cursor(id, ID_MAX),
-      [this](MDB_val& k, MDB_val&) {
+      [&](MDB_val& k, MDB_val&) {
         Cursor c(k);
         db_del(txn, db.dbis[Subscription_UserBoard], Cursor(c.int_field_1(), c.int_field_0()));
       }
@@ -672,7 +652,8 @@ namespace Ludwig {
   auto WriteTxn::set_subscription(uint64_t user_id, uint64_t board_id, bool subscribed) -> void {
     MDB_val v;
     bool existing = !db_get(txn, db.dbis[Subscription_BoardUser], Cursor(board_id, user_id), v);
-    auto board_stats = get_board_stats_rw(board_id);
+    auto board_stats = get_board_stats(board_id);
+    auto subscriber_count = board_stats ? (*board_stats)->subscriber_count() : 0;
     if (subscribed) {
       assert_fmt(!!get_user(user_id), "set_subscription: user {:x} does not exist", user_id);
       assert_fmt(!!board_stats, "set_subscription: board {:x} does not exist", board_id);
@@ -681,13 +662,28 @@ namespace Ludwig {
         auto now = now_s();
         db_put(txn, db.dbis[Subscription_BoardUser], Cursor(board_id, user_id), now);
         db_put(txn, db.dbis[Subscription_UserBoard], Cursor(user_id, board_id), now);
-        INCREMENT_FIELD_OPT(board_stats, subscriber_count, 1);
+        subscriber_count++;
       }
     } else if (existing) {
       spdlog::debug("Unsubscribing user {:x} from board {:x}", user_id, board_id);
       db_del(txn, db.dbis[Subscription_BoardUser], Cursor(board_id, user_id));
       db_del(txn, db.dbis[Subscription_UserBoard], Cursor(user_id, board_id));
-      if (board_stats) DECREMENT_FIELD_OPT(board_stats, subscriber_count, 1);
+      subscriber_count = std::min(subscriber_count, subscriber_count - 1);
+    }
+    if (board_stats) {
+      auto s = *board_stats;
+      FlatBufferBuilder fbb;
+      fbb.Finish(CreateBoardStats(fbb,
+        s->created_at(),
+        s->page_count(),
+        s->note_count(),
+        subscriber_count,
+        s->users_active_half_year(),
+        s->users_active_month(),
+        s->users_active_week(),
+        s->users_active_day()
+      ));
+      db_put(txn, db.dbis[BoardStats_Board], board_id, fbb);
     }
   }
 
@@ -702,17 +698,12 @@ namespace Ludwig {
   }
   auto WriteTxn::set_page(uint64_t id, FlatBufferBuilder&& builder, Offset<Page> offset) -> void {
     builder.Finish(offset);
-    MDB_val id_val{ sizeof(uint64_t), &id }, v{ builder.GetSize(), builder.GetBufferPointer() };
     auto page = GetRoot<Page>(builder.GetBufferPointer());
     auto old_page_opt = get_page(id);
-    auto user_stats = get_user_stats_rw(page->author());
-    auto board_stats = get_board_stats_rw(page->board());
-    assert_fmt(!!user_stats, "set_page: post {:x} author user {:x} does not exist", id, page->author());
-    assert_fmt(!!board_stats, "set_page: post {:x} board {:x} does not exist", id, page->board());
     int64_t karma = 0;
     if (old_page_opt) {
       spdlog::debug("Updating top-level post {:x} (board {:x}, author {:x})", id, page->board(), page->author());
-      auto page_stats_opt = get_page_stats_rw(id);
+      auto page_stats_opt = get_page_stats(id);
       assert_fmt(!!page_stats_opt, "set_page: page stats not in database for existing page {:x}", id);
       karma = (*page_stats_opt)->karma();
       auto old_page = *old_page_opt;
@@ -721,28 +712,69 @@ namespace Ludwig {
       if (page->board() != old_page->board()) {
         db_del(txn, db.dbis[PagesNew_BoardTimePage], Cursor(old_page->board(), page->created_at(), id));
         db_del(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(old_page->board(), karma_uint(karma), id));
-        auto board_stats = get_board_stats_rw(old_page->board());
-        if (board_stats) DECREMENT_FIELD_OPT(board_stats, page_count, 1);
+        if (auto board_stats = get_board_stats(old_page->board())) {
+          auto s = *board_stats;
+          FlatBufferBuilder fbb;
+          fbb.Finish(CreateBoardStats(fbb,
+            s->created_at(),
+            std::min(s->page_count(), s->page_count() - 1),
+            s->note_count(),
+            s->subscriber_count(),
+            s->users_active_half_year(),
+            s->users_active_month(),
+            s->users_active_week(),
+            s->users_active_day()
+          ));
+          db_put(txn, db.dbis[BoardStats_Board], old_page->board(), fbb);
+        }
       }
     } else {
       spdlog::debug("Creating top-level post {:x} (board {:x}, author {:x})", id, page->board(), page->author());
       db_put(txn, db.dbis[Owner_UserPage], Cursor(page->author(), id), page->author());
-      db_put(txn, db.dbis[PagesTop_UserKarmaPage], Cursor(page->author(), 1, id), id_val);
-    db_put(txn, db.dbis[PagesNew_BoardTimePage], Cursor(page->board(), page->created_at(), id), id_val);
-    db_put(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(page->board(), karma_uint(karma), id), id_val);
+      db_put(txn, db.dbis[PagesTop_UserKarmaPage], Cursor(page->author(), 1, id), id);
+      db_put(txn, db.dbis[PagesNew_BoardTimePage], Cursor(page->board(), page->created_at(), id), id);
+      db_put(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(page->board(), karma_uint(karma), id), id);
       {
         FlatBufferBuilder fbb;
         fbb.ForceDefaults(true);
         fbb.Finish(CreatePageStats(fbb, page->created_at()));
-        MDB_val stats_val{ fbb.GetSize(), fbb.GetBufferPointer() };
-        db_put(txn, db.dbis[PageStats_Page], id_val, stats_val);
+        db_put(txn, db.dbis[PageStats_Page], id, fbb);
       }
-      INCREMENT_FIELD_OPT(user_stats, page_count, 1);
-      INCREMENT_FIELD_OPT(board_stats, page_count, 1);
+      if (auto user_stats = get_user_stats(page->author())) {
+        auto s = *user_stats;
+        FlatBufferBuilder fbb;
+        fbb.Finish(CreateUserStats(fbb,
+          s->note_count(),
+          s->note_karma(),
+          s->page_count() + 1,
+          s->page_karma()
+        ));
+        db_put(txn, db.dbis[UserStats_User], page->author(), fbb);
+      }
+      if (auto board_stats = get_board_stats(page->board())) {
+        auto s = *board_stats;
+        FlatBufferBuilder fbb;
+        fbb.Finish(CreateBoardStats(fbb,
+          s->created_at(),
+          s->page_count() + 1,
+          s->note_count(),
+          s->subscriber_count(),
+          s->users_active_half_year(),
+          s->users_active_month(),
+          s->users_active_week(),
+          s->users_active_day()
+        ));
+        db_put(txn, db.dbis[BoardStats_Board], page->board(), fbb);
+      }
     }
-    db_put(txn, db.dbis[Page_Page], id_val, v);
+    db_put(txn, db.dbis[Page_Page], id, builder);
   }
-  auto WriteTxn::delete_note_for_page(uint64_t id, uint64_t board_id, std::optional<PageStats*> page_stats) -> bool {
+  auto WriteTxn::delete_note_for_page(
+    uint64_t id,
+    uint64_t board_id,
+    optional<PageStats*> page_stats,
+    optional<BoardStats*> board_stats
+  ) -> bool {
     const auto note_opt = get_note(id);
     const auto note_stats = get_note_stats(id);
     if (!note_opt || !note_stats) {
@@ -756,26 +788,34 @@ namespace Ludwig {
     const auto parent = note->parent();
 
     spdlog::debug("Deleting comment {:x} (parent {:x}, author {:x}, board {:x})", id, parent, author, board_id);
-    {
-      auto parent_stats = get_note_stats_rw(parent);
-      auto user_stats = get_user_stats_rw(author);
-      if (page_stats) DECREMENT_FIELD_OPT(page_stats, descendant_count, 1);
-      if (parent_stats) DECREMENT_FIELD_OPT(parent_stats, child_count, 1);
-      if (user_stats) {
-        if (karma > 0) DECREMENT_FIELD_OPT(user_stats, note_karma, karma);
-        else if (karma < 0) INCREMENT_FIELD_OPT(user_stats, note_karma, -karma);
-        DECREMENT_FIELD_OPT(user_stats, note_count, 1);
-      }
-
-      auto board_stats = get_board_stats_rw(board_id);
-      db_del(txn, db.dbis[NotesNew_BoardTimeNote], Cursor(board_id, created_at, id));
-      db_del(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor(board_id, karma_uint(karma), id));
-      if (board_stats) DECREMENT_FIELD_OPT(board_stats, note_count, 1);
+    if (page_stats) {
+      auto s = *page_stats;
+      s->mutate_descendant_count(
+        std::min(s->descendant_count(), s->descendant_count() - 1)
+      );
     }
+    if (board_stats) {
+      auto s = *board_stats;
+      s->mutate_note_count(
+        std::min(s->note_count(), s->note_count() - 1)
+      );
+    }
+    if (auto user_stats = get_user_stats(note->author())) {
+      auto s = *user_stats;
+      FlatBufferBuilder fbb;
+      fbb.Finish(CreateUserStats(fbb,
+        std::min(s->note_count(), s->note_count() - 1),
+        karma > 0 ? std::min(s->note_karma(), s->note_karma() - karma) : s->note_karma() - karma,
+        s->page_count(),
+        s->page_karma()
+      ));
+      db_put(txn, db.dbis[UserStats_User], note->author(), fbb);
+    }
+    db_del(txn, db.dbis[NotesNew_BoardTimeNote], Cursor(board_id, created_at, id));
+    db_del(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor(board_id, karma_uint(karma), id));
 
-    MDB_val id_val{ sizeof(uint64_t), &id };
     delete_range(txn, db.dbis[Vote_PostUser], Cursor(id, 0), Cursor(id, ID_MAX),
-      [this](MDB_val& k, MDB_val&) {
+      [&](MDB_val& k, MDB_val&) {
         Cursor c(k);
         db_del(txn, db.dbis[Vote_UserPost], Cursor(c.int_field_1(), c.int_field_0()));
       }
@@ -788,15 +828,15 @@ namespace Ludwig {
     );
     delete_range(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
 
-    db_del(txn, db.dbis[Note_Note], id_val);
-    db_del(txn, db.dbis[NoteStats_Note], id_val);
+    db_del(txn, db.dbis[Note_Note], id);
+    db_del(txn, db.dbis[NoteStats_Note], id);
     db_del(txn, db.dbis[Owner_UserNote], Cursor(author, id));
     db_del(txn, db.dbis[ChildrenNew_PostTimeNote], Cursor(parent, created_at, id));
     db_del(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor(parent, karma_uint(karma), id));
 
     for (uint64_t child : children) {
       assert(child != id);
-      delete_note_for_page(child, board_id, page_stats);
+      delete_note_for_page(child, board_id, page_stats, board_stats);
     }
 
     return true;
@@ -816,21 +856,38 @@ namespace Ludwig {
     const auto created_at = page->created_at();
 
     spdlog::debug("Deleting top-level post {:x} (board {:x}, author {:x})", id, board, author);
-    {
-      const auto user_stats = get_user_stats_rw(author);
-      const auto board_stats = get_board_stats_rw(board);
-      if (user_stats) {
-        if (karma > 0) DECREMENT_FIELD_OPT(user_stats, page_karma, karma);
-        else if (karma < 0) INCREMENT_FIELD_OPT(user_stats, page_karma, -karma);
-        DECREMENT_FIELD_OPT(user_stats, page_count, 1);
-      }
-      if (board_stats) DECREMENT_FIELD_OPT(board_stats, page_count, 1);
+    if (auto user_stats = get_user_stats(page->author())) {
+      auto s = *user_stats;
+      FlatBufferBuilder fbb;
+      fbb.Finish(CreateUserStats(fbb,
+        s->note_count(),
+        s->note_karma(),
+        std::min(s->page_count(), s->page_count() - 1),
+        karma > 0 ? std::min(s->page_karma(), s->page_karma() - karma) : s->page_karma() - karma
+      ));
+      db_put(txn, db.dbis[UserStats_User], page->author(), fbb);
+    }
+    FlatBufferBuilder board_stats_fbb;
+    optional<BoardStats*> board_stats = {};
+    if (auto board_stats_opt = get_board_stats(page->board())) {
+      auto s = *board_stats_opt;
+      board_stats_fbb.Finish(CreateBoardStats(board_stats_fbb,
+        s->created_at(),
+        std::min(s->page_count(), s->page_count() - 1),
+        s->note_count(),
+        s->subscriber_count(),
+        s->users_active_half_year(),
+        s->users_active_month(),
+        s->users_active_week(),
+        s->users_active_day()
+      ));
+      board_stats = { flatbuffers::GetMutableRoot<BoardStats>(board_stats_fbb.GetBufferPointer()) };
     }
 
     MDB_val id_val{ sizeof(uint64_t), &id };
 
     delete_range(txn, db.dbis[Vote_PostUser], Cursor(id, 0), Cursor(id, ID_MAX),
-      [this](MDB_val& k, MDB_val&) {
+      [&](MDB_val& k, MDB_val&) {
         Cursor c(k);
         db_del(txn, db.dbis[Vote_UserPost], Cursor(c.int_field_1(), c.int_field_0()));
       }
@@ -850,7 +907,10 @@ namespace Ludwig {
     db_del(txn, db.dbis[PagesNew_BoardTimePage], Cursor(board, created_at, id));
     db_del(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(board, karma_uint(karma), id));
 
-    for (uint64_t child : children) delete_note_for_page(child, board, {});
+    for (uint64_t child : children) {
+      delete_note_for_page(child, board, {}, board_stats);
+    }
+    if (board_stats) db_put(txn, db.dbis[BoardStats_Board], board, board_stats_fbb);
 
     return true;
   }
@@ -862,21 +922,13 @@ namespace Ludwig {
   }
   auto WriteTxn::set_note(uint64_t id, FlatBufferBuilder&& builder, Offset<Note> offset) -> void {
     builder.Finish(offset);
-    MDB_val id_val{ sizeof(id), &id }, v{ builder.GetSize(), builder.GetBufferPointer() };
     const auto note = GetRoot<Note>(builder.GetBufferPointer());
     const auto old_note_opt = get_note(id);
-    auto note_stats_opt = get_note_stats_rw(id);
+    auto note_stats_opt = get_note_stats(id);
     const auto page_opt = get_page(note->page());
     int64_t karma = 0;
     assert_fmt(!!page_opt, "set_note: note {:x} top-level ancestor page {:x} does not exist", id, note->page());
     const auto page = *page_opt;
-    auto page_stats = get_page_stats_rw(note->page());
-    auto parent_stats = get_note_stats_rw(note->parent());
-    auto board_stats = get_board_stats_rw(page->board());
-    auto user_stats = get_user_stats_rw(note->author());
-    assert_fmt(!!page_stats, "set_note: note {:x} top-level ancestor page {:x} does not have page_stats", id, note->page());
-    assert_fmt(!!board_stats, "set_note: note {:x} board {:x} does not exist", id, page->board());
-    assert_fmt(!!user_stats, "set_note: note {:x} author user {:x} does not exist", id, note->author());
     if (old_note_opt) {
       spdlog::debug("Updating comment {:x} (parent {:x}, author {:x})", id, note->parent(), note->author());
       assert(!!note_stats_opt);
@@ -889,25 +941,77 @@ namespace Ludwig {
       assert(note->created_at() == old_note->created_at());
     } else {
       spdlog::debug("Creating comment {:x} (parent {:x}, author {:x})", id, note->parent(), note->author());
+      auto page_stats = get_page_stats(note->page());
+      assert(!!page_stats);
+      const bool is_active = note->created_at() >= page->created_at() &&
+          note->created_at() - page->created_at() <= ACTIVE_COMMENT_MAX_AGE,
+        is_newer = is_active && note->created_at() > (*page_stats)->newest_comment_time();
       db_put(txn, db.dbis[Owner_UserNote], Cursor(note->author(), id), note->author());
-      db_put(txn, db.dbis[NotesTop_UserKarmaNote], Cursor(note->author(), karma_uint(karma), id), id_val);
-      db_put(txn, db.dbis[NotesNew_BoardTimeNote], Cursor(page->board(), note->created_at(), id), id_val);
-      db_put(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor(page->board(), karma_uint(karma), id), id_val);
-      db_put(txn, db.dbis[ChildrenNew_PostTimeNote], Cursor(note->parent(), note->created_at(), id), id_val);
-      db_put(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor(note->parent(), karma_uint(karma), id), id_val);
+      db_put(txn, db.dbis[NotesTop_UserKarmaNote], Cursor(note->author(), karma_uint(karma), id), id);
+      db_put(txn, db.dbis[NotesNew_BoardTimeNote], Cursor(page->board(), note->created_at(), id), id);
+      db_put(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor(page->board(), karma_uint(karma), id), id);
+      db_put(txn, db.dbis[ChildrenNew_PostTimeNote], Cursor(note->parent(), note->created_at(), id), id);
+      db_put(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor(note->parent(), karma_uint(karma), id), id);
       {
         FlatBufferBuilder fbb;
         fbb.ForceDefaults(true);
         fbb.Finish(CreateNoteStats(fbb, note->created_at()));
-        MDB_val stats_val{ fbb.GetSize(), fbb.GetBufferPointer() };
-        db_put(txn, db.dbis[NoteStats_Note], id_val, stats_val);
+        db_put(txn, db.dbis[NoteStats_Note], id, fbb);
       }
-      INCREMENT_FIELD_OPT(page_stats, descendant_count, 1);
-      INCREMENT_FIELD_OPT(user_stats, note_count, 1);
-      INCREMENT_FIELD_OPT(board_stats, note_count, 1);
-      if (parent_stats) INCREMENT_FIELD_OPT(parent_stats, child_count, 1);
+      {
+        auto s = *page_stats;
+        FlatBufferBuilder fbb;
+        fbb.Finish(CreatePageStats(fbb,
+          s->created_at(),
+          is_newer ? note->created_at() : s->newest_comment_time(),
+          is_active ? s->newest_comment_time_necro() : std::max(s->newest_comment_time_necro(), note->created_at()),
+          s->descendant_count() + 1,
+          s->upvotes(),
+          s->downvotes(),
+          s->karma()
+        ));
+        db_put(txn, db.dbis[PageStats_Page], note->page(), fbb);
+      }
+      if (auto parent_stats = get_note_stats(note->parent())) {
+        auto s = *parent_stats;
+        FlatBufferBuilder fbb;
+        fbb.Finish(CreateNoteStats(fbb,
+          s->created_at(),
+          s->child_count() + 1,
+          s->upvotes(),
+          s->downvotes(),
+          s->karma()
+        ));
+        db_put(txn, db.dbis[NoteStats_Note], note->parent(), fbb);
+      }
+      if (auto user_stats = get_user_stats(note->author())) {
+        auto s = *user_stats;
+        FlatBufferBuilder fbb;
+        fbb.Finish(CreateUserStats(fbb,
+          s->note_count() + 1,
+          s->note_karma(),
+          s->page_count(),
+          s->page_karma()
+        ));
+        db_put(txn, db.dbis[UserStats_User], note->author(), fbb);
+      }
+      if (auto board_stats = get_board_stats(page->board())) {
+        auto s = *board_stats;
+        FlatBufferBuilder fbb;
+        fbb.Finish(CreateBoardStats(fbb,
+          s->created_at(),
+          s->page_count(),
+          s->note_count() + 1,
+          s->subscriber_count(),
+          s->users_active_half_year(),
+          s->users_active_month(),
+          s->users_active_week(),
+          s->users_active_day()
+        ));
+        db_put(txn, db.dbis[BoardStats_Board], page->board(), fbb);
+      }
     }
-    db_put(txn, db.dbis[Note_Note], id_val, v);
+    db_put(txn, db.dbis[Note_Note], id, builder);
   }
   auto WriteTxn::delete_note(uint64_t id) -> bool {
     const auto note_opt = get_note(id);
@@ -915,20 +1019,71 @@ namespace Ludwig {
       spdlog::warn("Tried to delete nonexistent comment {:x}", id);
       return false;
     }
-    const auto page_id = (*note_opt)->page();
-    const auto page = get_page(page_id);
-    assert_fmt(!!page, "delete_note: note {:x} top-level ancestor page {:x} does not exist", id, page_id);
-    return delete_note_for_page(id, (*page)->board(), get_page_stats_rw(page_id));
+    const auto note = *note_opt;
+    const auto page_id = note->page();
+    const auto page_opt = get_page(page_id);
+    assert_fmt(!!page_opt, "delete_note: note {:x} top-level ancestor page {:x} does not exist", id, page_id);
+    const auto board_id = (*page_opt)->board();
+
+    FlatBufferBuilder page_stats_fbb, board_stats_fbb;
+    optional<PageStats*> page_stats = {};
+    optional<BoardStats*> board_stats = {};
+    if (auto page_stats_opt = get_page_stats(page_id)) {
+      auto s = *page_stats_opt;
+      page_stats_fbb.Finish(CreatePageStats(page_stats_fbb,
+        s->created_at(),
+        s->newest_comment_time(),
+        s->newest_comment_time_necro(),
+        s->descendant_count(),
+        s->upvotes(),
+        s->downvotes(),
+        s->karma()
+      ));
+      page_stats = { flatbuffers::GetMutableRoot<PageStats>(page_stats_fbb.GetBufferPointer()) };
+    }
+    if (auto board_stats_opt = get_board_stats(board_id)) {
+      auto s = *board_stats_opt;
+      board_stats_fbb.Finish(CreateBoardStats(board_stats_fbb,
+        s->created_at(),
+        s->page_count(),
+        s->note_count(),
+        s->subscriber_count(),
+        s->users_active_half_year(),
+        s->users_active_month(),
+        s->users_active_week(),
+        s->users_active_day()
+      ));
+      board_stats = { flatbuffers::GetMutableRoot<BoardStats>(board_stats_fbb.GetBufferPointer()) };
+    }
+
+    if (delete_note_for_page(id, board_id, page_stats, board_stats)) {
+      if (page_stats) db_put(txn, db.dbis[PageStats_Page], page_id, page_stats_fbb);
+      if (board_stats) db_put(txn, db.dbis[BoardStats_Board], board_id, board_stats_fbb);
+      if (auto parent_stats = get_note_stats(note->parent())) {
+        auto s = *parent_stats;
+        FlatBufferBuilder fbb;
+        fbb.Finish(CreateNoteStats(fbb,
+          s->created_at(),
+          std::min(s->child_count(), s->child_count() - 1),
+          s->upvotes(),
+          s->downvotes(),
+          s->karma()
+        ));
+        db_put(txn, db.dbis[NoteStats_Note], note->parent(), fbb);
+      }
+      return true;
+    }
+    return false;
   }
 
   auto WriteTxn::set_vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void {
     const auto existing = get_vote_of_user_for_post(user_id, post_id);
     const int64_t diff = vote - existing;
     if (!diff) return;
-    const auto page = get_page(post_id);
-    const auto note = page ? std::nullopt : get_note(post_id);
-    assert(page || note);
-    auto op_id = page ? (*page)->author() : (*note)->author();
+    const auto page_opt = get_page(post_id);
+    const auto note_opt = page_opt ? std::nullopt : get_note(post_id);
+    assert(page_opt || note_opt);
+    const auto op_id = page_opt ? (*page_opt)->author() : (*note_opt)->author();
     const auto op = get_user(op_id);
     assert(!!op);
     spdlog::debug("Setting vote from user {:x} on post {:x} to {}", user_id, post_id, (int8_t)vote);
@@ -941,37 +1096,77 @@ namespace Ludwig {
       db_del(txn, db.dbis[Vote_UserPost], Cursor(user_id, post_id));
       db_del(txn, db.dbis[Vote_PostUser], Cursor(post_id, user_id));
     }
-    auto page_stats = get_page_stats_rw(post_id);
-    auto note_stats = get_note_stats_rw(post_id);
-    auto op_stats = get_user_stats_rw(op_id);
-    if (page_stats) {
-      auto old_karma = (*page_stats)->karma(), new_karma = old_karma + diff;
-      (*page_stats)->mutate_karma(new_karma);
-      (*op_stats)->mutate_page_karma(new_karma);
-      if (existing < 0) DECREMENT_FIELD_OPT(page_stats, downvotes, 1);
-      else if (existing > 0) DECREMENT_FIELD_OPT(page_stats, upvotes, 1);
-      if (vote > 0) INCREMENT_FIELD_OPT(page_stats, upvotes, 1);
-      else if (vote < 0) INCREMENT_FIELD_OPT(page_stats, downvotes, 1);
-      db_del(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor((*page)->board(), karma_uint(old_karma), post_id));
-      db_del(txn, db.dbis[PagesTop_UserKarmaPage], Cursor((*page)->author(), karma_uint(old_karma), post_id));
-      db_put(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor((*page)->board(), karma_uint(new_karma), post_id), post_id);
-      db_put(txn, db.dbis[PagesTop_UserKarmaPage], Cursor((*page)->author(), karma_uint(new_karma), post_id), post_id);
+    const auto page_stats_opt = get_page_stats(post_id);
+    const auto note_stats_opt = get_note_stats(post_id);
+    const auto op_stats_opt = get_user_stats(op_id);
+    assert(!!op_stats_opt);
+    if (page_stats_opt) {
+      {
+        const auto page = *page_opt;
+        const auto s = *page_stats_opt;
+        const auto old_karma = s->karma(), new_karma = old_karma + diff;
+        FlatBufferBuilder fbb;
+        fbb.Finish(CreatePageStats(fbb,
+          s->created_at(),
+          s->newest_comment_time(),
+          s->newest_comment_time_necro(),
+          s->descendant_count(),
+          vote > 0 ? s->upvotes() + 1 : (existing > 0 ? std::min(s->upvotes(), s->upvotes() - 1) : s->upvotes()),
+          vote < 0 ? s->downvotes() + 1 : (existing < 0 ? std::min(s->downvotes(), s->downvotes() - 1) : s->downvotes()),
+          new_karma
+        ));
+        db_put(txn, db.dbis[PageStats_Page], post_id, fbb);
+        db_del(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(page->board(), karma_uint(old_karma), post_id));
+        db_del(txn, db.dbis[PagesTop_UserKarmaPage], Cursor(page->author(), karma_uint(old_karma), post_id));
+        db_put(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(page->board(), karma_uint(new_karma), post_id), post_id);
+        db_put(txn, db.dbis[PagesTop_UserKarmaPage], Cursor(page->author(), karma_uint(new_karma), post_id), post_id);
+      }
+      {
+        const auto s = *op_stats_opt;
+        FlatBufferBuilder fbb;
+        fbb.Finish(CreateUserStats(fbb,
+          s->note_count(),
+          s->note_karma(),
+          s->page_count(),
+          s->page_karma() + diff
+        ));
+        db_put(txn, db.dbis[UserStats_User], op_id, fbb);
+      }
     } else {
-      auto old_karma = (*note_stats)->karma(), new_karma = old_karma + diff;
-      (*note_stats)->mutate_karma(new_karma);
-      (*op_stats)->mutate_note_karma(new_karma);
-      if (existing < 0) DECREMENT_FIELD_OPT(note_stats, downvotes, 1);
-      else if (existing > 0) DECREMENT_FIELD_OPT(note_stats, upvotes, 1);
-      if (vote > 0) INCREMENT_FIELD_OPT(note_stats, upvotes, 1);
-      else if (vote < 0) INCREMENT_FIELD_OPT(note_stats, downvotes, 1);
-      auto note_page = get_page((*note)->page());
-      assert(!!note_page);
-      db_del(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor((*note_page)->board(), karma_uint(old_karma), post_id));
-      db_del(txn, db.dbis[NotesTop_UserKarmaNote], Cursor((*note)->author(), karma_uint(old_karma), post_id));
-      db_del(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor((*note)->parent(), karma_uint(old_karma), post_id));
-      db_put(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor((*note_page)->board(), karma_uint(new_karma), post_id), post_id);
-      db_put(txn, db.dbis[NotesTop_UserKarmaNote], Cursor((*note)->author(), karma_uint(new_karma), post_id), post_id);
-      db_put(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor((*note)->parent(), karma_uint(new_karma), post_id), post_id);
+      {
+        const auto note = *note_opt;
+        const auto note_page_opt = get_page(note->page());
+        assert(!!note_page_opt);
+        const auto note_page = *note_page_opt;
+        const auto s = *note_stats_opt;
+        const auto old_karma = s->karma(), new_karma = old_karma + diff;
+        FlatBufferBuilder fbb;
+        fbb.Finish(CreateNoteStats(fbb,
+          s->created_at(),
+          s->child_count(),
+          vote > 0 ? s->upvotes() + 1 : (existing > 0 ? std::min(s->upvotes(), s->upvotes() - 1) : s->upvotes()),
+          vote < 0 ? s->downvotes() + 1 : (existing < 0 ? std::min(s->downvotes(), s->downvotes() - 1) : s->downvotes()),
+          new_karma
+        ));
+        db_put(txn, db.dbis[NoteStats_Note], post_id, fbb);
+        db_del(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor(note_page->board(), karma_uint(old_karma), post_id));
+        db_del(txn, db.dbis[NotesTop_UserKarmaNote], Cursor(note->author(), karma_uint(old_karma), post_id));
+        db_del(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor(note->parent(), karma_uint(old_karma), post_id));
+        db_put(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor(note_page->board(), karma_uint(new_karma), post_id), post_id);
+        db_put(txn, db.dbis[NotesTop_UserKarmaNote], Cursor(note->author(), karma_uint(new_karma), post_id), post_id);
+        db_put(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor(note->parent(), karma_uint(new_karma), post_id), post_id);
+      }
+      {
+        const auto s = *op_stats_opt;
+        FlatBufferBuilder fbb;
+        fbb.Finish(CreateUserStats(fbb,
+          s->note_count(),
+          s->note_karma() + diff,
+          s->page_count(),
+          s->page_karma()
+        ));
+        db_put(txn, db.dbis[UserStats_User], op_id, fbb);
+      }
     }
   }
 }

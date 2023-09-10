@@ -56,28 +56,19 @@ namespace Ludwig {
       std::runtime_error(message + ": " + std::string(mdb_strerror(mdb_error))) {}
   };
 
-  class DBResizeError : public DBError {
-  public:
-    DBResizeError() : DBError("Out of DB space, must resize", MDB_MAP_FULL) {}
-  };
-
   class DB {
   private:
     size_t map_size;
-    unsigned max_txns;
-    std::counting_semaphore<126> txn_semaphore;
     MDB_env* env;
     MDB_dbi dbis[128];
-
-    auto grow() -> void;
   public:
     uint64_t seed;
     uint8_t jwt_secret[JWT_SECRET_SIZE];
-    DB(const char* filename);
+    DB(const char* filename, size_t map_size_mb = 1024);
     ~DB();
 
     auto open_read_txn() -> ReadTxn;
-    template <typename Callback> auto open_write_txn(Callback fn);
+    auto open_write_txn() -> WriteTxn;
 
     friend class ReadTxnBase;
     friend class ReadTxn;
@@ -148,17 +139,13 @@ namespace Ludwig {
   class ReadTxn : public ReadTxnBase {
   protected:
     ReadTxn(DB& db) : ReadTxnBase(db) {
-      db.txn_semaphore.acquire();
-      auto err = mdb_txn_begin(db.env, nullptr, MDB_RDONLY, &txn);
-      if (err) {
-        db.txn_semaphore.release();
+      if (auto err = mdb_txn_begin(db.env, nullptr, MDB_RDONLY, &txn)) {
         throw DBError("Failed to open read transaction", err);
       }
     }
   public:
     ~ReadTxn() {
       mdb_txn_abort(txn);
-      db.txn_semaphore.release();
     }
 
     friend class DB;
@@ -167,27 +154,24 @@ namespace Ludwig {
   class WriteTxn : public ReadTxnBase {
   protected:
     bool committed = false;
-    auto get_user_stats_rw(uint64_t id) -> optional<UserStats*>;
-    auto get_board_stats_rw(uint64_t id) -> optional<BoardStats*>;
-    auto get_page_stats_rw(uint64_t id) -> optional<PageStats*>;
-    auto get_note_stats_rw(uint64_t id) -> optional<NoteStats*>;
-    auto delete_note_for_page(uint64_t id, uint64_t board_id, std::optional<PageStats*> page_stats) -> bool;
+    auto delete_note_for_page(
+      uint64_t id,
+      uint64_t board_id,
+      std::optional<PageStats*> page_stats,
+      std::optional<BoardStats*> board_stats
+    ) -> bool;
 
     WriteTxn(DB& db): ReadTxnBase(db) {
-      db.txn_semaphore.acquire();
-      auto err = mdb_txn_begin(db.env, nullptr, 0, &txn);
-      if (err) {
-        db.txn_semaphore.release();
+      if (auto err = mdb_txn_begin(db.env, nullptr, 0, &txn)) {
         throw DBError("Failed to open write transaction", err);
       }
     };
   public:
     ~WriteTxn() {
       if (!committed) {
-        spdlog::warn("Aborting uncommitted write txn");
+        spdlog::warn("Aborting uncommitted write transaction");
         mdb_txn_abort(txn);
       }
-      db.txn_semaphore.release();
     }
 
     auto next_id() -> uint64_t;
@@ -228,13 +212,7 @@ namespace Ludwig {
     return ReadTxn(*this);
   }
 
-  template <typename Callback> inline auto DB::open_write_txn(Callback fn) {
-  retry:
-    try {
-      return fn(WriteTxn(*this));
-    } catch (DBResizeError) {
-      grow();
-      goto retry;
-    }
+  inline auto DB::open_write_txn() -> WriteTxn {
+    return WriteTxn(*this);
   }
 }

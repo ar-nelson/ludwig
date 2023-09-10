@@ -30,7 +30,6 @@ target_link_libraries(uWS
 add_library(lmdb STATIC
   lmdb/mdb.c
   lmdb/midl.c
-  lmdb/lmdb-safe.cc
 )
 target_include_directories(lmdb PUBLIC lmdb/)
 
