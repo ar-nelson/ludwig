@@ -1,5 +1,6 @@
 #include <uWebSockets/App.h>
 #include <optparse.h>
+#include <fstream>
 #include <csignal>
 #include "db.h++"
 #include "controller.h++"
@@ -20,25 +21,42 @@ int main(int argc, char** argv) {
   parser.add_option("-p", "--port")
     .dest("port")
     .set_default("2023");
-  parser.add_option("--db")
-    .dest("db")
-    .help("database filename")
-    .set_default("ludwig.mdb");
   parser.add_option("-d", "--domain")
     .dest("domain")
     .help("site domain, with http:// or https:// prefix")
     .set_default("http://localhost");
+  parser.add_option("-s", "--map-size")
+    .dest("map_size")
+    .help("maximum database size, in MiB")
+    .set_default("4096");
+  parser.add_option("--db")
+    .dest("db")
+    .help("database filename, will be created if it does not exist")
+    .set_default("ludwig.mdb");
+  parser.add_option("--import")
+    .dest("import")
+    .help("database dump file to import; if present, database file (--db) must not exist yet");
   parser.add_help_option();
 
   const optparse::Values options = parser.parse_args(argc, argv);
-  const auto port = std::atoi(options["port"].c_str());
   const auto dbfile = options["db"].c_str();
+  const auto map_size = std::stoull(options["map_size"]);
+  if (options.is_set_by_user("import")) {
+    const auto importfile = options["import"];
+    std::ifstream in(importfile, std::ios_base::in);
+    spdlog::info("Importing database dump from {}", importfile);
+    Ludwig::DB db(dbfile, in, map_size);
+    spdlog::info("Import complete. You can now start Ludwig without --import.");
+    return EXIT_SUCCESS;
+  }
+
+  const auto port = std::stoi(options["port"]);
   if (port < 1 || port > 65535) {
     spdlog::critical("Invalid port: {}", options["port"]);
     return 1;
   }
 
-  auto db = std::make_shared<Ludwig::DB>(dbfile);
+  auto db = std::make_shared<Ludwig::DB>(dbfile, map_size);
   auto io = std::make_shared<asio::io_context>();
   auto controller = std::make_shared<Ludwig::Controller>(db, io);
 

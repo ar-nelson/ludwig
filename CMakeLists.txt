@@ -67,7 +67,17 @@ add_custom_command(
   OUTPUT src/generated/datatypes_generated.h
   VERBATIM
 )
-add_custom_target(flatbuffers_generated DEPENDS src/generated/datatypes_generated.h)
+add_custom_command(
+  COMMAND ${resource_compiler} -i -n datatypes_fbs src/datatypes.fbs src/generated/datatypes.fbs.h
+  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+  DEPENDS src/datatypes.fbs
+  OUTPUT src/generated/datatypes.fbs.h
+  VERBATIM
+)
+add_custom_target(flatbuffers_generated DEPENDS
+  src/generated/datatypes_generated.h
+  src/generated/datatypes.fbs.h
+)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   set (BUILDTYPE_COMPILE_OPTIONS
@@ -106,11 +116,11 @@ add_executable(ludwig src/ludwig.c++ ${LUDWIG_COMMON_SRC})
 add_dependencies(ludwig static_generated flatbuffers_generated)
 target_compile_options(ludwig PRIVATE ${COMPILE_OPTIONS})
 target_link_options(ludwig PRIVATE ${LINK_OPTIONS})
-target_link_libraries(ludwig PRIVATE cereal csprng FlatBuffers lmdb monocypher spdlog uWS xxHash)
+target_link_libraries(ludwig PRIVATE cereal csprng flatbuffers lmdb monocypher spdlog uWS xxHash)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   file(GLOB_RECURSE TEST_FILES "test/*.c++")
   add_executable(test ${LUDWIG_COMMON_SRC} ${TEST_FILES})
   add_dependencies(test static_generated flatbuffers_generated)
-  target_link_libraries(test PRIVATE cereal csprng FlatBuffers lmdb monocypher spdlog uWS xxHash Catch2::Catch2WithMain)
+  target_link_libraries(test PRIVATE cereal csprng flatbuffers lmdb monocypher spdlog uWS xxHash Catch2::Catch2WithMain)
 endif ()

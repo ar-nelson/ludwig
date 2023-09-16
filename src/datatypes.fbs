@@ -5,15 +5,16 @@ enum ModState : ubyte { Visible, Flagged, Locked, Hidden, Removed }
 table User {
   name: string (required);
   display_name: string;
-  bio: string;
+  bio_raw: string;
+  bio_safe: string;
   actor_id: string;
   inbox_url: string;
   instance: uint64 = null;
   created_at: uint64;
   updated_at: uint64 = null;
   deleted_at: uint64 = null;
-  avatar_media: uint64 = null;
-  admin: bool = false;
+  avatar_url: string;
+  banner_url: string;
   bot: bool = false;
   mod_state: ModState = Visible;
 }
@@ -26,7 +27,7 @@ table UserStats {
 }
 
 struct Hash {
-  bytes: [ubyte:64];
+  bytes: [ubyte:32];
 }
 struct Salt {
   bytes: [ubyte:16];
@@ -36,6 +37,7 @@ table LocalUser {
   email: string;
   password_hash: Hash;
   password_salt: Salt;
+  admin: bool = false;
   accepted_application: bool = false;
   email_verified: bool = false;
   open_links_in_new_tab: bool = false;
@@ -45,7 +47,7 @@ table LocalUser {
   show_new_post_notifs: bool = true;
   show_nsfw: bool = false;
   show_read_posts: bool = true;
-  show_scores: bool = true;
+  show_karma: bool = true;
   interface_language: string;
   theme: string;
   default_listing_type: ubyte = 0;
@@ -60,9 +62,10 @@ table Board {
   instance: uint64 = null;
   created_at: uint64;
   updated_at: uint64 = null;
-  description: string;
-  icon_media: uint64 = null;
-  banner_media: uint64 = null;
+  description_raw: string;
+  description_safe: string;
+  icon_url: string;
+  banner_url: string;
   nsfw: bool = false;
   restricted_posting: bool = false;
   can_upvote: bool = true;
@@ -72,7 +75,6 @@ table Board {
 }
 
 table BoardStats {
-  created_at: uint64;
   page_count: uint64 = 0;
   note_count: uint64 = 0;
   subscriber_count: uint64 = 0;
@@ -98,13 +100,13 @@ table Page {
   activity_url: string;
   original_post_url: string;
   content_url: string;
-  content_text: string;
+  content_text_raw: string;
+  content_text_safe: string;
   nsfw: bool = false;
   mod_state: ModState = Visible;
 }
 
 table PageStats {
-  created_at: uint64;
   newest_comment_time: uint64 = 0;
   newest_comment_time_necro: uint64 = 0;
   descendant_count: uint64 = 0;
@@ -122,12 +124,12 @@ table Note {
   instance: uint64 = null;
   activity_url: string;
   original_post_url: string;
-  content: string;
+  content_raw: string;
+  content_safe: string (required);
   mod_state: ModState = Visible;
 }
 
 table NoteStats {
-  created_at: uint64;
   child_count: uint64 = 0;
   upvotes: uint64 = 0;
   downvotes: uint64 = 0;

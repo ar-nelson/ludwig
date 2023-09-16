@@ -12,7 +12,7 @@ using std::optional, std::string, std::string_view;
 namespace Ludwig {
   static constexpr std::string_view
     ESCAPED = "<>'\"&",
-    HTML_FOOTER = R"(<footer>Powered by Ludwig</body></html>)",
+    HTML_FOOTER = R"(<div class="spacer"></div> <footer>Powered by Ludwig</body></html>)",
     LOGIN_FORM = R"(<main class="full-width"><form class="form-page">)"
       R"(<label for="username"><span>Username or email</span><input type="text" name="username" id="username"></label>)"
       R"(<label for="password"><span>Password</span><input type="password" name="password" id="password"></label>)"
@@ -286,7 +286,7 @@ namespace Ludwig {
         rsp << R"(<section id="board-sidebar"><h2>)" << display_name << "</h2>";
         // TODO: Banner image
         // TODO: Allow safe HTML in description
-        rsp << "<p>" << Escape{board->board->description()->string_view()} << "</p></section>";
+        rsp << "<p>" << Escape{board->board->description_safe()->string_view()} << "</p></section>";
         // TODO: Board stats
         // TODO: Modlog link
       } else {
@@ -303,6 +303,31 @@ namespace Ludwig {
       rsp << "</aside>";
     }
 
+    static auto write_page_entry(
+      Response& rsp,
+      const PageListEntry* page
+    ) noexcept -> void {
+      auto id = Escape{hexstring(page->id)};
+      rsp << R"(<li class="page" id="page-)" << id <<
+        R"("><div class="page-title"><a class="page-title-link" href="/post/)" << id <<
+        R"(">)" << Escape{page->page->title()->string_view()} << "</a>";
+      // TODO: page-source (link URL)
+      // TODO: thumbnail
+      rsp << R"(<div class="thumbnail"><svg class="icon"><use href="/static/feather-sprite.svg#)"
+        << (page->page->content_url()->string_view().empty() ? "file-text" : "link")
+        << R"("></svg></div><div class="page-info">submitted )";
+      // << Escape{} << R"( ago by <a href="/u/)" <<
+      // CONTINUE HERE
+      rsp << R"(<form class="vote-buttons" id="votes-)" << id
+        << R"(" method="post" action="/do/vote/)" << id
+        << R"("><output class="karma" id="karma-)" << id << R"(">)" << page->stats->karma()
+        << R"(</output><label class="upvote"><span class="arrow-button"></span><input type="submit" value="Upvote"></label>)"
+          R"(<label class="downvote"><span class="arrow-button"></span><input type="submit" value="Downvote"></label></form>)"
+          R"(<div class="controls"><a id="comment-link-)" << id
+        << R"(" href="/post/)" << id << R"(#comments">)" << page->stats->descendant_count()
+        << (page->stats->descendant_count() == 1 ? " comment" : " comments")
+        << R"(</a><a href="#">Share</a><a href="#">Save</a><a href="#">Hide</a><a href="#">Report</a></div></li>)";
+    }
     auto serve_static(
       App& app,
       string filename,
@@ -332,8 +357,9 @@ namespace Ludwig {
           login = self->get_logged_in_user(txn, req);
         }, [&](auto& rsp) {
           write_html_header(rsp, site, login, {"/"}, {site->name});
-          rsp << "<main>Hello, world!</main>";
+          rsp << "<div>";
           write_sidebar(rsp, site, login);
+          rsp << "<main>Hello, world!</main></div>";
           rsp.end(HTML_FOOTER);
         });
       }));

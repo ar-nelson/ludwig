@@ -62,6 +62,13 @@ tasks:
       - build-release
     cmds:
       - ./build.release/ludwig
+  html-sample:
+    sources:
+      - extras/static-sample-server.ts
+      - extras/sample.html
+      - static/*
+    cmds:
+      - deno run --allow-read --allow-net ./extras/static-sample-server.ts
   clean:
     desc: Delete all build directories
     cmds:

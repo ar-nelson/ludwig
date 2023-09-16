@@ -6,5 +6,6 @@
       go-task
       zlib
       xxd
+      deno
     ];
 }

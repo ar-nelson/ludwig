@@ -1,15 +1,25 @@
 #include <random>
+#include <regex>
 #include <vector>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <spdlog/spdlog.h>
 #include <duthomhas/csprng.hpp>
+#include <flatbuffers/idl.h>
+#include "generated/datatypes.fbs.h"
 #include "db.h++"
 
-using std::optional, flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot, flatbuffers::Offset;
+using std::optional, std::string_view, flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot;
 
 #define assert_fmt(CONDITION, ...) if (!(CONDITION)) { spdlog::critical(__VA_ARGS__); throw std::runtime_error("Assertion failed: " #CONDITION); }
 
 namespace Ludwig {
+  static const std::regex
+    json_line(R"(^([uUbBpndarm]) (\d+) (\{[^\n]+\})$)", std::regex::ECMAScript),
+    setting_line(R"(^S (\w+) ([0-9a-zA-Z+/]+=*)$)", std::regex::ECMAScript),
+    vote_line(R"(^v (\d+) (\d+) (1|-1)$)", std::regex::ECMAScript),
+    subscription_line(R"(^s (\d+) (\d+) (\d+)$)", std::regex::ECMAScript);
+
   static constexpr uint64_t ACTIVE_COMMENT_MAX_AGE = 86400 * 2; // 2 days
 
   enum Dbi {
@@ -63,7 +73,7 @@ namespace Ludwig {
     return mdb_get(txn, dbi, &k, &v);
   }
 
-  inline auto db_get(MDB_txn* txn, MDB_dbi dbi, std::string_view k, MDB_val& v) -> int {
+  inline auto db_get(MDB_txn* txn, MDB_dbi dbi, string_view k, MDB_val& v) -> int {
     MDB_val kval { k.length(), const_cast<char*>(k.data()) };
     return mdb_get(txn, dbi, &kval, &v);
   }
@@ -84,18 +94,18 @@ namespace Ludwig {
     }
   }
 
-  inline auto db_put(MDB_txn* txn, MDB_dbi dbi, std::string_view k, MDB_val& v, unsigned flags = 0) -> void {
+  inline auto db_put(MDB_txn* txn, MDB_dbi dbi, string_view k, MDB_val& v, unsigned flags = 0) -> void {
     MDB_val kval { k.length(), const_cast<char*>(k.data()) };
     db_put(txn, dbi, kval, v, flags);
   }
 
-  inline auto db_put(MDB_txn* txn, MDB_dbi dbi, std::string_view k, std::string_view v, unsigned flags = 0) -> void {
+  inline auto db_put(MDB_txn* txn, MDB_dbi dbi, string_view k, string_view v, unsigned flags = 0) -> void {
     MDB_val kval { k.length(), const_cast<char*>(k.data()) };
     MDB_val vval { v.length(), const_cast<char*>(v.data()) };
     db_put(txn, dbi, kval, vval, flags);
   }
 
-  inline auto db_put(MDB_txn* txn, MDB_dbi dbi, std::string_view k, uint64_t v, unsigned flags = 0) -> void {
+  inline auto db_put(MDB_txn* txn, MDB_dbi dbi, string_view k, uint64_t v, unsigned flags = 0) -> void {
     MDB_val kval { k.length(), const_cast<char*>(k.data()) };
     MDB_val vval { sizeof(uint64_t), &v };
     db_put(txn, dbi, kval, vval, flags);
@@ -132,18 +142,17 @@ namespace Ludwig {
     }
   }
 
-  DB::DB(const char* filename, size_t map_size_mb) :
-    map_size(map_size_mb * 1024 * 1024 - (map_size_mb * 1024 * 2014) % (size_t)sysconf(_SC_PAGESIZE)) {
+  auto DB::init_env(const char* filename, MDB_txn** txn) -> int {
     int err;
-    MDB_txn* txn = nullptr;
     if ((err =
       mdb_env_create(&env) ||
       mdb_env_set_maxdbs(env, 128) ||
       mdb_env_set_mapsize(env, map_size) ||
       mdb_env_open(env, filename, MDB_NOSUBDIR | MDB_NOSYNC, 0600) ||
-      mdb_txn_begin(env, nullptr, 0, &txn)
-    )) goto die;
-#   define MK_DBI(NAME, FLAGS) if ((err = mdb_dbi_open(txn, #NAME, FLAGS | MDB_CREATE, dbis + NAME))) goto die;
+      mdb_txn_begin(env, nullptr, 0, txn)
+    )) return err;
+
+#   define MK_DBI(NAME, FLAGS) if ((err = mdb_dbi_open(*txn, #NAME, FLAGS | MDB_CREATE, dbis + NAME))) return err;
     MK_DBI(Settings, 0)
 
     MK_DBI(User_User, MDB_INTEGERKEY)
@@ -188,8 +197,16 @@ namespace Ludwig {
     MK_DBI(Refcount_Media, MDB_INTEGERKEY)
     MK_DBI(Contains_MediaPost, 0)
     MK_DBI(LinkCardContains_MediaUrl, 0)
-
 #   undef MK_DBI
+
+    return 0;
+  }
+
+  DB::DB(const char* filename, size_t map_size_mb) :
+    map_size(map_size_mb * 1024 * 1024 - (map_size_mb * 1024 * 2014) % (size_t)sysconf(_SC_PAGESIZE)) {
+    MDB_txn* txn = nullptr;
+    int err = init_env(filename, &txn);
+    if (err) goto die;
 
     // Load the secrets, or generate them if missing
     MDB_val val;
@@ -224,7 +241,114 @@ namespace Ludwig {
     return;
   die:
     if (txn != nullptr) mdb_txn_abort(txn);
+    mdb_env_close(env);
     throw DBError("Failed to open database", err);
+  }
+
+  struct DeferDelete {
+    MDB_env* env;
+    const char* filename;
+    bool canceled = false;
+
+    ~DeferDelete() {
+      if (!canceled) {
+        mdb_env_close(env);
+        remove(filename);
+      }
+    }
+  };
+
+  DB::DB(const char* filename, std::istream& dump_stream, size_t map_size_mb) :
+    map_size(map_size_mb * 1024 * 1024 - (map_size_mb * 1024 * 2014) % (size_t)sysconf(_SC_PAGESIZE)) {
+    {
+      struct stat stat_buf;
+      if (stat(filename, &stat_buf) == 0) {
+        throw std::runtime_error("Cannot import database dump: database file " +
+            std::string(filename) + " already exists and would be overwritten.");
+      }
+    }
+
+    flatbuffers::Parser parser;
+    parser.Parse(
+      std::string(std::string_view(reinterpret_cast<char*>(datatypes_fbs), datatypes_fbs_len)).c_str(),
+      nullptr,
+      "datatypes.fbs"
+    );
+
+    {
+      MDB_txn* txn = nullptr;
+      int err = init_env(filename, &txn) || mdb_txn_commit(txn);
+      if (err) {
+        if (txn != nullptr) mdb_txn_abort(txn);
+        mdb_env_close(env);
+        remove(filename);
+        throw DBError("Failed to open database", err);
+      }
+    }
+
+    DeferDelete on_error{ env, filename };
+    auto txn = open_write_txn();
+    std::string line;
+    while (std::getline(dump_stream, line)) {
+      if (line.empty()) continue;
+      std::smatch match;
+      if (std::regex_match(line, match, json_line)) {
+        switch (match[1].str()[0]) {
+          case 'u':
+            parser.SetRootType("User");
+            if (!parser.ParseJson(match[3].str().c_str())) {
+              throw std::runtime_error("Failed to parse User JSON: " + match[3].str());
+            }
+            txn.set_user(std::stoull(match[2]), parser.builder_);
+            break;
+          case 'U':
+            parser.SetRootType("LocalUser");
+            if (!parser.ParseJson(match[3].str().c_str())) {
+              throw std::runtime_error("Failed to parse LocalUser JSON: " + match[3].str());
+            }
+            txn.set_local_user(std::stoull(match[2]), parser.builder_);
+            break;
+          case 'b':
+            parser.SetRootType("Board");
+            if (!parser.ParseJson(match[3].str().c_str())) {
+              throw std::runtime_error("Failed to parse Board JSON: " + match[3].str());
+            }
+            txn.set_board(std::stoull(match[2]), parser.builder_);
+            break;
+          case 'B':
+            parser.SetRootType("LocalBoard");
+            if (!parser.ParseJson(match[3].str().c_str())) {
+              throw std::runtime_error("Failed to parse LocalBoard JSON: " + match[3].str());
+            }
+            txn.set_local_board(std::stoull(match[2]), parser.builder_);
+            break;
+          case 'p':
+            parser.SetRootType("Page");
+            if (!parser.ParseJson(match[3].str().c_str())) {
+              throw std::runtime_error("Failed to parse Page JSON: " + match[3].str());
+            }
+            txn.set_page(std::stoull(match[2]), parser.builder_);
+            break;
+          case 'n':
+            parser.SetRootType("Note");
+            if (!parser.ParseJson(match[3].str().c_str())) {
+              throw std::runtime_error("Failed to parse Note JSON: " + match[3].str());
+            }
+            txn.set_note(std::stoull(match[2]), parser.builder_);
+            break;
+        }
+      } else if (std::regex_match(line, match, setting_line)) {
+        txn.set_setting_str(match[1].str(), cereal::base64::decode(match[2]));
+      } else if (std::regex_match(line, match, vote_line)) {
+        txn.set_vote(std::stoull(match[1]), std::stoull(match[2]), static_cast<Vote>(std::stoi(match[3])));
+      } else if (std::regex_match(line, match, subscription_line)) {
+        txn.set_subscription(std::stoull(match[1]), std::stoull(match[2]), true);
+      } else {
+        throw std::runtime_error("Invalid line in database dump: " + line);
+      }
+    }
+    txn.commit();
+    on_error.canceled = true;
   }
 
   DB::~DB() {
@@ -251,18 +375,18 @@ namespace Ludwig {
     return n;
   }
 
-  auto ReadTxnBase::get_setting_str(std::string_view key) -> std::string_view {
+  auto ReadTxnBase::get_setting_str(string_view key) -> string_view {
     MDB_val v;
     if (db_get(txn, db.dbis[Settings], key, v)) return {};
-    return std::string_view(static_cast<const char*>(v.mv_data), v.mv_size);
+    return string_view(static_cast<const char*>(v.mv_data), v.mv_size);
   }
-  auto ReadTxnBase::get_setting_int(std::string_view key) -> uint64_t {
+  auto ReadTxnBase::get_setting_int(string_view key) -> uint64_t {
     MDB_val v;
     if (db_get(txn, db.dbis[Settings], key, v)) return {};
     return val_as<uint64_t>(v);
   }
 
-  auto ReadTxnBase::get_user_id(std::string_view name) -> optional<uint64_t> {
+  auto ReadTxnBase::get_user_id(string_view name) -> optional<uint64_t> {
     // TODO: Handle hash collisions, maybe double hashing.
     MDB_val v;
     if (db_get(txn, db.dbis[User_Name], Cursor(name, db.seed), v)) return {};
@@ -306,7 +430,7 @@ namespace Ludwig {
     return !db_get(txn, db.dbis[Subscription_UserBoard], Cursor(user_id, board_id), v);
   }
 
-  auto ReadTxnBase::get_board_id(std::string_view name) -> optional<uint64_t> {
+  auto ReadTxnBase::get_board_id(string_view name) -> optional<uint64_t> {
     // TODO: Handle hash collisions, maybe double hashing.
     MDB_val v;
     if (db_get(txn, db.dbis[Board_Name], Cursor(name, db.seed), v)) return {};
@@ -490,13 +614,18 @@ namespace Ludwig {
     db_put(txn, db.dbis[Settings], SettingsKey::next_id, id + 1);
     return id;
   }
-  auto WriteTxn::create_user(FlatBufferBuilder&& builder, Offset<User> offset) -> uint64_t {
+  auto WriteTxn::set_setting_str(string_view key, string_view value) -> void {
+    db_put(txn, db.dbis[Settings], key, value);
+  }
+  auto WriteTxn::set_setting_int(string_view key, uint64_t value) -> void {
+    db_put(txn, db.dbis[Settings], key, value);
+  }
+  auto WriteTxn::create_user(FlatBufferBuilder& builder) -> uint64_t {
     uint64_t id = next_id();
-    set_user(id, std::move(builder), offset);
+    set_user(id, builder);
     return id;
   }
-  auto WriteTxn::set_user(uint64_t id, FlatBufferBuilder&& builder, Offset<User> offset) -> void {
-    builder.Finish(offset);
+  auto WriteTxn::set_user(uint64_t id, FlatBufferBuilder& builder) -> void {
     auto user = GetRoot<User>(builder.GetBufferPointer());
     auto old_user_opt = get_user(id);
     if (old_user_opt) {
@@ -517,8 +646,7 @@ namespace Ludwig {
 
     // TODO: Handle media (avatar)
   }
-  auto WriteTxn::set_local_user(uint64_t id, FlatBufferBuilder&& builder, Offset<LocalUser> offset) -> void {
-    builder.Finish(offset);
+  auto WriteTxn::set_local_user(uint64_t id, FlatBufferBuilder& builder) -> void {
     db_put(txn, db.dbis[LocalUser_User], id, builder);
   }
   auto WriteTxn::delete_user(uint64_t id) -> bool {
@@ -544,7 +672,6 @@ namespace Ludwig {
           auto s = *board_stats;
           FlatBufferBuilder fbb;
           fbb.Finish(CreateBoardStats(fbb,
-            s->created_at(),
             s->page_count(),
             s->note_count(),
             std::min(s->subscriber_count(), s->subscriber_count() - 1),
@@ -576,13 +703,12 @@ namespace Ludwig {
     return true;
   }
 
-  auto WriteTxn::create_board(FlatBufferBuilder&& builder, Offset<Board> offset) -> uint64_t {
+  auto WriteTxn::create_board(FlatBufferBuilder& builder) -> uint64_t {
     uint64_t id = next_id();
-    set_board(id, std::move(builder), offset);
+    set_board(id, builder);
     return id;
   }
-  auto WriteTxn::set_board(uint64_t id, FlatBufferBuilder&& builder, Offset<Board> offset) -> void {
-    builder.Finish(offset);
+  auto WriteTxn::set_board(uint64_t id, FlatBufferBuilder& builder) -> void {
     auto board = GetRoot<Board>(builder.GetBufferPointer());
     auto old_board_opt = get_board(id);
     if (old_board_opt) {
@@ -595,7 +721,7 @@ namespace Ludwig {
       spdlog::debug("Creating board {:x} (name {})", id, board->name()->string_view());
       FlatBufferBuilder fbb;
       fbb.ForceDefaults(true);
-      fbb.Finish(CreateBoardStats(fbb, board->created_at()));
+      fbb.Finish(CreateBoardStats(fbb));
       db_put(txn, db.dbis[BoardStats_Board], id, fbb);
     }
     db_put(txn, db.dbis[Board_Board], id, builder);
@@ -603,8 +729,7 @@ namespace Ludwig {
 
     // TODO: Handle media (avatar, banner)
   }
-  auto WriteTxn::set_local_board(uint64_t id, FlatBufferBuilder&& builder, Offset<LocalBoard> offset) -> void {
-    builder.Finish(offset);
+  auto WriteTxn::set_local_board(uint64_t id, FlatBufferBuilder& builder) -> void {
     auto board = GetRoot<LocalBoard>(builder.GetBufferPointer());
     assert_fmt(!!get_user(board->owner()), "set_local_board: board {:x} owner user {:x} does not exist", id, board->owner());
     auto old_board_opt = get_local_board(id);
@@ -674,7 +799,6 @@ namespace Ludwig {
       auto s = *board_stats;
       FlatBufferBuilder fbb;
       fbb.Finish(CreateBoardStats(fbb,
-        s->created_at(),
         s->page_count(),
         s->note_count(),
         subscriber_count,
@@ -687,19 +811,19 @@ namespace Ludwig {
     }
   }
 
-  auto WriteTxn::create_page(FlatBufferBuilder&& builder, Offset<Page> offset) -> uint64_t {
+  auto WriteTxn::create_page(FlatBufferBuilder& builder) -> uint64_t {
     uint64_t id = next_id();
-    set_page(id, std::move(builder), offset);
+    set_page(id, builder);
     return id;
   }
   static inline auto karma_uint(int64_t karma) -> uint64_t {
     if (karma < 0) return (uint64_t)(std::numeric_limits<int64_t>::max() + karma);
     return (uint64_t)std::numeric_limits<int64_t>::max() + (uint64_t)karma;
   }
-  auto WriteTxn::set_page(uint64_t id, FlatBufferBuilder&& builder, Offset<Page> offset) -> void {
-    builder.Finish(offset);
+  auto WriteTxn::set_page(uint64_t id, FlatBufferBuilder& builder) -> void {
     auto page = GetRoot<Page>(builder.GetBufferPointer());
     auto old_page_opt = get_page(id);
+    FlatBufferBuilder fbb;
     int64_t karma = 0;
     if (old_page_opt) {
       spdlog::debug("Updating top-level post {:x} (board {:x}, author {:x})", id, page->board(), page->author());
@@ -714,9 +838,7 @@ namespace Ludwig {
         db_del(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(old_page->board(), karma_uint(karma), id));
         if (auto board_stats = get_board_stats(old_page->board())) {
           auto s = *board_stats;
-          FlatBufferBuilder fbb;
           fbb.Finish(CreateBoardStats(fbb,
-            s->created_at(),
             std::min(s->page_count(), s->page_count() - 1),
             s->note_count(),
             s->subscriber_count(),
@@ -734,15 +856,12 @@ namespace Ludwig {
       db_put(txn, db.dbis[PagesTop_UserKarmaPage], Cursor(page->author(), 1, id), id);
       db_put(txn, db.dbis[PagesNew_BoardTimePage], Cursor(page->board(), page->created_at(), id), id);
       db_put(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(page->board(), karma_uint(karma), id), id);
-      {
-        FlatBufferBuilder fbb;
-        fbb.ForceDefaults(true);
-        fbb.Finish(CreatePageStats(fbb, page->created_at()));
-        db_put(txn, db.dbis[PageStats_Page], id, fbb);
-      }
+      fbb.ForceDefaults(true);
+      fbb.Finish(CreatePageStats(fbb));
+      db_put(txn, db.dbis[PageStats_Page], id, fbb);
       if (auto user_stats = get_user_stats(page->author())) {
         auto s = *user_stats;
-        FlatBufferBuilder fbb;
+        fbb.Clear();
         fbb.Finish(CreateUserStats(fbb,
           s->note_count(),
           s->note_karma(),
@@ -753,9 +872,8 @@ namespace Ludwig {
       }
       if (auto board_stats = get_board_stats(page->board())) {
         auto s = *board_stats;
-        FlatBufferBuilder fbb;
+        fbb.Clear();
         fbb.Finish(CreateBoardStats(fbb,
-          s->created_at(),
           s->page_count() + 1,
           s->note_count(),
           s->subscriber_count(),
@@ -872,7 +990,6 @@ namespace Ludwig {
     if (auto board_stats_opt = get_board_stats(page->board())) {
       auto s = *board_stats_opt;
       board_stats_fbb.Finish(CreateBoardStats(board_stats_fbb,
-        s->created_at(),
         std::min(s->page_count(), s->page_count() - 1),
         s->note_count(),
         s->subscriber_count(),
@@ -915,13 +1032,12 @@ namespace Ludwig {
     return true;
   }
 
-  auto WriteTxn::create_note(FlatBufferBuilder&& builder, Offset<Note> offset) -> uint64_t {
+  auto WriteTxn::create_note(FlatBufferBuilder& builder) -> uint64_t {
     uint64_t id = next_id();
-    set_note(id, std::move(builder), offset);
+    set_note(id, builder);
     return id;
   }
-  auto WriteTxn::set_note(uint64_t id, FlatBufferBuilder&& builder, Offset<Note> offset) -> void {
-    builder.Finish(offset);
+  auto WriteTxn::set_note(uint64_t id, FlatBufferBuilder& builder) -> void {
     const auto note = GetRoot<Note>(builder.GetBufferPointer());
     const auto old_note_opt = get_note(id);
     auto note_stats_opt = get_note_stats(id);
@@ -952,17 +1068,14 @@ namespace Ludwig {
       db_put(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor(page->board(), karma_uint(karma), id), id);
       db_put(txn, db.dbis[ChildrenNew_PostTimeNote], Cursor(note->parent(), note->created_at(), id), id);
       db_put(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor(note->parent(), karma_uint(karma), id), id);
-      {
-        FlatBufferBuilder fbb;
-        fbb.ForceDefaults(true);
-        fbb.Finish(CreateNoteStats(fbb, note->created_at()));
-        db_put(txn, db.dbis[NoteStats_Note], id, fbb);
-      }
+      FlatBufferBuilder fbb;
+      fbb.ForceDefaults(true);
+      fbb.Finish(CreateNoteStats(fbb));
+      db_put(txn, db.dbis[NoteStats_Note], id, fbb);
       {
         auto s = *page_stats;
-        FlatBufferBuilder fbb;
+        fbb.Clear();
         fbb.Finish(CreatePageStats(fbb,
-          s->created_at(),
           is_newer ? note->created_at() : s->newest_comment_time(),
           is_active ? s->newest_comment_time_necro() : std::max(s->newest_comment_time_necro(), note->created_at()),
           s->descendant_count() + 1,
@@ -974,9 +1087,8 @@ namespace Ludwig {
       }
       if (auto parent_stats = get_note_stats(note->parent())) {
         auto s = *parent_stats;
-        FlatBufferBuilder fbb;
+        fbb.Clear();
         fbb.Finish(CreateNoteStats(fbb,
-          s->created_at(),
           s->child_count() + 1,
           s->upvotes(),
           s->downvotes(),
@@ -986,7 +1098,7 @@ namespace Ludwig {
       }
       if (auto user_stats = get_user_stats(note->author())) {
         auto s = *user_stats;
-        FlatBufferBuilder fbb;
+        fbb.Clear();
         fbb.Finish(CreateUserStats(fbb,
           s->note_count() + 1,
           s->note_karma(),
@@ -997,9 +1109,8 @@ namespace Ludwig {
       }
       if (auto board_stats = get_board_stats(page->board())) {
         auto s = *board_stats;
-        FlatBufferBuilder fbb;
+        fbb.Clear();
         fbb.Finish(CreateBoardStats(fbb,
-          s->created_at(),
           s->page_count(),
           s->note_count() + 1,
           s->subscriber_count(),
@@ -1031,7 +1142,6 @@ namespace Ludwig {
     if (auto page_stats_opt = get_page_stats(page_id)) {
       auto s = *page_stats_opt;
       page_stats_fbb.Finish(CreatePageStats(page_stats_fbb,
-        s->created_at(),
         s->newest_comment_time(),
         s->newest_comment_time_necro(),
         s->descendant_count(),
@@ -1044,7 +1154,6 @@ namespace Ludwig {
     if (auto board_stats_opt = get_board_stats(board_id)) {
       auto s = *board_stats_opt;
       board_stats_fbb.Finish(CreateBoardStats(board_stats_fbb,
-        s->created_at(),
         s->page_count(),
         s->note_count(),
         s->subscriber_count(),
@@ -1063,7 +1172,6 @@ namespace Ludwig {
         auto s = *parent_stats;
         FlatBufferBuilder fbb;
         fbb.Finish(CreateNoteStats(fbb,
-          s->created_at(),
           std::min(s->child_count(), s->child_count() - 1),
           s->upvotes(),
           s->downvotes(),
@@ -1100,14 +1208,13 @@ namespace Ludwig {
     const auto note_stats_opt = get_note_stats(post_id);
     const auto op_stats_opt = get_user_stats(op_id);
     assert(!!op_stats_opt);
+    FlatBufferBuilder fbb;
     if (page_stats_opt) {
       {
         const auto page = *page_opt;
         const auto s = *page_stats_opt;
         const auto old_karma = s->karma(), new_karma = old_karma + diff;
-        FlatBufferBuilder fbb;
         fbb.Finish(CreatePageStats(fbb,
-          s->created_at(),
           s->newest_comment_time(),
           s->newest_comment_time_necro(),
           s->descendant_count(),
@@ -1123,7 +1230,7 @@ namespace Ludwig {
       }
       {
         const auto s = *op_stats_opt;
-        FlatBufferBuilder fbb;
+        fbb.Clear();
         fbb.Finish(CreateUserStats(fbb,
           s->note_count(),
           s->note_karma(),
@@ -1140,9 +1247,8 @@ namespace Ludwig {
         const auto note_page = *note_page_opt;
         const auto s = *note_stats_opt;
         const auto old_karma = s->karma(), new_karma = old_karma + diff;
-        FlatBufferBuilder fbb;
+        fbb.Clear();
         fbb.Finish(CreateNoteStats(fbb,
-          s->created_at(),
           s->child_count(),
           vote > 0 ? s->upvotes() + 1 : (existing > 0 ? std::min(s->upvotes(), s->upvotes() - 1) : s->upvotes()),
           vote < 0 ? s->downvotes() + 1 : (existing < 0 ? std::min(s->downvotes(), s->downvotes() - 1) : s->downvotes()),
@@ -1158,7 +1264,7 @@ namespace Ludwig {
       }
       {
         const auto s = *op_stats_opt;
-        FlatBufferBuilder fbb;
+        fbb.Clear();
         fbb.Finish(CreateUserStats(fbb,
           s->note_count(),
           s->note_karma() + diff,

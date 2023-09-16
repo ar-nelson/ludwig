@@ -105,15 +105,19 @@ namespace Ludwig {
   struct PageListEntry {
     uint64_t id;
     double rank;
+    Vote your_vote;
     const Page* page;
     const PageStats* stats;
+    const User* author;
   };
 
   struct NoteListEntry {
     uint64_t id;
     double rank;
+    Vote your_vote;
     const Note* note;
     const NoteStats* stats;
+    const User* author;
   };
 
   struct ListUsersResponse {
@@ -220,7 +224,7 @@ namespace Ludwig {
     std::multimap<std::pair<Event, uint64_t>, EventListener> event_listeners;
 
     auto dispatch_event(Event event, uint64_t subject_id = 0) -> void;
-    auto hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[64]) -> void;
+    auto hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void;
   public:
     Controller(std::shared_ptr<DB> db, std::shared_ptr<asio::io_context> io);
 
@@ -239,11 +243,41 @@ namespace Ludwig {
     auto board_detail(ReadTxn& txn, uint64_t id) -> BoardDetailResponse;
     auto list_local_users(ReadTxn& txn, uint64_t from_id = 0) -> ListUsersResponse;
     auto list_local_boards(ReadTxn& txn, uint64_t from_id = 0) -> ListBoardsResponse;
-    auto list_board_pages(ReadTxn& txn, uint64_t board_id, SortType sort = SortType::Hot, uint64_t from_id = 0) -> ListPagesResponse;
-    auto list_board_notes(ReadTxn& txn, uint64_t board_id, CommentSortType sort = CommentSortType::Hot, uint64_t from_id = 0) -> ListNotesResponse;
-    auto list_child_notes(ReadTxn& txn, uint64_t parent_id, CommentSortType sort = CommentSortType::Hot, uint64_t from_id = 0) -> ListNotesResponse;
-    auto list_user_pages(ReadTxn& txn, uint64_t user_id, UserPostSortType sort = UserPostSortType::New, uint64_t from_id = 0) -> ListPagesResponse;
-    auto list_user_notes(ReadTxn& txn, uint64_t user_id, UserPostSortType sort = UserPostSortType::New, uint64_t from_id = 0) -> ListNotesResponse;
+    auto list_board_pages(
+      ReadTxn& txn,
+      uint64_t board_id,
+      SortType sort = SortType::Hot,
+      uint64_t viewer_user = 0,
+      uint64_t from_id = 0
+    ) -> ListPagesResponse;
+    auto list_board_notes(
+      ReadTxn& txn,
+      uint64_t board_id,
+      CommentSortType sort = CommentSortType::Hot,
+      uint64_t viewer_user = 0,
+      uint64_t from_id = 0
+    ) -> ListNotesResponse;
+    auto list_child_notes(
+      ReadTxn& txn,
+      uint64_t parent_id,
+      CommentSortType sort = CommentSortType::Hot,
+      uint64_t viewer_user = 0,
+      uint64_t from_id = 0
+    ) -> ListNotesResponse;
+    auto list_user_pages(
+      ReadTxn& txn,
+      uint64_t user_id,
+      UserPostSortType sort = UserPostSortType::New,
+      uint64_t viewer_user = 0,
+      uint64_t from_id = 0
+    ) -> ListPagesResponse;
+    auto list_user_notes(
+      ReadTxn& txn,
+      uint64_t user_id,
+      UserPostSortType sort = UserPostSortType::New,
+      uint64_t viewer_user = 0,
+      uint64_t from_id = 0
+    ) -> ListNotesResponse;
     auto create_local_user(
       const char* username,
       const char* email,

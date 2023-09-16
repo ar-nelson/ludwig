@@ -61,10 +61,12 @@ namespace Ludwig {
     size_t map_size;
     MDB_env* env;
     MDB_dbi dbis[128];
+    auto init_env(const char* filename, MDB_txn** txn) -> int;
   public:
     uint64_t seed;
     uint8_t jwt_secret[JWT_SECRET_SIZE];
     DB(const char* filename, size_t map_size_mb = 1024);
+    DB(const char* filename, std::istream& dump_stream, size_t map_size_mb = 1024);
     ~DB();
 
     auto open_read_txn() -> ReadTxn;
@@ -175,26 +177,26 @@ namespace Ludwig {
     }
 
     auto next_id() -> uint64_t;
-    auto set_setting_str(const MDB_val* key, std::string_view value) -> void;
-    auto set_setting_int(const MDB_val* key, uint64_t value) -> void;
+    auto set_setting_str(std::string_view key, std::string_view value) -> void;
+    auto set_setting_int(std::string_view key, uint64_t value) -> void;
 
-    auto create_user(flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<User> offset) -> uint64_t;
-    auto set_user(uint64_t id, flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<User> offset) -> void;
-    auto set_local_user(uint64_t id, flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<LocalUser> offset) -> void;
+    auto create_user(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
+    auto set_user(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
+    auto set_local_user(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
     auto delete_user(uint64_t id) -> bool;
 
-    auto create_board(flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<Board> offset) -> uint64_t;
-    auto set_board(uint64_t id, flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<Board> offset) -> void;
-    auto set_local_board(uint64_t id, flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<LocalBoard> offset) -> void;
+    auto create_board(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
+    auto set_board(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
+    auto set_local_board(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
     auto delete_board(uint64_t id) -> bool;
     auto set_subscription(uint64_t user_id, uint64_t board_id, bool subscribed) -> void;
 
-    auto create_page(flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<Page> offset) -> uint64_t;
-    auto set_page(uint64_t id, flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<Page> offset) -> void;
+    auto create_page(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
+    auto set_page(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
     auto delete_page(uint64_t id) -> bool;
 
-    auto create_note(flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<Note> offset) -> uint64_t;
-    auto set_note(uint64_t id, flatbuffers::FlatBufferBuilder&& builder, flatbuffers::Offset<Note> offset) -> void;
+    auto create_note(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
+    auto set_note(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
     auto delete_note(uint64_t id) -> bool;
 
     auto set_vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;

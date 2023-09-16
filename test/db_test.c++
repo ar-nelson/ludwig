@@ -27,17 +27,18 @@ TEST_CASE("create and get user", "[db]") {
   uint64_t id;
   {
     FlatBufferBuilder fbb;
-    auto offset = CreateUserDirect(fbb,
+    fbb.Finish(CreateUserDirect(fbb,
       "testuser",
       "Test User",
-      "",
-      "",
-      "",
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
       {},
       now_s()
-    );
+    ));
     auto txn = db.open_write_txn();
-    id = txn.create_user(std::move(fbb), offset);
+    id = txn.create_user(fbb);
     txn.commit();
   }
   {
@@ -51,80 +52,77 @@ TEST_CASE("create and get user", "[db]") {
 
 static inline auto create_users(DB& db, uint64_t ids[3]) {
   auto txn = db.open_write_txn();
-  {
-    FlatBufferBuilder fbb;
-    ids[0] = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
-      "user1",
-      "User 1",
-      "",
-      "",
-      "",
-      {},
-      now_s()
-    ));
-  }
-  {
-    FlatBufferBuilder fbb;
-    ids[1] = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
-      "user2",
-      "User 2",
-      "",
-      "",
-      "",
-      {},
-      now_s()
-    ));
-  }
-  {
-    FlatBufferBuilder fbb;
-    ids[2] = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
-      "user3",
-      "User 3",
-      "",
-      "",
-      "",
-      {},
-      now_s()
-    ));
-  }
+  FlatBufferBuilder fbb;
+  fbb.Finish(CreateUserDirect(fbb,
+    "user1",
+    "User 1",
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    {},
+    now_s()
+  ));
+  ids[0] = txn.create_user(fbb);
+  fbb.Clear();
+  fbb.Finish(CreateUserDirect(fbb,
+    "user2",
+    "User 2",
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    {},
+    now_s()
+  ));
+  ids[1] = txn.create_user(fbb);
+  fbb.Clear();
+  fbb.Finish(CreateUserDirect(fbb,
+    "user3",
+    "User 3",
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    {},
+    now_s()
+  ));
+  ids[2] = txn.create_user(fbb);
   txn.commit();
 }
 
 static inline auto create_boards(DB& db, uint64_t ids[3]) {
   auto txn = db.open_write_txn();
-  {
-    FlatBufferBuilder fbb;
-    ids[0] = txn.create_board(std::move(fbb), CreateBoardDirect(fbb,
-      "lions",
-      "Lions",
-      "",
-      "",
-      {},
-      now_s()
-    ));
-  }
-  {
-    FlatBufferBuilder fbb;
-    ids[1] = txn.create_board(std::move(fbb), CreateBoardDirect(fbb,
-      "tigers",
-      "Tigers",
-      "",
-      "",
-      {},
-      now_s()
-    ));
-  }
-  {
-    FlatBufferBuilder fbb;
-    ids[2] = txn.create_board(std::move(fbb), CreateBoardDirect(fbb,
-      "bears",
-      "Bears",
-      "",
-      "",
-      {},
-      now_s()
-    ));
-  }
+  FlatBufferBuilder fbb;
+  fbb.Finish(CreateBoardDirect(fbb,
+    "lions",
+    "Lions",
+    nullptr,
+    nullptr,
+    {},
+    now_s()
+  ));
+  ids[0] = txn.create_board(fbb);
+  fbb.Clear();
+  fbb.Finish(CreateBoardDirect(fbb,
+    "tigers",
+    "Tigers",
+    nullptr,
+    nullptr,
+    {},
+    now_s()
+  ));
+  ids[1] = txn.create_board(fbb);
+  fbb.Clear();
+  fbb.Finish(CreateBoardDirect(fbb,
+    "bears",
+    "Bears",
+    nullptr,
+    nullptr,
+    {},
+    now_s()
+  ));
+  ids[2] = txn.create_board(fbb);
   txn.commit();
 }
 
@@ -221,7 +219,7 @@ TEST_CASE("create users and boards, subscribe and unsubscribe", "[db]") {
 
 static inline auto create_page(WriteTxn& txn, uint64_t user, uint64_t board, const char* title, const char* url) -> uint64_t {
   FlatBufferBuilder fbb;
-  return txn.create_page(std::move(fbb), CreatePageDirect(fbb,
+  fbb.Finish(CreatePageDirect(fbb,
     user,
     board,
     title,
@@ -232,6 +230,7 @@ static inline auto create_page(WriteTxn& txn, uint64_t user, uint64_t board, con
     nullptr,
     url
   ));
+  return txn.create_page(fbb);
 }
 
 TEST_CASE("create and list posts", "[db]") {
@@ -331,20 +330,23 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
   create_boards(db, boards);
   std::array<uint64_t, RND_SIZE / 10> users;
   std::array<uint64_t, RND_SIZE> pages, notes;
+  FlatBufferBuilder fbb;
   auto now = now_s();
   {
     auto txn = db.open_write_txn();
     for (size_t i = 0; i < RND_SIZE / 10; i++) {
-      FlatBufferBuilder fbb;
-      users[i] = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
+      fbb.Clear();
+      fbb.Finish(CreateUserDirect(fbb,
         "testuser",
         "Test User",
-        "",
-        "",
-        "",
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
         {},
         now - random_int(gen, 86400 * 30)
       ));
+      users[i] = txn.create_user(fbb);
     }
     txn.commit();
   }
@@ -353,8 +355,8 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
     for (size_t i = 0; i < RND_SIZE; i++) {
       auto author = users[random_int(gen, RND_SIZE / 10)];
       auto board = boards[random_int(gen, 3)];
-      FlatBufferBuilder fbb;
-      pages[i] = txn.create_page(std::move(fbb), CreatePageDirect(fbb,
+      fbb.Clear();
+      fbb.Finish(CreatePageDirect(fbb,
         author,
         board,
         "Lorem ipsum dolor sit amet",
@@ -365,6 +367,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         nullptr,
         "https://example.com"
       ));
+      pages[i] = txn.create_page(fbb);
     }
     txn.commit();
   }
@@ -376,7 +379,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         parent = parent_ix >= RND_SIZE ? notes[parent_ix - RND_SIZE] : pages[parent_ix],
         page = parent_ix >= RND_SIZE ? (*txn.get_note(parent))->page() : parent;
       FlatBufferBuilder fbb;
-      notes[i] = txn.create_note(std::move(fbb), CreateNoteDirect(fbb,
+      fbb.Finish(CreateNoteDirect(fbb,
         author,
         parent,
         page,
@@ -385,8 +388,10 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         {},
         nullptr,
         nullptr,
+        nullptr,
         "Lorem ipsum dolor sit amet"
       ));
+      notes[i] = txn.create_note(fbb);
     }
     txn.commit();
   }
@@ -450,8 +455,6 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       uint64_t last_timestamp = std::numeric_limits<uint64_t>::max();
       for (auto page_id : txn.list_pages_of_board_new(board)) {
         auto page = *txn.get_page(page_id);
-        auto stats = *txn.get_page_stats(page_id);
-        REQUIRE(page->created_at() == stats->created_at());
         REQUIRE(page->created_at() <= last_timestamp);
         last_timestamp = page->created_at();
         new_pages++;
@@ -467,8 +470,6 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       last_timestamp = std::numeric_limits<uint64_t>::max();
       for (auto note_id : txn.list_notes_of_board_new(board)) {
         auto note = *txn.get_note(note_id);
-        auto stats = *txn.get_note_stats(note_id);
-        REQUIRE(note->created_at() == stats->created_at());
         REQUIRE(note->created_at() <= last_timestamp);
         last_timestamp = note->created_at();
         new_notes++;
@@ -515,8 +516,6 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         auto page_opt = txn.get_page(page_id);
         REQUIRE(!!page_opt);
         auto page = *page_opt;
-        auto stats = *txn.get_page_stats(page_id);
-        REQUIRE(page->created_at() == stats->created_at());
         REQUIRE(page->created_at() <= last_timestamp);
         REQUIRE(!del_pages.contains(page_id));
         last_timestamp = page->created_at();
@@ -538,8 +537,6 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         auto note_opt = txn.get_note(note_id);
         REQUIRE(!!note_opt);
         auto note = *note_opt;
-        auto stats = *txn.get_note_stats(note_id);
-        REQUIRE(note->created_at() == stats->created_at());
         REQUIRE(note->created_at() <= last_timestamp);
         REQUIRE(!del_notes.contains(note_id));
         REQUIRE(!del_notes.contains(note->parent()));

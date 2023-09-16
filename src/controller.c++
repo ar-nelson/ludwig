@@ -9,7 +9,7 @@
 namespace Ludwig {
   static constexpr crypto_argon2_config ARGON2_CONFIG = {
     .algorithm = CRYPTO_ARGON2_I,
-    .nb_blocks = 100'000,
+    .nb_blocks = 65536,
     .nb_passes = 3,
     .nb_lanes = 1
   };
@@ -35,60 +35,108 @@ namespace Ludwig {
   static auto note_rank_cmp(const NoteListEntry& a, const NoteListEntry& b) -> bool {
     return a.rank > b.rank || (a.rank == b.rank && a.id > b.id);
   }
+  static inline auto get_page_entry(ReadTxn& txn, uint64_t page_id, uint64_t viewer_user) -> PageListEntry {
+    const auto page = txn.get_page(page_id);
+    const auto stats = txn.get_page_stats(page_id);
+    if (!page || !stats) {
+      spdlog::error("Entry references nonexistent post {:x} (database is inconsistent!)", page_id);
+      throw ControllerError("Database error", 500);
+    }
+    const auto author = txn.get_user((*page)->author());
+    if (!author) {
+      spdlog::error(
+        "Entry post {:x} references nonexistent author {:x} (database is inconsistent!)",
+        page_id, (*page)->author()
+      );
+      throw ControllerError("Database error", 500);
+    }
+    const Vote vote = viewer_user ? txn.get_vote_of_user_for_post(viewer_user, page_id) : NoVote;
+    return {
+      .id = page_id,
+      .your_vote = vote,
+      .page = *page,
+      .stats = *stats,
+      .author = *author
+    };
+  }
   static auto page_of_ranked_pages(
     ReadTxn& txn,
     DBIter<uint64_t> iter_by_new,
     int64_t max_possible_karma,
-    bool active
+    bool active,
+    uint64_t viewer_user
   ) -> std::set<PageListEntry, decltype(page_rank_cmp)*> {
     const auto max_possible_numerator = rank_numerator(max_possible_karma);
     const auto now = now_s();
     std::set<PageListEntry, decltype(page_rank_cmp)*> sorted_pages(page_rank_cmp);
     for (auto page_id : iter_by_new) {
-      const auto page = txn.get_page(page_id);
-      const auto stats = txn.get_page_stats(page_id);
-      if (!page || !stats) {
-        spdlog::warn("Board entry references nonexistent post {:x} (database is inconsistent!)", page_id);
+      try {
+        auto entry = get_page_entry(txn, page_id, viewer_user);
+        const auto timestamp = active ? entry.stats->newest_comment_time() : entry.page->created_at();
+        const auto denominator = rank_denominator(timestamp < now ? now - timestamp : 0);
+        if (sorted_pages.size() >= ITEMS_PER_PAGE) {
+          const double max_possible_rank = max_possible_numerator / denominator;
+          auto last = std::prev(sorted_pages.end());
+          if (max_possible_rank <= last->rank) break;
+          sorted_pages.erase(last);
+        }
+        entry.rank = rank_numerator(entry.stats->karma()) / denominator;
+        sorted_pages.insert(entry);
+      } catch (ControllerError e) {
         continue;
       }
-      const auto timestamp = active ? (*stats)->newest_comment_time() : (*page)->created_at();
-      const auto denominator = rank_denominator(timestamp < now ? now - timestamp : 0);
-      if (sorted_pages.size() >= ITEMS_PER_PAGE) {
-        const double max_possible_rank = max_possible_numerator / denominator;
-        auto last = std::prev(sorted_pages.end());
-        if (max_possible_rank <= last->rank) break;
-        sorted_pages.erase(last);
-      }
-      const double rank = rank_numerator((*stats)->karma()) / denominator;
-      sorted_pages.emplace(PageListEntry{page_id, rank, *page, *stats});
     }
     return sorted_pages;
+  }
+  static inline auto get_note_entry(ReadTxn& txn, uint64_t note_id, uint64_t viewer_user) -> NoteListEntry {
+      const auto note = txn.get_note(note_id);
+      const auto stats = txn.get_note_stats(note_id);
+      if (!note || !stats) {
+        spdlog::error("Entry references nonexistent comment {:x} (database is inconsistent!)", note_id);
+        throw ControllerError("Database error", 500);
+      }
+      const auto author = txn.get_user((*note)->author());
+      if (!author) {
+        spdlog::error(
+          "Entry comment {:x} references nonexistent author {:x} (database is inconsistent!)",
+          note_id, (*note)->author()
+        );
+        throw ControllerError("Database error", 500);
+      }
+      const Vote vote = viewer_user ? txn.get_vote_of_user_for_post(viewer_user, note_id) : NoVote;
+      return {
+        .id = note_id,
+        .your_vote = vote,
+        .note = *note,
+        .stats = *stats,
+        .author = *author
+      };
   }
   static auto page_of_ranked_notes(
     ReadTxn& txn,
     DBIter<uint64_t> iter_by_new,
-    int64_t max_possible_karma
+    int64_t max_possible_karma,
+    uint64_t viewer_user
   ) -> std::set<NoteListEntry, decltype(note_rank_cmp)*> {
     const auto max_possible_numerator = rank_numerator(max_possible_karma);
     const auto now = now_s();
     std::set<NoteListEntry, decltype(note_rank_cmp)*> sorted_notes(note_rank_cmp);
     for (auto note_id : iter_by_new) {
-      const auto note = txn.get_note(note_id);
-      const auto stats = txn.get_note_stats(note_id);
-      if (!note || !stats) {
-        spdlog::warn("Board entry references nonexistent comment {:x} (database is inconsistent!)", note_id);
+      try {
+        auto entry = get_note_entry(txn, note_id, viewer_user);
+        const auto timestamp = entry.note->created_at();
+        const auto denominator = rank_denominator(timestamp < now ? now - timestamp : 0);
+        if (sorted_notes.size() >= ITEMS_PER_PAGE) {
+          const double max_possible_rank = max_possible_numerator / denominator;
+          auto last = std::prev(sorted_notes.end());
+          if (max_possible_rank <= last->rank) break;
+          sorted_notes.erase(last);
+        }
+        entry.rank = rank_numerator(entry.stats->karma()) / denominator;
+        sorted_notes.insert(entry);
+      } catch (ControllerError e) {
         continue;
       }
-      const auto timestamp = (*note)->created_at();
-      const auto denominator = rank_denominator(timestamp < now ? now - timestamp : 0);
-      if (sorted_notes.size() >= ITEMS_PER_PAGE) {
-        const double max_possible_rank = max_possible_numerator / denominator;
-        auto last = std::prev(sorted_notes.end());
-        if (max_possible_rank <= last->rank) break;
-        sorted_notes.erase(last);
-      }
-      const double rank = rank_numerator((*stats)->karma()) / denominator;
-      sorted_notes.emplace(NoteListEntry{note_id, rank, *note, *stats});
     }
     return sorted_notes;
   }
@@ -114,14 +162,14 @@ namespace Ludwig {
     if (!payload) throw ControllerError("Session expired or not authorized", 401);
     return payload->sub;
   }
-  auto Controller::hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[64]) -> void {
+  auto Controller::hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void {
     // Lock the password hashing step with a mutex,
     // because the Argon2i context is shared
     static std::mutex mutex;
     static uint8_t work_area[ARGON2_CONFIG.nb_blocks * 1024];
     std::lock_guard<std::mutex> lock(mutex);
     crypto_argon2(
-      hash, 64, work_area, ARGON2_CONFIG, crypto_argon2_inputs {
+      hash, 32, work_area, ARGON2_CONFIG, crypto_argon2_inputs {
         .pass = reinterpret_cast<uint8_t*>(password.str.data()),
         .salt = salt,
         .pass_size = static_cast<uint32_t>(password.str.length()),
@@ -209,19 +257,19 @@ namespace Ludwig {
     if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
     return out;
   }
-  auto Controller::list_board_pages(ReadTxn& txn, uint64_t board_id, SortType sort, uint64_t from_id) -> ListPagesResponse {
+  auto Controller::list_board_pages(
+    ReadTxn& txn,
+    uint64_t board_id,
+    SortType sort,
+    uint64_t viewer_user,
+    uint64_t from_id
+  ) -> ListPagesResponse {
     ListPagesResponse out { {}, 0, {} };
     switch (sort) {
       case SortType::New: {
         auto iter = txn.list_pages_of_board_new(board_id, {Cursor(from_id)});
         for (uint64_t page_id : iter) {
-          const auto page = txn.get_page(page_id);
-          const auto stats = txn.get_page_stats(page_id);
-          if (!page || !stats) {
-            spdlog::warn("Board entry references nonexistent post {:x} (database is inconsistent!)", page_id);
-            continue;
-          }
-          out.page[out.size] = { page_id, 0, *page, *stats };
+          out.page[out.size] = get_page_entry(txn, page_id, viewer_user);
           if (++out.size >= ITEMS_PER_PAGE) break;
         }
         if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
@@ -272,13 +320,8 @@ namespace Ludwig {
         }
         for (uint64_t page_id : iter) {
           const auto page = txn.get_page(page_id);
-          const auto stats = txn.get_page_stats(page_id);
-          if (!page || !stats) {
-            spdlog::warn("Board entry references nonexistent post {:x} (database is inconsistent!)", page_id);
-            continue;
-          }
-          if ((*page)->created_at() < earliest) continue;
-          out.page[out.size] = { page_id, 0, *page, *stats };
+          if (page && (*page)->created_at() < earliest) continue;
+          out.page[out.size] = get_page_entry(txn, page_id, viewer_user);
           if (++out.size >= ITEMS_PER_PAGE) break;
         }
         if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
@@ -291,7 +334,7 @@ namespace Ludwig {
           if (iter.is_done()) break;
           highest_karma = expect_page_stats(txn, *iter)->karma();
         }
-        for (auto entry : page_of_ranked_pages(txn, txn.list_pages_of_board_new(board_id, {Cursor(from_id)}), highest_karma, false)) {
+        for (auto entry : page_of_ranked_pages(txn, txn.list_pages_of_board_new(board_id, {Cursor(from_id)}), highest_karma, viewer_user, false)) {
           out.page[out.size] = entry;
           if (++out.size >= ITEMS_PER_PAGE) break;
         }
@@ -310,7 +353,13 @@ namespace Ludwig {
     }
     return out;
   }
-  auto Controller::list_board_notes(ReadTxn& txn, uint64_t board_id, CommentSortType sort, uint64_t from_id) -> ListNotesResponse {
+  auto Controller::list_board_notes(
+    ReadTxn& txn,
+    uint64_t board_id,
+    CommentSortType sort,
+    uint64_t viewer_user,
+    uint64_t from_id
+  ) -> ListNotesResponse {
     ListNotesResponse out { {}, 0, {} };
     // TODO: Old sort
     auto iter = sort == CommentSortType::Top
@@ -323,13 +372,13 @@ namespace Ludwig {
         if (iter.is_done()) return out;
         highest_karma = expect_page_stats(txn, *iter)->karma();
       }
-      for (auto entry : page_of_ranked_notes(txn, std::move(iter), highest_karma)) {
+      for (auto entry : page_of_ranked_notes(txn, std::move(iter), highest_karma, viewer_user)) {
         out.page[out.size] = entry;
         if (++out.size >= ITEMS_PER_PAGE) break;
       }
       if (out.size >= ITEMS_PER_PAGE) {
         for (auto note_id : txn.list_notes_of_board_new(board_id, {Cursor(from_id)})) {
-          if (std::none_of(out.page.begin(), out.page.end(), [note_id](const NoteListEntry& e) { return e.id == note_id; })) {
+          if (std::none_of(out.page.begin(), out.page.end(), [note_id](auto& e) { return e.id == note_id; })) {
             out.next = { note_id };
             break;
           }
@@ -337,20 +386,20 @@ namespace Ludwig {
       }
     } else {
       for (uint64_t note_id : iter) {
-        const auto note = txn.get_note(note_id);
-        const auto stats = txn.get_note_stats(note_id);
-        if (!note || !stats) {
-          spdlog::warn("Board entry references nonexistent comment {:x} (database is inconsistent!)", note_id);
-          continue;
-        }
-        out.page[out.size] = { note_id, 0, *note, *stats };
+        out.page[out.size] = get_note_entry(txn, note_id, viewer_user);
         if (++out.size >= ITEMS_PER_PAGE) break;
       }
       if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
     }
     return out;
   }
-  auto Controller::list_child_notes(ReadTxn& txn, uint64_t parent_id, CommentSortType sort, uint64_t from_id) -> ListNotesResponse {
+  auto Controller::list_child_notes(
+    ReadTxn& txn,
+    uint64_t parent_id,
+    CommentSortType sort,
+    uint64_t viewer_user,
+    uint64_t from_id
+  ) -> ListNotesResponse {
     ListNotesResponse out { {}, 0, {} };
     // TODO: Old sort
     auto iter = sort == CommentSortType::Top
@@ -363,7 +412,7 @@ namespace Ludwig {
         if (iter.is_done()) return out;
         highest_karma = expect_page_stats(txn, *iter)->karma();
       }
-      for (auto entry : page_of_ranked_notes(txn, std::move(iter), highest_karma)) {
+      for (auto entry : page_of_ranked_notes(txn, std::move(iter), highest_karma, viewer_user)) {
         out.page[out.size] = entry;
         if (++out.size >= ITEMS_PER_PAGE) break;
       }
@@ -377,52 +426,46 @@ namespace Ludwig {
       }
     } else {
       for (uint64_t note_id : iter) {
-        const auto note = txn.get_note(note_id);
-        const auto stats = txn.get_note_stats(note_id);
-        if (!note || !stats) {
-          spdlog::warn("Comment list entry references nonexistent comment {:x} (database is inconsistent!)", note_id);
-          continue;
-        }
-        out.page[out.size] = { note_id, 0, *note, *stats };
+        out.page[out.size] = get_note_entry(txn, note_id, viewer_user);
         if (++out.size >= ITEMS_PER_PAGE) break;
       }
       if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
     }
     return out;
   }
-  auto Controller::list_user_pages(ReadTxn& txn, uint64_t user_id, UserPostSortType sort, uint64_t from_id) -> ListPagesResponse {
+  auto Controller::list_user_pages(
+    ReadTxn& txn,
+    uint64_t user_id,
+    UserPostSortType sort,
+    uint64_t viewer_user,
+    uint64_t from_id
+  ) -> ListPagesResponse {
     ListPagesResponse out { {}, 0, {} };
     // TODO: Old sort
     auto iter = sort == UserPostSortType::Top
       ? txn.list_pages_of_user_top(user_id, {Cursor(from_id)})
       : txn.list_pages_of_user_new(user_id, {Cursor(from_id)});
     for (uint64_t page_id : iter) {
-      const auto page = txn.get_page(page_id);
-      const auto stats = txn.get_page_stats(page_id);
-      if (!page || !stats) {
-        spdlog::warn("User entry references nonexistent post {:x} (database is inconsistent!)", page_id);
-        continue;
-      }
-      out.page[out.size] = { page_id, 0, *page, *stats };
+        out.page[out.size] = get_page_entry(txn, page_id, viewer_user);
       if (++out.size >= ITEMS_PER_PAGE) break;
     }
     if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
     return out;
   }
-  auto Controller::list_user_notes(ReadTxn& txn, uint64_t user_id, UserPostSortType sort, uint64_t from_id) -> ListNotesResponse {
+  auto Controller::list_user_notes(
+    ReadTxn& txn,
+    uint64_t user_id,
+    UserPostSortType sort,
+    uint64_t viewer_user,
+    uint64_t from_id
+  ) -> ListNotesResponse {
     ListNotesResponse out { {}, 0, {} };
     // TODO: Old sort
     auto iter = sort == UserPostSortType::Top
       ? txn.list_notes_of_user_top(user_id, {Cursor(from_id)})
       : txn.list_notes_of_user_new(user_id, {Cursor(from_id)});
     for (uint64_t note_id : iter) {
-      const auto note = txn.get_note(note_id);
-      const auto stats = txn.get_note_stats(note_id);
-      if (!note || !stats) {
-        spdlog::warn("User entry references nonexistent comment {:x} (database is inconsistent!)", note_id);
-        continue;
-      }
-      out.page[out.size] = { note_id, 0, *note, *stats };
+        out.page[out.size] = get_note_entry(txn, note_id, viewer_user);
       if (++out.size >= ITEMS_PER_PAGE) break;
     }
     if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
@@ -447,30 +490,27 @@ namespace Ludwig {
       throw ControllerError("A user with this name already exists on this instance", 409);
     }
     // TODO: Check if email already exists
-    uint8_t salt[16], hash[64];
+    uint8_t salt[16], hash[32];
     duthomhas::csprng rng;
     rng(salt);
     hash_password(std::move(password), salt, hash);
-    auto now = now_s();
-    uint64_t user_id;
-    {
-      flatbuffers::FlatBufferBuilder fbb;
-      user_id = txn.create_user(std::move(fbb), CreateUserDirect(fbb,
-        username,
-        nullptr,
-        "",
-        nullptr,
-        nullptr,
-        {},
-        now
-      ));
-    }
-    {
-      flatbuffers::FlatBufferBuilder fbb;
-      Hash hash_struct(hash);
-      Salt salt_struct(salt);
-      txn.set_local_user(user_id, std::move(fbb), CreateLocalUserDirect(fbb, email, &hash_struct, &salt_struct));
-    }
+    flatbuffers::FlatBufferBuilder fbb;
+    fbb.Finish(CreateUserDirect(fbb,
+      username,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      std::nullopt,
+      now_s()
+    ));
+    const auto user_id = txn.create_user(fbb);
+    fbb.Clear();
+    Hash hash_struct(hash);
+    Salt salt_struct(salt);
+    fbb.Finish(CreateLocalUserDirect(fbb, email, &hash_struct, &salt_struct));
+    txn.set_local_user(user_id, fbb);
     txn.commit();
     return user_id;
   }
@@ -500,31 +540,26 @@ namespace Ludwig {
       throw ControllerError("Board owner is not a user on this instance", 400);
     }
     // TODO: Check if user is allowed to create boards
-    auto now = now_s();
-    uint64_t board_id;
-    {
-      flatbuffers::FlatBufferBuilder fbb;
-      board_id = txn.create_board(std::move(fbb), CreateBoardDirect(fbb,
-        name,
-        display_name.value_or(nullptr),
-        nullptr,
-        nullptr,
-        {},
-        now,
-        {},
-        nullptr,
-        {},
-        {},
-        is_nsfw,
-        is_restricted_posting
-      ));
-    }
-    {
-      flatbuffers::FlatBufferBuilder fbb;
-      txn.set_local_board(board_id, std::move(fbb),
-        CreateLocalBoard(fbb, owner, !is_local_only, is_private)
-      );
-    }
+    flatbuffers::FlatBufferBuilder fbb;
+    fbb.Finish(CreateBoardDirect(fbb,
+      name,
+      display_name.value_or(nullptr),
+      nullptr,
+      nullptr,
+      std::nullopt,
+      now_s(),
+      std::nullopt,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      is_nsfw,
+      is_restricted_posting
+    ));
+    const auto board_id = txn.create_board(fbb);
+    fbb.Clear();
+    fbb.Finish(CreateLocalBoard(fbb, owner, !is_local_only, is_private));
+    txn.set_local_board(board_id, fbb);
     txn.commit();
     return board_id;
   }
@@ -575,23 +610,22 @@ namespace Ludwig {
         throw ControllerError("This instance does not allow NSFW content", 400);
       }
       // TODO: Check if user is banned
-      auto now = now_s();
-      {
-        flatbuffers::FlatBufferBuilder fbb;
-        page_id = txn.create_page(std::move(fbb), CreatePageDirect(fbb,
-          author,
-          board,
-          title,
-          now,
-          {},
-          {},
-          nullptr,
-          nullptr,
-          submission_url.value_or(nullptr),
-          text_content_markdown.value_or(nullptr),
-          is_nsfw
-        ));
-      }
+      flatbuffers::FlatBufferBuilder fbb;
+      fbb.Finish(CreatePageDirect(fbb,
+        author,
+        board,
+        title,
+        now_s(),
+        std::nullopt,
+        std::nullopt,
+        nullptr,
+        nullptr,
+        submission_url.value_or(nullptr),
+        text_content_markdown.value_or(nullptr),
+        text_content_markdown.value_or(nullptr),
+        is_nsfw
+      ));
+      page_id = txn.create_page(fbb);
       txn.set_vote(author, page_id, Upvote);
       txn.commit();
     }
@@ -625,21 +659,20 @@ namespace Ludwig {
       }
       board_id = (*parent_page)->board();
       // TODO: Check if user is banned
-      auto now = now_s();
-      {
-        flatbuffers::FlatBufferBuilder fbb;
-        note_id = txn.create_note(std::move(fbb), CreateNoteDirect(fbb,
-          author,
-          parent,
-          page_id = parent_note ? (*parent_note)->page() : parent,
-          now,
-          {},
-          {},
-          nullptr,
-          nullptr,
-          text_content_markdown
-        ));
-      }
+      flatbuffers::FlatBufferBuilder fbb;
+      fbb.Finish(CreateNoteDirect(fbb,
+        author,
+        parent,
+        page_id = parent_note ? (*parent_note)->page() : parent,
+        now_s(),
+        std::nullopt,
+        std::nullopt,
+        nullptr,
+        nullptr,
+        text_content_markdown,
+        text_content_markdown
+      ));
+      note_id = txn.create_note(fbb);
       txn.set_vote(author, note_id, Upvote);
       txn.commit();
     }
