@@ -60,6 +60,18 @@ summary, input[type=submit], button {
   fill: none;
 }
 
+.a11y {
+  position: absolute;
+  appearance: none;
+  border: 0;
+  padding: 0;
+  color: transparent;
+  background-color: transparent;
+  font-size: 0.1px;
+  width: 0.1px;
+  height: 0.1px;
+}
+
 /* borrowed from Skeleton CSS framework */
 input[type="email"],
 input[type="number"],
@@ -263,12 +275,12 @@ summary + * {
   margin-left: 1rem;
 }
 
-ol.page-list {
+ol.page-list, ol.note-list, ol.board-list {
   margin: 0;
   padding: 0;
 }
 
-ol.page-list > li {
+.page-list > li, .note-list > li, .comment-list > li, .board-list > li {
   list-style-type: none;
   margin: 0;
   padding: 0;
@@ -288,6 +300,20 @@ ol.page-list > li {
   min-width: 0;
 }
 
+.note {
+  list-style-type: none;
+  display: grid;
+  margin: 0;
+  padding: 1rem 0;
+  min-height: 6.5rem;
+  grid-template-columns: 3rem 1fr;
+  grid-template-areas:
+    "votes info"
+    "votes content"
+    "votes controls";
+  min-width: 0;
+}
+
 .page-title {
   grid-area: title;
   font-size: 1.25rem;
@@ -295,12 +321,21 @@ ol.page-list > li {
   margin: 0;
 }
 
+.page-source {
+  font-weight: normal;
+  font-size: 0.8rem;
+}
+
 a:link.page-title-link, a:visited.page-title-link, .controls a:link, .controls a:visited {
   font-weight: bold;
   text-decoration: none;
 }
 
-a:hover.page-title-link, .controls a:hover {
+.page-info a:link, .page-info a:visited, .note-info a:link, .note-info a:visited {
+  text-decoration: none;
+}
+
+a:hover.page-title-link, .page-info a:hover, .note-info a:hover, .controls a:hover {
   text-decoration: underline;
 }
 
@@ -331,15 +366,42 @@ a:hover.page-title-link, .controls a:hover {
   min-width: 0;
 }
 
-.page-info img, .page-info .icon {
-  width: 1rem;
-  height: 1rem;
-  vertical-align: middle;
+.note-info {
+  grid-area: info;
+  font-size: 0.8rem;
+  font-weight: bold;
+  min-width: 0;
+  margin: 0;
 }
 
-.page-source {
-  font-weight: normal;
-  font-size: 0.8rem;
+.page-info img, .page-info .icon, .note-info img, .note-info .icon {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  vertical-align: bottom;
+  margin-right: 0.125rem;
+}
+
+.board-title img, .board-title .icon {
+  display: inline-block;
+  width: 2rem;
+  height: 2rem;
+  vertical-align: bottom;
+  margin-right: 0.25rem;
+}
+
+.nsfw-tag {
+  display: inline-block;
+  padding: 0.125rem 0.25rem;
+  color: red;
+  border: 1px solid red;
+  border-radius: 0.125rem;
+  text-decoration: none;
+}
+
+.note-content {
+  grid-area: content;
+  margin: 1rem 0;
 }
 
 .vote-buttons {
@@ -347,7 +409,7 @@ a:hover.page-title-link, .controls a:hover {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .karma {
@@ -362,46 +424,44 @@ a:hover.page-title-link, .controls a:hover {
 
 .upvote, .downvote {
   width: 100%;
+  height: 1em;
   margin: 0;
-}
-
-.a11y, .upvote input, .downvote input {
-  position: absolute;
-  appearance: none;
-  border: 0;
-  padding: 0;
-  color: transparent;
-  background-color: transparent;
-  font-size: 0.1px;
-  width: 0.1px;
-  height: 0.1px;
-}
-
-.arrow-button {
-  display: block;
-  width: 100%;
-  height: 1rem;
+  margin-top: 0.25rem;
+  justify-content: center;
   cursor: pointer;
-  text-align: center;
 }
 
-.arrow-button::after {
-  content: '';
+.vote-buttons button {
   display: inline-block;
   width: 1rem;
   height: 1rem;
+  border-color: var(--color-fg-dim);
   border-style: solid;
   border-width: 0 3px 3px 0;
+  background: none;
+  padding: 0;
+  margin: 0;
 }
 
-.upvote .arrow-button::after {
-  border-color: var(--color-upvote);
+.vote-buttons button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.upvote button {
   transform: rotate(-135deg);
 }
 
-.downvote .arrow-button::after {
-  border-color: var(--color-downvote);
+.downvote button {
   transform: rotate(45deg);
+}
+
+.upvote button.voted {
+  border-color: var(--color-upvote);
+}
+
+.downvote button.voted {
+  border-color: var(--color-downvote);
 }
 
 .controls {
@@ -413,8 +473,31 @@ a:hover.page-title-link, .controls a:hover {
   min-width: 0;
 }
 
-.controls a {
+.controls-submenu-expand {
+  display: none;
+}
+
+.controls-submenu {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.controls a, .controls button {
   margin-right: 0.5rem;
+}
+
+.controls button {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--color-accent);
+  font-size: 0.8rem;
+  height: auto;
+}
+
+.controls button:hover, .controls button:focus {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
 }
 
 .form-page {

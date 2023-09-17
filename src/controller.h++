@@ -109,6 +109,7 @@ namespace Ludwig {
     const Page* page;
     const PageStats* stats;
     const User* author;
+    const Board* board;
   };
 
   struct NoteListEntry {
@@ -118,6 +119,7 @@ namespace Ludwig {
     const Note* note;
     const NoteStats* stats;
     const User* author;
+    const Page* page;
   };
 
   struct ListUsersResponse {
@@ -228,6 +230,48 @@ namespace Ludwig {
   public:
     Controller(std::shared_ptr<DB> db, std::shared_ptr<asio::io_context> io);
 
+    static auto parse_sort_type(std::string_view str) -> SortType {
+      if (str.empty() || str == "Hot") return SortType::Hot;
+      if (str == "Active") return SortType::Active;
+      if (str == "New") return SortType::New;
+      if (str == "Old") return SortType::Old;
+      if (str == "MostComments") return SortType::MostComments;
+      if (str == "NewComments") return SortType::NewComments;
+      if (str == "Top" || str == "TopAll") return SortType::TopAll;
+      if (str == "TopYear") return SortType::TopYear;
+      if (str == "TopSixMonths") return SortType::TopSixMonths;
+      if (str == "TopThreeMonths") return SortType::TopThreeMonths;
+      if (str == "TopMonth") return SortType::TopMonth;
+      if (str == "TopWeek") return SortType::TopWeek;
+      if (str == "TopDay") return SortType::TopDay;
+      if (str == "TopTwelveHour") return SortType::TopTwelveHour;
+      if (str == "TopSixHour") return SortType::TopSixHour;
+      if (str == "TopHour") return SortType::TopHour;
+      throw ControllerError("Bad sort type", 400);
+    }
+
+    static auto parse_comment_sort_type(std::string_view str) -> CommentSortType {
+      if (str.empty() || str == "Hot") return CommentSortType::Hot;
+      if (str == "New") return CommentSortType::New;
+      if (str == "Old") return CommentSortType::Old;
+      if (str == "Top") return CommentSortType::Top;
+      throw ControllerError("Bad comment sort type", 400);
+    }
+
+    static auto parse_user_post_sort_type(std::string_view str) -> UserPostSortType {
+      if (str.empty() || str == "New") return UserPostSortType::New;
+      if (str == "Old") return UserPostSortType::Old;
+      if (str == "Top") return UserPostSortType::Top;
+      throw ControllerError("Bad post sort type", 400);
+    }
+
+    static auto parse_hex_id(std::string hex_id) -> std::optional<uint64_t> {
+      if (hex_id.empty()) return {};
+      auto n = std::stoull(hex_id, nullptr, 16);
+      if (!n && hex_id != "0") throw ControllerError("Bad hexadecimal ID", 400);
+      return { n };
+    }
+
     inline auto open_read_txn() -> ReadTxn {
       return db->open_read_txn();
     }
@@ -241,42 +285,46 @@ namespace Ludwig {
     auto user_detail(ReadTxn& txn, uint64_t id) -> UserDetailResponse;
     auto local_user_detail(ReadTxn& txn, uint64_t id) -> LocalUserDetailResponse;
     auto board_detail(ReadTxn& txn, uint64_t id) -> BoardDetailResponse;
-    auto list_local_users(ReadTxn& txn, uint64_t from_id = 0) -> ListUsersResponse;
-    auto list_local_boards(ReadTxn& txn, uint64_t from_id = 0) -> ListBoardsResponse;
+    auto list_local_users(ReadTxn& txn, std::optional<uint64_t> from_id = {}) -> ListUsersResponse;
+    auto list_local_boards(ReadTxn& txn, std::optional<uint64_t> from_id = {}) -> ListBoardsResponse;
     auto list_board_pages(
       ReadTxn& txn,
       uint64_t board_id,
       SortType sort = SortType::Hot,
+      bool skip_nsfw = false,
       uint64_t viewer_user = 0,
-      uint64_t from_id = 0
+      std::optional<uint64_t> from_id = {}
     ) -> ListPagesResponse;
     auto list_board_notes(
       ReadTxn& txn,
       uint64_t board_id,
-      CommentSortType sort = CommentSortType::Hot,
+      SortType sort = SortType::Hot,
+      bool skip_nsfw = false,
       uint64_t viewer_user = 0,
-      uint64_t from_id = 0
+      std::optional<uint64_t> from_id = {}
     ) -> ListNotesResponse;
     auto list_child_notes(
       ReadTxn& txn,
       uint64_t parent_id,
       CommentSortType sort = CommentSortType::Hot,
       uint64_t viewer_user = 0,
-      uint64_t from_id = 0
+      std::optional<uint64_t> from_id = {}
     ) -> ListNotesResponse;
     auto list_user_pages(
       ReadTxn& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
+      bool skip_nsfw = false,
       uint64_t viewer_user = 0,
-      uint64_t from_id = 0
+      std::optional<uint64_t> from_id = {}
     ) -> ListPagesResponse;
     auto list_user_notes(
       ReadTxn& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
+      bool skip_nsfw = false,
       uint64_t viewer_user = 0,
-      uint64_t from_id = 0
+      std::optional<uint64_t> from_id = {}
     ) -> ListNotesResponse;
     auto create_local_user(
       const char* username,

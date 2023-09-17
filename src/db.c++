@@ -289,12 +289,16 @@ namespace Ludwig {
     DeferDelete on_error{ env, filename };
     auto txn = open_write_txn();
     std::string line;
+    seed = 0;
     while (std::getline(dump_stream, line)) {
       if (line.empty()) continue;
       std::smatch match;
       if (std::regex_match(line, match, json_line)) {
         switch (match[1].str()[0]) {
           case 'u':
+            if (seed == 0) {
+              spdlog::warn("hash_seed was not set before creating users, name lookup may be broken");
+            }
             parser.SetRootType("User");
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw std::runtime_error("Failed to parse User JSON: " + match[3].str());
@@ -309,6 +313,9 @@ namespace Ludwig {
             txn.set_local_user(std::stoull(match[2]), parser.builder_);
             break;
           case 'b':
+            if (seed == 0) {
+              spdlog::warn("hash_seed was not set before creating boards, name lookup may be broken");
+            }
             parser.SetRootType("Board");
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw std::runtime_error("Failed to parse Board JSON: " + match[3].str());
@@ -338,6 +345,11 @@ namespace Ludwig {
             break;
         }
       } else if (std::regex_match(line, match, setting_line)) {
+        if (match[1].str() == "hash_seed") {
+          const auto bin_str = cereal::base64::decode(match[2]);
+          assert(bin_str.length() == 8);
+          seed = *reinterpret_cast<const uint64_t*>(bin_str.data());
+        }
         txn.set_setting_str(match[1].str(), cereal::base64::decode(match[2]));
       } else if (std::regex_match(line, match, vote_line)) {
         txn.set_vote(std::stoull(match[1]), std::stoull(match[2]), static_cast<Vote>(std::stoi(match[3])));
