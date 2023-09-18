@@ -103,7 +103,7 @@ async function genLocalUser(
       password_salt: { bytes: [...enc.encode(salt)] },
       show_avatars: faker.datatype.boolean(0.8),
       show_karma: faker.datatype.boolean(0.8),
-      show_nsfw: faker.datatype.boolean(0.5),
+      hide_cw_posts: faker.datatype.boolean(0.5),
     },
   };
 }
@@ -138,7 +138,9 @@ function genBoard(
           h = faker.number.int({ min: 100, max: Math.min(w, 720) });
         return genImageUrl(w, h);
       }, { probability: 0.5 }),
-      nsfw: faker.datatype.boolean(0.1),
+      content_warning: faker.datatype.boolean(0.1)
+        ? faker.company.catchPhrase()
+        : undefined,
     },
   };
 }
@@ -194,7 +196,9 @@ function genPage(
       }/post/${id.toString(16)}`,
       content_url,
       content_text_safe,
-      nsfw: faker.datatype.boolean(0.05),
+      content_warning: faker.datatype.boolean(0.05)
+        ? faker.company.catchPhrase()
+        : undefined,
       mod_state: faker.helpers.maybe(() => faker.helpers.enumValue(ModState), {
         probability: 0.05,
       }),
@@ -285,7 +289,9 @@ interface LocalUser {
   show_avatars?: boolean;
   show_bot_accounts?: boolean;
   show_new_post_notifs?: boolean;
-  show_nsfw?: boolean;
+  hide_cw_posts?: boolean;
+  expand_cw_posts?: boolean;
+  expand_cw_images?: boolean;
   show_read_posts?: boolean;
   show_karma?: boolean;
   interface_language?: string;
@@ -306,7 +312,7 @@ interface Board {
   description_safe?: string;
   icon_url?: string;
   banner_url?: string;
-  nsfw?: boolean;
+  content_warning?: string;
   restricted_posting?: boolean;
   can_upvote?: boolean;
   can_downvote?: boolean;
@@ -332,7 +338,7 @@ interface Page {
   content_url?: string;
   content_text_raw?: string;
   content_text_safe?: string;
-  nsfw?: boolean;
+  content_warning?: string;
   mod_state?: ModState;
 }
 
@@ -347,6 +353,7 @@ interface Note {
   original_post_url: string;
   content_raw?: string;
   content_safe: string;
+  content_warning?: string;
   mod_state?: ModState;
 }
 

@@ -45,7 +45,7 @@ namespace Ludwig {
     optional<const Board*> board = {}
   ) -> PageListEntry {
     const auto page = txn.get_page(page_id);
-    const auto stats = txn.get_page_stats(page_id);
+    const auto stats = txn.get_post_stats(page_id);
     if (!page || !stats) {
       spdlog::error("Entry references nonexistent post {:x} (database is inconsistent!)", page_id);
       throw ControllerError("Database error", 500);
@@ -82,7 +82,7 @@ namespace Ludwig {
     DBIter<uint64_t> iter_by_new,
     int64_t max_possible_karma,
     bool active,
-    bool skip_nsfw,
+    bool skip_cw,
     uint64_t viewer_user,
     optional<const Board*> board = {}
   ) -> std::set<PageListEntry, decltype(page_rank_cmp)*> {
@@ -92,8 +92,8 @@ namespace Ludwig {
     for (auto page_id : iter_by_new) {
       try {
         auto entry = get_page_entry(txn, page_id, viewer_user, {}, board);
-        if (skip_nsfw && entry.page->nsfw()) continue;
-        const auto timestamp = active ? entry.stats->newest_comment_time() : entry.page->created_at();
+        if (skip_cw && entry.page->content_warning()) continue;
+        const auto timestamp = active ? entry.stats->latest_comment() : entry.page->created_at();
         const auto denominator = rank_denominator(timestamp < now ? now - timestamp : 0);
         if (sorted_pages.size() >= ITEMS_PER_PAGE) {
           const double max_possible_rank = max_possible_numerator / denominator;
@@ -117,7 +117,7 @@ namespace Ludwig {
     optional<const Page*> page = {}
   ) -> NoteListEntry {
       const auto note = txn.get_note(note_id);
-      const auto stats = txn.get_note_stats(note_id);
+      const auto stats = txn.get_post_stats(note_id);
       if (!note || !stats) {
         spdlog::error("Entry references nonexistent comment {:x} (database is inconsistent!)", note_id);
         throw ControllerError("Database error", 500);
@@ -154,7 +154,7 @@ namespace Ludwig {
     DBIter<uint64_t> iter_by_new,
     int64_t max_possible_karma,
     // TODO: Support Active
-    bool skip_nsfw,
+    bool skip_cw,
     uint64_t viewer_user,
     optional<const Page*> page = {}
   ) -> std::set<NoteListEntry, decltype(note_rank_cmp)*> {
@@ -164,7 +164,7 @@ namespace Ludwig {
     for (auto note_id : iter_by_new) {
       try {
         auto entry = get_note_entry(txn, note_id, viewer_user, {}, page);
-        if (skip_nsfw && entry.page->nsfw()) continue;
+        if (skip_cw && entry.page->content_warning()) continue;
         const auto timestamp = entry.note->created_at();
         const auto denominator = rank_denominator(timestamp < now ? now - timestamp : 0);
         if (sorted_notes.size() >= ITEMS_PER_PAGE) {
@@ -182,19 +182,10 @@ namespace Ludwig {
     return sorted_notes;
   }
 
-  static inline auto expect_page_stats(ReadTxn& txn, uint64_t page_id) -> const PageStats* {
-    const auto stats = txn.get_page_stats(page_id);
+  static inline auto expect_post_stats(ReadTxn& txn, uint64_t post_id) -> const PostStats* {
+    const auto stats = txn.get_post_stats(post_id);
     if (!stats) {
-      spdlog::error("Post {:x} has no corresponding page_stats (database is inconsistent!)", page_id);
-      throw ControllerError("Database error");
-    }
-    return *stats;
-  }
-
-  static inline auto expect_note_stats(ReadTxn& txn, uint64_t note_id) -> const NoteStats* {
-    const auto stats = txn.get_note_stats(note_id);
-    if (!stats) {
-      spdlog::error("Comment {:x} has no corresponding note_stats (database is inconsistent!)", note_id);
+      spdlog::error("Post {:x} has no corresponding post_stats (database is inconsistent!)", post_id);
       throw ControllerError("Database error");
     }
     return *stats;
@@ -253,9 +244,9 @@ namespace Ludwig {
   }
   auto Controller::page_detail(ReadTxn& txn, uint64_t id) -> PageDetailResponse {
     auto page = txn.get_page(id);
-    auto page_stats = txn.get_page_stats(id);
-    if (!page || !page_stats) throw ControllerError("Post not found", 404);
-    return { id, *page, *page_stats };
+    auto stats = txn.get_post_stats(id);
+    if (!page || !stats) throw ControllerError("Post not found", 404);
+    return { id, *page, *stats };
   }
   auto Controller::user_detail(ReadTxn& txn, uint64_t id) -> UserDetailResponse {
     auto user = txn.get_user(id);
@@ -311,7 +302,7 @@ namespace Ludwig {
     ReadTxn& txn,
     uint64_t board_id,
     SortType sort,
-    bool skip_nsfw,
+    bool skip_cw,
     uint64_t viewer_user,
     optional<uint64_t> from_id
   ) -> ListPagesResponse {
@@ -325,11 +316,8 @@ namespace Ludwig {
       case SortType::New: {
         auto iter = txn.list_pages_of_board_new(board_id, cursor);
         for (uint64_t page_id : iter) {
-          if (skip_nsfw) {
-            const auto page = txn.get_page(page_id);
-            if (page && (*page)->nsfw()) continue;
-          }
           out.page[out.size] = get_page_entry(txn, page_id, viewer_user, {}, board);
+          if (skip_cw && out.page[out.size].page->content_warning()) continue;
           if (++out.size >= ITEMS_PER_PAGE) break;
         }
         if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
@@ -380,7 +368,7 @@ namespace Ludwig {
         }
         for (uint64_t page_id : iter) {
           const auto page = txn.get_page(page_id);
-          if (page && ((*page)->created_at() < earliest || (skip_nsfw && (*page)->nsfw()))) {
+          if (page && ((*page)->created_at() < earliest || (skip_cw && (*page)->content_warning()))) {
             continue;
           }
           out.page[out.size] = get_page_entry(txn, page_id, viewer_user, {}, board);
@@ -394,7 +382,7 @@ namespace Ludwig {
         {
           auto iter = txn.list_pages_of_board_top(board_id);
           if (iter.is_done()) break;
-          highest_karma = expect_page_stats(txn, *iter)->karma();
+          highest_karma = expect_post_stats(txn, *iter)->karma();
         }
         for (auto entry : page_of_ranked_pages(
               txn,
@@ -402,7 +390,7 @@ namespace Ludwig {
               highest_karma,
               viewer_user,
               false,
-              skip_nsfw,
+              skip_cw,
               board
             )) {
           out.page[out.size] = entry;
@@ -428,7 +416,7 @@ namespace Ludwig {
     ReadTxn& txn,
     uint64_t board_id,
     SortType sort,
-    bool skip_nsfw,
+    bool skip_cw,
     uint64_t viewer_user,
     optional<uint64_t> from_id
   ) -> ListNotesResponse {
@@ -443,7 +431,7 @@ namespace Ludwig {
         auto iter = txn.list_notes_of_board_new(board_id, cursor);
         for (uint64_t note_id : iter) {
           out.page[out.size] = get_note_entry(txn, note_id, viewer_user);
-          if (skip_nsfw && out.page[out.size].page->nsfw()) continue;
+          if (skip_cw && out.page[out.size].page->content_warning()) continue;
           if (++out.size >= ITEMS_PER_PAGE) break;
         }
         if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
@@ -496,7 +484,7 @@ namespace Ludwig {
           const auto note = txn.get_note(note_id);
           if (note && (*note)->created_at() < earliest) continue;
           out.page[out.size] = get_note_entry(txn, note_id, viewer_user);
-          if (skip_nsfw && out.page[out.size].page->nsfw()) continue;
+          if (skip_cw && out.page[out.size].page->content_warning()) continue;
           if (++out.size >= ITEMS_PER_PAGE) break;
         }
         if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
@@ -507,14 +495,14 @@ namespace Ludwig {
         {
           auto iter = txn.list_notes_of_board_top(board_id);
           if (iter.is_done()) break;
-          highest_karma = expect_note_stats(txn, *iter)->karma();
+          highest_karma = expect_post_stats(txn, *iter)->karma();
         }
         for (auto entry : page_of_ranked_notes(
               txn,
               txn.list_notes_of_board_new(board_id, cursor),
               highest_karma,
               viewer_user,
-              skip_nsfw
+              skip_cw
             )) {
           out.page[out.size] = entry;
           if (++out.size >= ITEMS_PER_PAGE) break;
@@ -553,7 +541,7 @@ namespace Ludwig {
       {
         auto iter = txn.list_notes_of_post_top(parent_id);
         if (iter.is_done()) return out;
-        highest_karma = expect_page_stats(txn, *iter)->karma();
+        highest_karma = expect_post_stats(txn, *iter)->karma();
       }
       for (auto entry : page_of_ranked_notes(txn, std::move(iter), highest_karma, false, viewer_user)) {
         out.page[out.size] = entry;
@@ -580,7 +568,7 @@ namespace Ludwig {
     ReadTxn& txn,
     uint64_t user_id,
     UserPostSortType sort,
-    bool skip_nsfw,
+    bool skip_cw,
     uint64_t viewer_user,
     optional<uint64_t> from_id
   ) -> ListPagesResponse {
@@ -596,7 +584,7 @@ namespace Ludwig {
       : txn.list_pages_of_user_new(user_id, cursor);
     for (uint64_t page_id : iter) {
       out.page[out.size] = get_page_entry(txn, page_id, viewer_user, user);
-      if (skip_nsfw && out.page[out.size].page->nsfw()) continue;
+      if (skip_cw && out.page[out.size].page->content_warning()) continue;
       if (++out.size >= ITEMS_PER_PAGE) break;
     }
     if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
@@ -606,7 +594,7 @@ namespace Ludwig {
     ReadTxn& txn,
     uint64_t user_id,
     UserPostSortType sort,
-    bool skip_nsfw,
+    bool skip_cw,
     uint64_t viewer_user,
     optional<uint64_t> from_id
   ) -> ListNotesResponse {
@@ -618,7 +606,7 @@ namespace Ludwig {
       : txn.list_notes_of_user_new(user_id, cursor);
     for (uint64_t note_id : iter) {
       out.page[out.size] = get_note_entry(txn, note_id, viewer_user);
-      if (skip_nsfw && out.page[out.size].page->nsfw()) continue;
+      if (skip_cw && out.page[out.size].page->content_warning()) continue;
       if (++out.size >= ITEMS_PER_PAGE) break;
     }
     if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
@@ -670,8 +658,8 @@ namespace Ludwig {
   auto Controller::create_local_board(
     uint64_t owner,
     const char* name,
-    std::optional<const char*> display_name,
-    bool is_nsfw,
+    optional<const char*> display_name,
+    optional<const char*> content_warning,
     bool is_private,
     bool is_restricted_posting,
     bool is_local_only
@@ -685,9 +673,6 @@ namespace Ludwig {
     auto txn = db->open_write_txn();
     if (txn.get_board_id(name)) {
       throw ControllerError("A board with this name already exists on this instance", 409);
-    }
-    if (is_nsfw && !txn.get_setting_int(SettingsKey::nsfw_allowed)) {
-      throw ControllerError("This instance does not allow NSFW content", 400);
     }
     if (!txn.get_local_user(owner)) {
       throw ControllerError("Board owner is not a user on this instance", 400);
@@ -706,7 +691,7 @@ namespace Ludwig {
       nullptr,
       nullptr,
       nullptr,
-      is_nsfw,
+      content_warning.value_or(nullptr),
       is_restricted_posting
     ));
     const auto board_id = txn.create_board(fbb);
@@ -720,9 +705,9 @@ namespace Ludwig {
     uint64_t author,
     uint64_t board,
     const char* title,
-    std::optional<const char*> submission_url,
-    std::optional<const char*> text_content_markdown,
-    bool is_nsfw
+    optional<const char*> submission_url,
+    optional<const char*> text_content_markdown,
+    optional<const char*> content_warning
   ) -> uint64_t {
     if (submission_url) {
       auto len = strlen(*submission_url);
@@ -759,9 +744,6 @@ namespace Ludwig {
       if (!txn.get_board(board)) {
         throw ControllerError("Board does not exist", 400);
       }
-      if (is_nsfw && !txn.get_setting_int(SettingsKey::nsfw_allowed)) {
-        throw ControllerError("This instance does not allow NSFW content", 400);
-      }
       // TODO: Check if user is banned
       flatbuffers::FlatBufferBuilder fbb;
       fbb.Finish(CreatePageDirect(fbb,
@@ -776,7 +758,7 @@ namespace Ludwig {
         submission_url.value_or(nullptr),
         text_content_markdown.value_or(nullptr),
         text_content_markdown.value_or(nullptr),
-        is_nsfw
+        content_warning.value_or(nullptr)
       ));
       page_id = txn.create_page(fbb);
       txn.set_vote(author, page_id, Upvote);

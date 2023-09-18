@@ -364,6 +364,7 @@ a:hover.page-title-link, .page-info a:hover, .note-info a:hover, .controls a:hov
   color: var(--color-fg-dim);
   font-size: 0.8rem;
   min-width: 0;
+  margin: 0.25rem 0;
 }
 
 .note-info {
@@ -390,13 +391,28 @@ a:hover.page-title-link, .page-info a:hover, .note-info a:hover, .controls a:hov
   margin-right: 0.25rem;
 }
 
-.nsfw-tag {
+.content-warning {
+  margin: 0 0 0.25rem;
+}
+
+.content-warning-label {
   display: inline-block;
+  background-color: gold;
+  color: black;
   padding: 0.125rem 0.25rem;
-  color: red;
-  border: 1px solid red;
-  border-radius: 0.125rem;
-  text-decoration: none;
+  font-weight: bold;
+}
+
+.board-title .content-warning-label {
+  font-size: 1rem;
+}
+
+.content-warning .content-warning-label {
+  margin-right: 0.0125rem;
+}
+
+abbr.content-warning-label {
+  cursor: help;
 }
 
 .note-content {
@@ -410,6 +426,7 @@ a:hover.page-title-link, .page-info a:hover, .note-info a:hover, .controls a:hov
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
+  padding-top: 0.5rem;
 }
 
 .karma {
@@ -423,11 +440,16 @@ a:hover.page-title-link, .page-info a:hover, .note-info a:hover, .controls a:hov
 }
 
 .upvote, .downvote {
+  display: flex;
   width: 100%;
-  height: 1em;
+  height: 1rem;
   margin: 0;
   margin-top: 0.25rem;
+  align-items: center;
   justify-content: center;
+}
+
+label.upvote, label.downvote {
   cursor: pointer;
 }
 

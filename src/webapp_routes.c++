@@ -245,10 +245,9 @@ namespace Ludwig {
       }
     }
 
-    static inline auto nsfw_allowed(const SiteDetail* site, const optional<LocalUserDetailResponse>& logged_in_user) -> bool {
-      if (!site->nsfw_allowed) return false;
-      if (!logged_in_user) return true;
-      return logged_in_user->local_user->show_nsfw();
+    static inline auto hide_cw_posts(const optional<LocalUserDetailResponse>& logged_in_user) -> bool {
+      if (!logged_in_user) return false;
+      return logged_in_user->local_user->hide_cw_posts();
     }
 
     static auto write_sidebar(
@@ -260,18 +259,18 @@ namespace Ludwig {
       rsp << R"(<aside id="sidebar"><section id="search-section"><h2>Search</h2>)"
         R"(<form action="/search" id="search-form">)"
         R"(<label for="search"><span class="a11y">Search</span><input type="search" name="search" id="search" placeholder="Search"><input type="submit" value="Search"></label>)";
-      const auto nsfw = nsfw_allowed(site, logged_in_user);
+      const auto hide_cw = hide_cw_posts(logged_in_user);
       const auto board_name = Escape{board ? board->board->display_name() ? board->board->display_name()->string_view() : board->board->name()->string_view() : ""};
       if (board) rsp << R"(<input type="hidden" name="board" value=")" << board->id << R"(">)";
-      if (nsfw || board) {
+      if (!hide_cw || board) {
         rsp << R"(<details id="search-options"><summary>Search Options</summary><fieldset>)";
         if (board) {
           rsp << R"(<label for="only_board"><input type="checkbox" name="only_board" id="only_board" checked> Limit my search to )"
             << board_name
             << "</label>";
         }
-        if (nsfw) {
-          rsp << R"(<label for="include_nsfw"><input type="checkbox" name="include_nsfw" id="include_nsfw" checked> Include NSFW results</label>)";
+        if (!hide_cw) {
+          rsp << R"(<label for="include_cw"><input type="checkbox" name="include_cw" id="include_cw" checked> Include results with Content Warnings</label>)";
         }
         rsp << "</fieldset></details>";
       }
@@ -387,6 +386,10 @@ namespace Ludwig {
         }
       }
       rsp << "</a>";
+      if (board->content_warning()) {
+        rsp << R"( <abbr class="content-warning-label" title="Content Warning: )" <<
+          Escape{board->content_warning()->string_view()} << R"(">CW</abbr>)";
+      }
     }
 
     static auto write_board_list(
@@ -409,7 +412,7 @@ namespace Ludwig {
       SortFormType type,
       bool show_posts = true,
       bool show_images = true,
-      bool show_nsfw = true
+      bool show_cws = true
     ) noexcept -> void {
       rsp << R"(<details class="sort-options"><summary>Sort and Filter ()" << sort_name
         << R"()</summary><form class="sort-form" method="get">)";
@@ -444,10 +447,10 @@ namespace Ludwig {
         rsp << R"(<option value="Top")" << (sort_name == "Top" ? " selected" : "") << ">Top</option>";
       }
       rsp << R"(</select></label><label for="si"><input name="si" type="checkbox" value="1")"
-        << (show_images ? " checked" : "") << R"(> Show Images</label>)";
+        << (show_images ? " checked" : "") << R"(> Show images</label>)";
       if (type != SortFormType::Comments) {
         rsp << R"(<label for="sn"><input name="sn" type="checkbox" value="1")"
-          << (show_nsfw ? " checked" : "") << R"(> Show NSFW</label>)";
+          << (show_cws ? " checked" : "") << R"(> Show posts with Content Warnings</label>)";
       }
       rsp << R"(<input type="submit" value="Apply"></form></details>)";
     }
@@ -456,21 +459,30 @@ namespace Ludwig {
       Response& rsp,
       uint64_t post_id,
       int64_t karma,
+      bool logged_in,
       Vote your_vote
     ) noexcept -> void {
       const auto id = hexstring(post_id);
-      rsp << R"(<form class="vote-buttons" id="votes-)" << id
-        << R"(" method="post" action="/do/vote"><input type="hidden" name="post" value=")" << id
-        << R"("><output class="karma" id="karma-)" << id << R"(">)" << karma
-        << R"(</output><label class="upvote"></span><button type="submit" name="vote")"
-        << (your_vote == Upvote ? R"( class="voted")" : "")
-        << R"( value="1"><span class="a11y">Upvote</span></button></label><label class="downvote"><button type="submit" name="vote")"
-        << (your_vote == Downvote ? R"( class="voted")" : "") << R"( value="-1"><span class="a11y">Downvote</span></button></label></form>)";
+      if (logged_in) {
+        rsp << R"(<form class="vote-buttons" id="votes-)" << id
+          << R"(" method="post" action="/do/vote"><input type="hidden" name="post" value=")" << id
+          << R"("><output class="karma" id="karma-)" << id << R"(">)" << karma
+          << R"(</output><label class="upvote"><button type="submit" name="vote")"
+          << (your_vote == Upvote ? R"( class="voted")" : "")
+          << R"( value="1"><span class="a11y">Upvote</span></button></label><label class="downvote"><button type="submit" name="vote")"
+          << (your_vote == Downvote ? R"( class="voted")" : "") << R"( value="-1"><span class="a11y">Downvote</span></button></label></form>)";
+      } else {
+        rsp << R"(<div class="vote-buttons" id="votes-)" << id
+          << R"("><output class="karma" id="karma-)" << id << R"(">)" << karma
+          << R"(</output><div class="upvote"><button type="button" disabled><span class="a11y">Upvote</span></button></div>)"
+          << R"(<div class="downvote"><button type="button" disabled><span class="a11y">Downvote</span></button></div></div>)";
+      }
     }
 
     static auto write_page_list(
       Response& rsp,
       const ListPagesResponse& list,
+      bool logged_in,
       bool show_images = true
     ) noexcept -> void {
       rsp << R"(<ol class="page-list">)";
@@ -488,17 +500,18 @@ namespace Ludwig {
         // TODO: page-source (link URL)
         // TODO: thumbnail
         rsp << R"(<div class="thumbnail"><svg class="icon"><use href="/static/feather-sprite.svg#)"
-          << (page->page->nsfw() ? "alert-octagon" : (page->page->content_url() ? "link" : "file-text"))
+          << (page->page->content_warning() ? "alert-octagon" : (page->page->content_url() ? "link" : "file-text"))
           << R"("></svg></div><div class="page-info">)";
-        if (page->page->nsfw()) {
-          rsp << R"(<abbr title="Not Safe For Work" class="nsfw-tag">NSFW</abbr> )";
+        if (page->page->content_warning()) {
+          rsp << R"(<p class="content-warning"><strong class="content-warning-label">Content Warning<span class="a11y">:</span></strong> )"
+            << Escape{page->page->content_warning()->string_view()} << "</p>";
         }
         rsp << R"(submitted )" << Escape{relative_time(page->page->created_at())} << " by ";
         write_user_link(rsp, page->author);
         rsp << " to ";
         write_board_link(rsp, page->board);
         rsp << "</div>";
-        write_vote_buttons(rsp, page->id, page->stats->karma(), page->your_vote);
+        write_vote_buttons(rsp, page->id, page->stats->karma(), logged_in, page->your_vote);
         rsp << R"(<div class="controls"><a id="comment-link-)" << id
           << R"(" href="/post/)" << id << R"(#comments">)" << page->stats->descendant_count()
           << (page->stats->descendant_count() == 1 ? " comment" : " comments")
@@ -513,7 +526,8 @@ namespace Ludwig {
 
     static auto write_note_list(
       Response& rsp,
-      const ListNotesResponse& list
+      const ListNotesResponse& list,
+      bool logged_in
     ) noexcept -> void {
       rsp << R"(<ol class="note-list">)";
       for (size_t i = 0; i < list.size; i++) {
@@ -525,8 +539,13 @@ namespace Ludwig {
         rsp << " commented " << Escape{relative_time(note->note->created_at())}
           << R"( on <a href="/post/)" << hexstring(note->note->page())
           << R"(">)" << Escape{note->page->title()->string_view()}
-          << R"(</a></h2><div class="note-content">)" << note->note->content_safe()->string_view() << "</div>";
-        write_vote_buttons(rsp, note->id, note->stats->karma(), note->your_vote);
+          << "</a>";
+        if (note->page->content_warning()) {
+          rsp << R"( <abbr class="content-warning-label" title="Content Warning: )" <<
+            Escape{note->page->content_warning()->string_view()} << R"(">CW</abbr>)";
+        }
+        rsp << R"(</h2><div class="note-content">)" << note->note->content_safe()->string_view() << "</div>";
+        write_vote_buttons(rsp, note->id, note->stats->karma(), logged_in, note->your_vote);
         rsp << R"(<div class="controls"><a id="comment-link-)" << id
           << R"(" href="/comment/)" << id << R"(#replies">)" << note->stats->child_count()
           << (note->stats->child_count() == 1 ? " reply" : " replies")
@@ -586,7 +605,7 @@ namespace Ludwig {
         ListPagesResponse pages;
         ListNotesResponse notes;
         std::string_view sort_str;
-        bool show_posts, show_images, show_nsfw;
+        bool show_posts, show_images, show_cws;
         page([&](Request& req) {
           const auto name = req.getParameter(0);
           const auto board_id = txn.get_board_id(name);
@@ -596,24 +615,24 @@ namespace Ludwig {
           sort_str = req.getQuery("sort");
           const auto sort = Controller::parse_sort_type(sort_str);
           const auto from = Controller::parse_hex_id(std::string(req.getQuery("from")));
-          show_images = req.getQuery("si") == "1" || sort_str.empty();
-          show_nsfw = req.getQuery("sn") == "1" || sort_str.empty();
+          show_images = req.getQuery("images") == "1" || sort_str.empty();
+          show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           site = self->controller->site_detail();
           login = self->get_logged_in_user(txn, req);
           board = self->controller->board_detail(txn, *board_id);
           if (show_posts) {
-            pages = self->controller->list_board_pages(txn, *board_id, sort, login ? (*login).id : 0, !show_nsfw, from);
+            pages = self->controller->list_board_pages(txn, *board_id, sort, login ? (*login).id : 0, !show_cws, from);
           } else {
-            notes = self->controller->list_board_notes(txn, *board_id, sort, login ? (*login).id : 0, !show_nsfw, from);
+            notes = self->controller->list_board_notes(txn, *board_id, sort, login ? (*login).id : 0, !show_cws, from);
           }
         }, [&](auto& rsp) {
           write_html_header(rsp, site, login, {"/b/" + board.board->name()->str()}, {board.board->name()->string_view()});
           rsp << "<div>";
           write_sidebar(rsp, site, login, {board});
           rsp << "<main>";
-          write_sort_options(rsp, sort_str.empty() ? "Hot" : sort_str, SortFormType::Board, show_posts, show_images, show_nsfw);
-          if (show_posts) write_page_list(rsp, pages, show_images);
-          else write_note_list(rsp, notes);
+          write_sort_options(rsp, sort_str.empty() ? "Hot" : sort_str, SortFormType::Board, show_posts, show_images, show_cws);
+          if (show_posts) write_page_list(rsp, pages, !!login, show_images);
+          else write_note_list(rsp, notes, !!login);
           rsp << "</main></div>";
           rsp.end(HTML_FOOTER);
         });
@@ -626,7 +645,7 @@ namespace Ludwig {
         ListPagesResponse pages;
         ListNotesResponse notes;
         std::string_view sort_str;
-        bool show_posts, show_images, show_nsfw;
+        bool show_posts, show_images, show_cws;
         page([&](Request& req) {
           const auto name = req.getParameter(0);
           const auto user_id = txn.get_user_id(name);
@@ -636,24 +655,24 @@ namespace Ludwig {
           sort_str = req.getQuery("sort");
           const auto sort = Controller::parse_user_post_sort_type(sort_str);
           const auto from = Controller::parse_hex_id(std::string(req.getQuery("from")));
-          show_images = req.getQuery("si") == "1" || sort_str.empty();
-          show_nsfw = req.getQuery("sn") == "1" || sort_str.empty();
+          show_images = req.getQuery("images") == "1" || sort_str.empty();
+          show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           site = self->controller->site_detail();
           login = self->get_logged_in_user(txn, req);
           user = self->controller->user_detail(txn, *user_id);
           if (show_posts) {
-            pages = self->controller->list_user_pages(txn, *user_id, sort, login ? (*login).id : 0, !show_nsfw, from);
+            pages = self->controller->list_user_pages(txn, *user_id, sort, login ? (*login).id : 0, !show_cws, from);
           } else {
-            notes = self->controller->list_user_notes(txn, *user_id, sort, login ? (*login).id : 0, !show_nsfw, from);
+            notes = self->controller->list_user_notes(txn, *user_id, sort, login ? (*login).id : 0, !show_cws, from);
           }
         }, [&](auto& rsp) {
           write_html_header(rsp, site, login, {"/u/" + user.user->name()->str()}, {user.user->name()->string_view()});
           rsp << "<div>";
           write_sidebar(rsp, site, login);
           rsp << "<main>";
-          write_sort_options(rsp, sort_str.empty() ? "New" : sort_str, SortFormType::User, show_posts, show_images, show_nsfw);
-          if (show_posts) write_page_list(rsp, pages, show_images);
-          else write_note_list(rsp, notes);
+          write_sort_options(rsp, sort_str.empty() ? "New" : sort_str, SortFormType::User, show_posts, show_images, show_cws);
+          if (show_posts) write_page_list(rsp, pages, !!login, show_images);
+          else write_note_list(rsp, notes, !!login);
           rsp << "</main></div>";
           rsp.end(HTML_FOOTER);
         });

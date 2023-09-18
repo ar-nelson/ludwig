@@ -2,6 +2,13 @@ namespace Ludwig;
 
 enum ModState : ubyte { Visible, Flagged, Locked, Hidden, Removed }
 
+table Session {
+  user: uint64;
+  ip: string;
+  created_at: uint64;
+  expires_at: uint64;
+}
+
 table User {
   name: string (required);
   display_name: string;
@@ -45,7 +52,9 @@ table LocalUser {
   show_avatars: bool = true;
   show_bot_accounts: bool = true;
   show_new_post_notifs: bool = true;
-  show_nsfw: bool = false;
+  hide_cw_posts: bool = false;
+  expand_cw_posts: bool = false;
+  expand_cw_images: bool = false;
   show_read_posts: bool = true;
   show_karma: bool = true;
   interface_language: string;
@@ -66,7 +75,7 @@ table Board {
   description_safe: string;
   icon_url: string;
   banner_url: string;
-  nsfw: bool = false;
+  content_warning: string;
   restricted_posting: bool = false;
   can_upvote: bool = true;
   can_downvote: bool = true;
@@ -102,14 +111,21 @@ table Page {
   content_url: string;
   content_text_raw: string;
   content_text_safe: string;
-  nsfw: bool = false;
+  content_warning: string;
   mod_state: ModState = Visible;
+  has_card: bool = false;
+  fetch_tries: uint64 = 0;
+  last_fetch_at: uint64 = null;
+  card_title: string;
+  card_description: string;
+  card_image_url: string;
 }
 
-table PageStats {
-  newest_comment_time: uint64 = 0;
-  newest_comment_time_necro: uint64 = 0;
+table PostStats {
+  latest_comment: uint64 = 0;
+  latest_comment_necro: uint64 = 0;
   descendant_count: uint64 = 0;
+  child_count: uint64 = 0;
   upvotes: uint64 = 0;
   downvotes: uint64 = 0;
   karma: int64 = 0;
@@ -126,14 +142,8 @@ table Note {
   original_post_url: string;
   content_raw: string;
   content_safe: string (required);
+  content_warning: string;
   mod_state: ModState = Visible;
-}
-
-table NoteStats {
-  child_count: uint64 = 0;
-  upvotes: uint64 = 0;
-  downvotes: uint64 = 0;
-  karma: int64 = 0;
 }
 
 enum MediaCategory : ubyte { Image, Audio, Video }
@@ -142,6 +152,7 @@ table Media {
   category: MediaCategory;
   mimetype: string;
   alt: string;
+  blurhash: string;
 }
 
 enum ModActionType : byte {

@@ -57,13 +57,12 @@ namespace Ludwig {
   struct SiteDetail {
     std::string name, domain, description;
     std::optional<std::string> icon_url, banner_url;
-    bool nsfw_allowed;
   };
 
   struct PageDetailResponse {
     uint64_t id;
     const Page* page;
-    const PageStats* stats;
+    const PostStats* stats;
   };
 
   struct UserDetailResponse {
@@ -107,7 +106,7 @@ namespace Ludwig {
     double rank;
     Vote your_vote;
     const Page* page;
-    const PageStats* stats;
+    const PostStats* stats;
     const User* author;
     const Board* board;
   };
@@ -117,7 +116,7 @@ namespace Ludwig {
     double rank;
     Vote your_vote;
     const Note* note;
-    const NoteStats* stats;
+    const PostStats* stats;
     const User* author;
     const Page* page;
   };
@@ -291,7 +290,7 @@ namespace Ludwig {
       ReadTxn& txn,
       uint64_t board_id,
       SortType sort = SortType::Hot,
-      bool skip_nsfw = false,
+      bool skip_cw = false,
       uint64_t viewer_user = 0,
       std::optional<uint64_t> from_id = {}
     ) -> ListPagesResponse;
@@ -299,7 +298,7 @@ namespace Ludwig {
       ReadTxn& txn,
       uint64_t board_id,
       SortType sort = SortType::Hot,
-      bool skip_nsfw = false,
+      bool skip_cw = false,
       uint64_t viewer_user = 0,
       std::optional<uint64_t> from_id = {}
     ) -> ListNotesResponse;
@@ -314,7 +313,7 @@ namespace Ludwig {
       ReadTxn& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
-      bool skip_nsfw = false,
+      bool skip_cw = false,
       uint64_t viewer_user = 0,
       std::optional<uint64_t> from_id = {}
     ) -> ListPagesResponse;
@@ -322,7 +321,7 @@ namespace Ludwig {
       ReadTxn& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
-      bool skip_nsfw = false,
+      bool skip_cw = false,
       uint64_t viewer_user = 0,
       std::optional<uint64_t> from_id = {}
     ) -> ListNotesResponse;
@@ -335,7 +334,7 @@ namespace Ludwig {
       uint64_t owner,
       const char* name,
       std::optional<const char*> display_name,
-      bool is_nsfw = false,
+      std::optional<const char*> content_warning,
       bool is_private = false,
       bool is_restricted_posting = false,
       bool is_local_only = false
@@ -346,7 +345,7 @@ namespace Ludwig {
       const char* title,
       std::optional<const char*> submission_url,
       std::optional<const char*> text_content_markdown,
-      bool is_nsfw
+      std::optional<const char*> content_warning
     ) -> uint64_t;
     auto create_local_note(
       uint64_t author,

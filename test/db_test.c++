@@ -446,7 +446,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       uint64_t board = boards[board_ix];
       int64_t last_karma = std::numeric_limits<int64_t>::max();
       for (auto page_id : txn.list_pages_of_board_top(board)) {
-        auto stats = *txn.get_page_stats(page_id);
+        auto stats = *txn.get_post_stats(page_id);
         REQUIRE(stats->karma() <= last_karma);
         REQUIRE(stats->karma() == (int64_t)stats->upvotes() - (int64_t)stats->downvotes());
         last_karma = stats->karma();
@@ -461,7 +461,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       }
       last_karma = std::numeric_limits<int64_t>::max();
       for (auto note_id : txn.list_notes_of_board_top(board)) {
-        auto stats = *txn.get_note_stats(note_id);
+        auto stats = *txn.get_post_stats(note_id);
         REQUIRE(stats->karma() <= last_karma);
         REQUIRE(stats->karma() == (int64_t)stats->upvotes() - (int64_t)stats->downvotes());
         last_karma = stats->karma();
@@ -502,7 +502,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       uint64_t board = boards[board_ix];
       int64_t last_karma = std::numeric_limits<int64_t>::max();
       for (auto page_id : txn.list_pages_of_board_top(board)) {
-        auto stats_opt = txn.get_page_stats(page_id);
+        auto stats_opt = txn.get_post_stats(page_id);
         REQUIRE(!!stats_opt);
         auto stats = *stats_opt;
         REQUIRE(stats->karma() <= last_karma);
@@ -523,7 +523,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       }
       last_karma = std::numeric_limits<int64_t>::max();
       for (auto note_id : txn.list_notes_of_board_top(board)) {
-        auto stats_opt = txn.get_note_stats(note_id);
+        auto stats_opt = txn.get_post_stats(note_id);
         REQUIRE(!!stats_opt);
         auto stats = *stats_opt;
         REQUIRE(stats->karma() <= last_karma);

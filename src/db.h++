@@ -43,7 +43,7 @@ namespace Ludwig {
       video_max_bytes {"video_max_bytes"},
       board_creation_admin_only {"board_creation_admin_only"},
       federation_enabled {"federation_enabled"},
-      nsfw_allowed {"nsfw_allowed"};
+      federate_cw_content {"federate_cw_content"};
   };
 
   class ReadTxnBase;
@@ -61,6 +61,7 @@ namespace Ludwig {
     size_t map_size;
     MDB_env* env;
     MDB_dbi dbis[128];
+    uint8_t session_counter;
     auto init_env(const char* filename, MDB_txn** txn) -> int;
   public:
     uint64_t seed;
@@ -93,6 +94,8 @@ namespace Ludwig {
     auto get_setting_str(std::string_view key) -> std::string_view;
     auto get_setting_int(std::string_view key) -> uint64_t;
 
+    auto validate_session(uint64_t session_id) -> std::optional<uint64_t>;
+
     auto get_user_id(std::string_view name) -> std::optional<uint64_t>;
     auto get_user(uint64_t id) -> std::optional<const User*>;
     auto get_user_stats(uint64_t id) -> std::optional<const UserStats*>;
@@ -114,14 +117,13 @@ namespace Ludwig {
     auto list_created_boards(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
 
     auto get_page(uint64_t id) -> std::optional<const Page*>;
-    auto get_page_stats(uint64_t id) -> std::optional<const PageStats*>;
+    auto get_post_stats(uint64_t id) -> std::optional<const PostStats*>;
     auto list_pages_of_board_new(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_pages_of_board_top(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_pages_of_user_new(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_pages_of_user_top(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
 
     auto get_note(uint64_t id) -> std::optional<const Note*>;
-    auto get_note_stats(uint64_t id) -> std::optional<const NoteStats*>;
     auto list_notes_of_post_new(uint64_t post_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_notes_of_post_top(uint64_t post_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_notes_of_board_new(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
@@ -156,12 +158,7 @@ namespace Ludwig {
   class WriteTxn : public ReadTxnBase {
   protected:
     bool committed = false;
-    auto delete_note_for_page(
-      uint64_t id,
-      uint64_t board_id,
-      std::optional<PageStats*> page_stats,
-      std::optional<BoardStats*> board_stats
-    ) -> bool;
+    auto delete_child_note(uint64_t id, uint64_t board_id) -> uint64_t;
 
     WriteTxn(DB& db): ReadTxnBase(db) {
       if (auto err = mdb_txn_begin(db.env, nullptr, 0, &txn)) {
@@ -177,8 +174,10 @@ namespace Ludwig {
     }
 
     auto next_id() -> uint64_t;
-    auto set_setting_str(std::string_view key, std::string_view value) -> void;
-    auto set_setting_int(std::string_view key, uint64_t value) -> void;
+    auto set_setting(std::string_view key, std::string_view value) -> void;
+    auto set_setting(std::string_view key, uint64_t value) -> void;
+
+    auto create_session(uint64_t user, uint64_t lifetime_seconds = 15 * 60) -> uint64_t;
 
     auto create_user(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
     auto set_user(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
@@ -197,7 +196,7 @@ namespace Ludwig {
 
     auto create_note(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
     auto set_note(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
-    auto delete_note(uint64_t id) -> bool;
+    auto delete_note(uint64_t id) -> uint64_t;
 
     auto set_vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;
 
