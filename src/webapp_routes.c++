@@ -1,68 +1,30 @@
 #include "webapp_routes.h++"
+#include <chrono>
+#include <iterator>
 #include <regex>
 #include <spdlog/fmt/fmt.h>
+#include <spdlog/fmt/chrono.h>
 #include "xxhash.h"
 #include "generated/default-theme.css.h"
 #include "generated/htmx.min.js.h"
 #include "generated/feather-sprite.svg.h"
+#include "webutil.h++"
 
-using std::optional, std::string, std::string_view;
+using std::optional, std::nullopt, std::string, std::string_view;
 
-#define COOKIE_NAME "ludwig_auth"
+#define COOKIE_NAME "ludwig_session"
 
 namespace Ludwig {
   static constexpr std::string_view
-    ESCAPED = "<>'\"&",
-    HTML_FOOTER = R"(<div class="spacer"></div> <footer>Powered by Ludwig</body></html>)",
-    LOGIN_FORM = R"(<main class="full-width"><form class="form-page">)"
-      R"(<label for="username"><span>Username or email</span><input type="text" name="username" id="username"></label>)"
-      R"(<label for="password"><span>Password</span><input type="password" name="password" id="password"></label>)"
-      R"(<input type="submit" value="Login">)"
-      R"(</form></main>)";
+    HTML_FOOTER = R"(<div class="spacer"></div> <footer>Powered by Ludwig</body></html>)";
   static const std::regex cookie_regex(
-    R"((^|;)\s*)" COOKIE_NAME R"(\s*=\s*([^;]+))",
+    R"((?:^|;)\s*)" COOKIE_NAME R"(\s*=\s*([^;]+))",
     std::regex_constants::ECMAScript
   );
 
   static inline auto hexstring(uint64_t n, bool padded = false) -> std::string {
-    std::string s;
-    if (padded) fmt::format_to(std::back_inserter(s), "{:016x}", n);
-    else fmt::format_to(std::back_inserter(s), "{:x}", n);
-    return s;
-  }
-
-  static inline auto http_status(uint16_t code) -> std::string {
-    switch (code) {
-      case 200: return "200 OK";
-      case 201: return "201 Created";
-      case 202: return "202 Accepted";
-      case 204: return "204 No Content";
-      case 301: return "301 Moved Permanently";
-      case 302: return "302 Found";
-      case 303: return "303 See Other";
-      case 304: return "304 Not Modified";
-      case 307: return "307 Temporary Redirect";
-      case 308: return "308 Permanent Redirect";
-      case 400: return "400 Bad Request";
-      case 401: return "401 Unauthorized";
-      case 403: return "403 Forbidden";
-      case 404: return "404 Not Found";
-      case 405: return "405 Method Not Allowed";
-      case 406: return "406 Not Acceptable";
-      case 408: return "408 Request Timeout";
-      case 409: return "409 Conflict";
-      case 410: return "410 Gone";
-      case 413: return "413 Payload Too Large";
-      case 415: return "413 Unsupported Media Type";
-      case 418: return "418 I'm a teapot";
-      case 422: return "422 Unprocessable Entity";
-      case 429: return "429 Too Many Requests";
-      case 451: return "451 Unavailable For Legal Reasons";
-      case 500: return "500 Internal Server Error";
-      case 501: return "501 Not Implemented";
-      case 503: return "503 Service Unavailable";
-      default: return std::to_string(code);
-    }
+    if (padded) return fmt::format("{:016x}", n);
+    else return fmt::format("{:x}", n);
   }
 
   enum class SortFormType {
@@ -71,58 +33,41 @@ namespace Ludwig {
     User
   };
 
-  struct Escape {
-    string_view str;
-  };
-
-  template <bool SSL> static inline auto operator<<(uWS::HttpResponse<SSL>& lhs, const std::string_view rhs) -> uWS::HttpResponse<SSL>& {
-    lhs.write(rhs);
-    return lhs;
+  static inline auto display_name(const User* user) -> string_view {
+    if (user->display_name()) return user->display_name()->string_view();
+    const auto name = user->name()->string_view();
+    return name.substr(0, name.find('@'));
   }
 
-  template <bool SSL> static inline auto operator<<(uWS::HttpResponse<SSL>& lhs, int64_t rhs) -> uWS::HttpResponse<SSL>& {
-    string s;
-    fmt::format_to(std::back_inserter(s), "{}", rhs);
-    lhs.write(s);
-    return lhs;
+  static inline auto display_name(const Board* board) -> string_view {
+    if (board->display_name()) return board->display_name()->string_view();
+    const auto name = board->name()->string_view();
+    return name.substr(0, name.find('@'));
   }
 
-  template <bool SSL> static inline auto operator<<(uWS::HttpResponse<SSL>& lhs, uint64_t rhs) -> uWS::HttpResponse<SSL>& {
-    string s;
-    fmt::format_to(std::back_inserter(s), "{}", rhs);
-    lhs.write(s);
-    return lhs;
-  }
-
-  template <typename T> static inline auto operator<<(T& lhs, Escape rhs) -> T& {
-    size_t start = 0;
-    for (
-      size_t i = rhs.str.find_first_of(ESCAPED);
-      i != std::string_view::npos;
-      start = i + 1, i = rhs.str.find_first_of(ESCAPED, start)
-    ) {
-      if (i > start) lhs << rhs.str.substr(start, i - start);
-      switch (rhs.str[i]) {
-        case '<':
-          lhs << "&lt;";
-          break;
-        case '>':
-          lhs << "&gt;";
-          break;
-        case '\'':
-          lhs << "&apos;";
-          break;
-        case '"':
-          lhs << "&quot;";
-          break;
-        case '&':
-          lhs << "&amp;";
-          break;
+  struct QueryString {
+    string_view query;
+    inline auto required_hex_id(string_view key) -> uint64_t {
+      try {
+        return std::stoull(std::string(uWS::getDecodedQueryValue(key, query)));
+      } catch (...) {
+        throw ControllerError(fmt::format("Invalid or missing '{}' parameter", key).c_str(), 400);
       }
     }
-    if (start < rhs.str.length()) lhs << rhs.str.substr(start);
-    return lhs;
-  }
+    inline auto required_string(string_view key) -> string_view {
+      auto s = uWS::getDecodedQueryValue(key, query);
+      if (s.empty()) ControllerError(fmt::format("Invalid or missing '{}' parameter", key).c_str(), 400);
+      return s;
+    }
+    inline auto optional_string(string_view key) -> optional<string_view> {
+      auto s = uWS::getDecodedQueryValue(key, query);
+      if (s.empty()) return {};
+      return s;
+    }
+    inline auto optional_bool(string_view key) -> bool {
+      return uWS::getDecodedQueryValue(key, query) == "1";
+    }
+  };
 
   template <bool SSL> struct Webapp : public std::enable_shared_from_this<Webapp<SSL>> {
     std::shared_ptr<Controller> controller;
@@ -154,77 +99,163 @@ namespace Ludwig {
       SafePage(Self self, Request& req, Response& rsp) : self(self), req(req), rsp(rsp) {}
 
       inline auto operator()(
-        std::function<void (Request&)> before,
-        std::function<void (Response&)> after
+        ReadTxnBase& txn,
+        std::function<void (Request&, const optional<LocalUserDetailResponse>&)> before,
+        std::function<void (Response&, const optional<LocalUserDetailResponse>&)> after
       ) -> void {
+        bool remove_cookie = false;
+        optional<LocalUserDetailResponse> logged_in_user;
         try {
-          before(req);
+          auto cookies = req.getHeader("cookie");
+          std::match_results<string_view::const_iterator> match;
+          if (std::regex_search(cookies.begin(), cookies.end(), match, cookie_regex)) {
+            try {
+              auto id = self->controller->validate_session(txn, std::stoull(match[1], nullptr, 16));
+              if (id) logged_in_user = self->controller->local_user_detail(txn, *id);
+            } catch (...) {}
+            if (!logged_in_user) remove_cookie = true;
+          }
+          before(req, logged_in_user);
         } catch (ControllerError e) {
           self->error_page(rsp, e);
           return;
-        } catch (std::exception e) {
-          spdlog::error("Unhandled exception in webapp route: {}", e.what());
-          self->error_page(rsp, ControllerError("Unhandled internal exception", 500));
-          return;
         } catch (...) {
-          spdlog::error("Unhandled exception in webapp route, no information available");
+          auto eptr = std::current_exception();
+          try {
+            std::rethrow_exception(eptr);
+          } catch (std::exception& e) {
+            spdlog::error("Unhandled exception in webapp route: {}", e.what());
+          } catch (...) {
+            spdlog::error("Unhandled exception in webapp route, no information available");
+          }
           self->error_page(rsp, ControllerError("Unhandled internal exception", 500));
           return;
         }
-        after(rsp);
+        if (remove_cookie) {
+          spdlog::debug("Auth cookie is invalid; requesting deletion");
+          rsp.writeHeader("Set-Cookie", COOKIE_NAME "=deleted; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT");
+        }
+        after(rsp, logged_in_user);
       }
     };
 
-    auto safe_page(std::function<void (Self, SafePage)> fn) {
+    inline auto safe_page(std::function<void (Self, SafePage)> fn) {
       return [self = this->shared_from_this(), fn](Response* rsp, Request* req) {
         fn(self, SafePage(self, *req, *rsp));
       };
     }
 
-    auto get_logged_in_user(ReadTxn& txn, Request& req) -> optional<LocalUserDetailResponse> {
-      auto cookies = req.getHeader("cookie");
-      std::match_results<string_view::const_iterator> match;
-      if (!std::regex_search(cookies.begin(), cookies.end(), match, cookie_regex)) return {};
-      try {
-        auto id = controller->get_auth_user({ match[1] });
-        return optional(controller->local_user_detail(txn, id));
-      } catch (...) {
-        //spdlog::debug("Auth cookie is invalid; requesting deletion");
-        //rsp->writeHeader("Set-Cookie", COOKIE_NAME "=deleted; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT");
-        return {};
+    inline auto action_page(std::function<void (Self, Request&, Response&, QueryString, uint64_t)> fn, bool require_login = true) {
+      return [self = this->shared_from_this(), fn, require_login](Response* rsp, Request* req) {
+        std::string buffer = "?";
+        rsp->onData([self, rsp, req, fn, require_login, buffer = std::move(buffer)](std::string_view data, bool last) mutable {
+          buffer.append(data.data(), data.length());
+          if (!last) return;
+          optional<ControllerError> err;
+          try {
+            optional<uint64_t> logged_in_user;
+            if (require_login) {
+              try {
+                auto txn = self->controller->open_read_txn();
+                auto cookies = req->getHeader("cookie");
+                std::match_results<string_view::const_iterator> match;
+                if (std::regex_search(cookies.begin(), cookies.end(), match, cookie_regex)) {
+                  logged_in_user = self->controller->validate_session(txn, std::stoull(match[1], nullptr, 16));
+                }
+              } catch (...) {}
+            }
+            if (logged_in_user || !require_login) {
+              fn(self, *req, *rsp, {string_view(buffer)}, logged_in_user.value_or(0));
+            } else if (req->getHeader("hx-request").empty()) {
+              rsp->writeStatus(http_status(303));
+              rsp->writeHeader("Location", "/login");
+              rsp->endWithoutBody({}, true);
+            } else {
+              throw ControllerError("Login is required", 401);
+            }
+            return;
+          } catch (ControllerError e) {
+            err = e;
+          } catch (...) {
+            auto eptr = std::current_exception();
+            try {
+              std::rethrow_exception(eptr);
+            } catch (std::exception& e) {
+              spdlog::error("Unhandled exception in webapp route: {}", e.what());
+            } catch (...) {
+              spdlog::error("Unhandled exception in webapp route, no information available");
+            }
+            err = ControllerError("Unhandled internal exception", 500);
+          }
+          rsp->cork([rsp, self, &err]() {
+            self->error_page(*rsp, *err);
+          });
+        });
+        rsp->onAborted([rsp](){
+          rsp->writeStatus(http_status(400));
+          rsp->endWithoutBody({}, true);
+        });
+      };
+    }
+
+    inline auto write_qualified_display_name(Response& rsp, const User* user) -> void {
+      const auto name = user->name()->string_view();
+      if (user->display_name()) {
+        rsp << user->display_name()->string_view();
+        const auto at_index = name.find('@');
+        if (at_index != string_view::npos) rsp << name.substr(at_index);
+      } else {
+        rsp << name;
       }
     }
+
+    inline auto write_qualified_display_name(Response& rsp, const Board* board) -> void {
+      const auto name = board->name()->string_view();
+      if (board->display_name()) {
+        rsp << board->display_name()->string_view();
+        const auto at_index = name.find('@');
+        if (at_index != string_view::npos) rsp << name.substr(at_index);
+      } else {
+        rsp << name;
+      }
+    }
+
+    struct HtmlHeaderOptions {
+      optional<string_view> canonical_path, banner_title, banner_link, banner_image, page_title, card_image;
+    };
 
     static auto write_html_header(
       Response& rsp,
       const SiteDetail* site,
       const optional<LocalUserDetailResponse>& logged_in_user,
-      optional<string_view> canonical_path = {},
-      optional<string_view> banner_title = {},
-      optional<string_view> page_title = {},
-      optional<string_view> card_image = {}
+      HtmlHeaderOptions opt
     ) noexcept -> void {
       rsp.writeHeader("Content-Type", "text/html; charset=utf-8");
-      rsp << R"(<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,shrink-to-fit=no"><title>)"
+      rsp << R"(<!doctype html><html lang="en"><head><meta charset="utf-8">)"
+        R"(<meta name="viewport" content="width=device-width,initial-scale=1,shrink-to-fit=no">)"
+        R"(<meta name="referrer" content="same-origin"><title>)"
         << Escape{site->name};
-      if (page_title) rsp << " - " << Escape{*page_title};
-      else if (banner_title) rsp << " - " << Escape{*banner_title};
+      if (opt.page_title) rsp << " - " << Escape{*opt.page_title};
+      else if (opt.banner_title) rsp << " - " << Escape{*opt.banner_title};
       rsp << R"(</title><link rel="stylesheet" href="/static/default-theme.css">)";
-      if (canonical_path) {
-        rsp << R"(<link rel="canonical" href=")" << Escape{site->domain} << Escape{*canonical_path} <<
-          R"("><meta property="og:url" content=")" << Escape{site->domain} << Escape{*canonical_path} <<
-          R"("><meta property="twitter:url" content=")" << Escape{site->domain} << Escape{*canonical_path} <<
+      if (opt.canonical_path) {
+        const auto canonical_path = *opt.canonical_path;
+        rsp << R"(<link rel="canonical" href=")" << Escape{site->domain} << Escape{canonical_path} <<
+          R"("><meta property="og:url" content=")" << Escape{site->domain} << Escape{canonical_path} <<
+          R"("><meta property="twitter:url" content=")" << Escape{site->domain} << Escape{canonical_path} <<
           R"(">)";
       }
-      if (page_title) {
-        rsp << R"(<meta property="title" href=")" << Escape{site->name} << " - " << Escape{*page_title} <<
-          R"("><meta property="og:title" content=")" << Escape{site->name} << " - " << Escape{*page_title} <<
-          R"("><meta property="twitter:title" content=")" << Escape{site->name} << " - " << Escape{*page_title} <<
+      if (opt.page_title) {
+        const auto page_title = *opt.page_title;
+        rsp << R"(<meta property="title" href=")" << Escape{site->name} << " - " << Escape{page_title} <<
+          R"("><meta property="og:title" content=")" << Escape{site->name} << " - " << Escape{page_title} <<
+          R"("><meta property="twitter:title" content=")" << Escape{site->name} << " - " << Escape{page_title} <<
           R"("><meta property="og:type" content="website">)";
       }
-      if (card_image) {
-        rsp << R"("<meta property="og:image" content=")" << Escape{*card_image} <<
-          R"("><meta property="twitter:image" content=")" << Escape{*card_image} <<
+      if (opt.card_image) {
+        const auto card_image = *opt.card_image;
+        rsp << R"(<meta property="og:image" content=")" << Escape{card_image} <<
+          R"("><meta property="twitter:image" content=")" << Escape{card_image} <<
           R"("><meta property="twitter:card" content="summary_large_image">)";
       }
       rsp << R"(</head><body><nav class="topbar"><div class="site-name">🎹 )"
@@ -240,8 +271,16 @@ namespace Ludwig {
         // TODO: Top local boards
         rsp << R"(<li><a href="/login">Login</a><li><a href="/register">Register</a></ul></nav>)";
       }
-      if (banner_title) {
-        rsp << R"(<header id="page-header"><h1>)" << Escape{*banner_title} << "</h1></header>";
+      if (opt.banner_title) {
+        rsp << R"(<header id="page-header")";
+        if (opt.banner_image) {
+          rsp << R"( class="banner-image" style="background-image:url(')" << Escape{*opt.banner_image} << R"(');")";
+        }
+        rsp << R"(><h1>)";
+        if (opt.banner_link) rsp << R"(<a class="page-header-link" href=")" << Escape{*opt.banner_link} << R"(">)";
+        rsp << Escape{*opt.banner_title};
+        if (opt.banner_link) rsp << "</a>";
+        rsp << "</h1></header>";
       }
     }
 
@@ -277,8 +316,10 @@ namespace Ludwig {
       rsp << "</form></section>";
       if (!logged_in_user) {
         rsp << R"(<section id="login-section"><h2>Login</h2>)"
-          R"(<form method="post" action="/do/login" id="login-form">)"
-          R"(<label for="username"><span class="a11y">Username or email</span><input type="text" name="username" id="username" placeholder="Username or email"></label>)"
+          R"(<form method="post" action="/login" id="login-form">)"
+          R"(<label for="username" class="a11y"><span>Don't type here unless you're a bot</span>)"
+          R"(<input type="text" name="username" id="username" tabindex="-1" autocomplete="off"></label>)"
+          R"(<label for="actual_username"><span class="a11y">Username or email</span><input type="text" name="actual_username" id="actual_username" placeholder="Username or email"></label>)"
           R"(<label for="password"><span class="a11y">Password</span><input type="password" name="password" id="password" placeholder="Password"></label>)"
           R"(<input type="submit" value="Login" class="big-button"></form>)"
           R"(<a href="/register" class="big-button">Register</a>)"
@@ -336,6 +377,11 @@ namespace Ludwig {
       if (diff < YEAR) return std::to_string(diff / MONTH) + " months ago";
       if (diff < YEAR * 2) return "1 year ago";
       return std::to_string(diff / YEAR) + " years ago";
+    }
+
+    static auto write_datetime(Response& rsp, uint64_t timestamp) noexcept -> void {
+      rsp << fmt::format(R"(<time datetime="{:%FT%TZ}" title="{:%D %r %Z}">{}</time>)",
+        fmt::gmtime((time_t)timestamp), fmt::localtime((time_t)timestamp), relative_time(timestamp));
     }
 
     static auto write_user_link(
@@ -446,10 +492,10 @@ namespace Ludwig {
       } else {
         rsp << R"(<option value="Top")" << (sort_name == "Top" ? " selected" : "") << ">Top</option>";
       }
-      rsp << R"(</select></label><label for="si"><input name="si" type="checkbox" value="1")"
+      rsp << R"(</select></label><label for="images"><input name="images" type="checkbox" value="1")"
         << (show_images ? " checked" : "") << R"(> Show images</label>)";
       if (type != SortFormType::Comments) {
-        rsp << R"(<label for="sn"><input name="sn" type="checkbox" value="1")"
+        rsp << R"(<label for="cws"><input name="cws" type="checkbox" value="1")"
           << (show_cws ? " checked" : "") << R"(> Show posts with Content Warnings</label>)";
       }
       rsp << R"(<input type="submit" value="Apply"></form></details>)";
@@ -483,6 +529,8 @@ namespace Ludwig {
       Response& rsp,
       const ListPagesResponse& list,
       bool logged_in,
+      bool show_user = true,
+      bool show_board = true,
       bool show_images = true
     ) noexcept -> void {
       rsp << R"(<ol class="page-list">)";
@@ -494,7 +542,7 @@ namespace Ludwig {
         if (page->page->content_url()) {
           rsp << Escape{page->page->content_url()->string_view()};
         } else {
-          rsp << "/post/" << id;
+          rsp << "/thread/" << id;
         }
         rsp << R"(">)" << Escape{page->page->title()->string_view()} << "</a></h2>";
         // TODO: page-source (link URL)
@@ -506,14 +554,20 @@ namespace Ludwig {
           rsp << R"(<p class="content-warning"><strong class="content-warning-label">Content Warning<span class="a11y">:</span></strong> )"
             << Escape{page->page->content_warning()->string_view()} << "</p>";
         }
-        rsp << R"(submitted )" << Escape{relative_time(page->page->created_at())} << " by ";
-        write_user_link(rsp, page->author);
-        rsp << " to ";
-        write_board_link(rsp, page->board);
+        rsp << "submitted ";
+        write_datetime(rsp, page->page->created_at());
+        if (show_user) {
+          rsp << " by ";
+          write_user_link(rsp, page->author);
+        }
+        if (show_board) {
+          rsp << " to ";
+          write_board_link(rsp, page->board);
+        }
         rsp << "</div>";
         write_vote_buttons(rsp, page->id, page->stats->karma(), logged_in, page->your_vote);
         rsp << R"(<div class="controls"><a id="comment-link-)" << id
-          << R"(" href="/post/)" << id << R"(#comments">)" << page->stats->descendant_count()
+          << R"(" href="/thread/)" << id << R"(#comments">)" << page->stats->descendant_count()
           << (page->stats->descendant_count() == 1 ? " comment" : " comments")
           << R"(</a><div class="controls-submenu-wrapper"><button type="button" class="controls-submenu-expand">More</button>)"
             R"(<form class="controls-submenu" method="post"><input type="hidden" name="post" value=")" << id
@@ -527,22 +581,29 @@ namespace Ludwig {
     static auto write_note_list(
       Response& rsp,
       const ListNotesResponse& list,
-      bool logged_in
+      bool logged_in,
+      bool show_user = true,
+      bool show_page = true
     ) noexcept -> void {
       rsp << R"(<ol class="note-list">)";
       for (size_t i = 0; i < list.size; i++) {
         const auto note = &list.page[i];
         const auto id = hexstring(note->id);
         rsp << R"(<li><article class="note" id="note-)" << id
-          << R"("><h2 class="note-info"><a href="/comment/)" << id << R"(">)";
-        write_user_link(rsp, note->author);
-        rsp << " commented " << Escape{relative_time(note->note->created_at())}
-          << R"( on <a href="/post/)" << hexstring(note->note->page())
-          << R"(">)" << Escape{note->page->title()->string_view()}
-          << "</a>";
-        if (note->page->content_warning()) {
-          rsp << R"( <abbr class="content-warning-label" title="Content Warning: )" <<
-            Escape{note->page->content_warning()->string_view()} << R"(">CW</abbr>)";
+          << R"("><h2 class="note-info">)";
+        if (show_user) {
+          write_user_link(rsp, note->author);
+          rsp << " ";
+        }
+        rsp << "commented ";
+        write_datetime(rsp, note->note->created_at());
+        if (show_page) {
+          rsp << R"( on <a href="/thread/)" << hexstring(note->note->page()) << R"(">)"
+            << Escape{note->page->title()->string_view()} << "</a>";
+          if (note->page->content_warning()) {
+            rsp << R"( <abbr class="content-warning-label" title="Content Warning: )" <<
+              Escape{note->page->content_warning()->string_view()} << R"(">CW</abbr>)";
+          }
         }
         rsp << R"(</h2><div class="note-content">)" << note->note->content_safe()->string_view() << "</div>";
         write_vote_buttons(rsp, note->id, note->stats->karma(), logged_in, note->your_vote);
@@ -556,6 +617,151 @@ namespace Ludwig {
           << R"(">Report</a></form></div></div></article>)";
       }
       rsp << "</ol>";
+    }
+
+    static auto write_comment_tree(
+      Response& rsp,
+      const CommentTree& comments,
+      uint64_t root,
+      bool logged_in,
+      bool is_page = true
+    ) noexcept -> void {
+      // TODO: Include existing query params
+      auto range = comments.notes.equal_range(root);
+      if (range.first == range.second) {
+        if (is_page) rsp << R"(<div class="no-comments">No comments</div>)";
+        return;
+      }
+      rsp << R"(<ol class="comment-list" id="comments-)" << hexstring(root) << R"(">)";
+      for (auto iter = range.first; iter != range.second; iter++) {
+        const auto note = &iter->second;
+        const auto id = hexstring(note->id);
+        rsp << R"(<li><article class="note-with-comments"><div class="note" id=")" << id
+          << R"("><h3 class="note-info">)";
+        write_user_link(rsp, note->author);
+        rsp << " commented ";
+        write_datetime(rsp, note->note->created_at());
+        rsp << R"(</h3><div class="note-content">)" << note->note->content_safe()->string_view() << "</div>";
+        write_vote_buttons(rsp, note->id, note->stats->karma(), logged_in, note->your_vote);
+        rsp << R"(<div class="controls">)";
+        if (logged_in && note->note->mod_state() < ModState::Locked) {
+          rsp << R"(<a href="/comment/)" << id << R"(#reply">Reply</a>)";
+        }
+        rsp << R"(<div class="controls-submenu-wrapper"><button type="button" class="controls-submenu-expand">More</button>)"
+            R"(<form class="controls-submenu" method="post"><input type="hidden" name="post" value=")" << id
+          << R"("><button type="submit" formaction="/do/save">Save</button>)"
+            R"(<button type="submit" formaction="/do/hide">Hide</button><a target="_blank" href="/report_post/)" << id
+          << R"(">Report</a></form></div></div></div>)";
+        const auto cont = comments.continued.find(note->id);
+        if (cont != comments.continued.end() && cont->second == 0) {
+          rsp << R"(<div class="comments-continued" id="continue-)" << id << R"("><a href="/comment/)" << id
+            << R"(">More comments…</a></div>)";
+        } else if (note->stats->child_count()) {
+          rsp << R"(<section class="comments" aria-title="Replies">)";
+          write_comment_tree(rsp, comments, note->id, logged_in, false);
+          rsp << "</section>";
+        }
+        rsp << "</article>";
+      }
+      const auto cont = comments.continued.find(root);
+      if (cont != comments.continued.end()) {
+        rsp << R"(<li><div class="comments-continued" id="continue-)" << root << R"("><a href="/)"
+          << (is_page ? "post" : "comment") << "/" << hexstring(root) << "?from=" << hexstring(cont->second)
+          << R"(">More comments…</a></div>)";
+      }
+      rsp << "</ol>";
+    }
+
+    static auto write_page_view(
+      Response& rsp,
+      const PageDetailResponse* page,
+      bool logged_in,
+      std::string_view sort_str = "",
+      bool show_images = false,
+      bool show_cws = false
+    ) noexcept -> void {
+      const auto id = hexstring(page->id);
+      rsp << R"(<article class="page-with-comments"><div class="page" id="page-)" << id <<
+        R"("><h2 class="page-title">)";
+      if (page->page->content_url()) {
+        rsp << R"(<a class="page-title-link" href=")" << Escape{page->page->content_url()->string_view()} << R"(">)";
+      }
+      rsp << Escape{page->page->title()->string_view()};
+      if (page->page->content_url()) rsp << "</a>";
+      rsp << "</h2>";
+      // TODO: page-source (link URL)
+      // TODO: thumbnail
+      rsp << R"(<div class="thumbnail"><svg class="icon"><use href="/static/feather-sprite.svg#)"
+        << (page->page->content_warning() ? "alert-octagon" : (page->page->content_url() ? "link" : "file-text"))
+        << R"("></svg></div><div class="page-info">)";
+      if (page->page->content_warning()) {
+        rsp << R"(<p class="content-warning"><strong class="content-warning-label">Content Warning<span class="a11y">:</span></strong> )"
+          << Escape{page->page->content_warning()->string_view()} << "</p>";
+      }
+      rsp << "submitted ";
+      write_datetime(rsp, page->page->created_at());
+      rsp << " by ";
+      write_user_link(rsp, page->author);
+      rsp << " to ";
+      write_board_link(rsp, page->board);
+      rsp << "</div>";
+      write_vote_buttons(rsp, page->id, page->stats->karma(), logged_in, page->your_vote);
+      rsp << R"(<div class="controls"><div class="controls-submenu-wrapper"><button type="button" class="controls-submenu-expand">More</button>)"
+          R"(<form class="controls-submenu" method="post"><input type="hidden" name="post" value=")" << id
+        << R"("><button type="submit" formaction="/do/save">Save</button>)"
+          R"(<button type="submit" formaction="/do/hide">Hide</button><a target="_blank" href="/report_post/)" << id
+        << R"(">Report</a></form></div></div></div>)";
+      if (page->page->content_text_safe()) {
+        rsp << R"(<div class="page-content">)" << page->page->content_text_safe()->string_view()
+          << "</div>";
+      }
+      rsp << R"(<section class="comments"><h2>)" << page->stats->descendant_count() << R"( comments</h2>)";
+      if (page->stats->descendant_count()) {
+        write_sort_options(rsp, sort_str.empty() ? "Hot" : sort_str, SortFormType::Comments, false, show_images, show_cws);
+        write_comment_tree(rsp, page->comments, page->id, logged_in);
+      }
+      rsp << "</section></article>";
+    }
+
+    static auto write_login_form(Response& rsp, optional<string_view> error = {}) noexcept -> void {
+      rsp << R"(<main><form class="form-page" method="post" action="/login">)";
+      if (error) {
+        rsp << R"(<p class="error-message">⚠️ )" << Escape{*error} << "</p>";
+      }
+      rsp << R"(<label for="username" class="a11y"><span>Don't type here unless you're a bot</span>)"
+        R"(<input type="text" name="username" id="username" tabindex="-1" autocomplete="off"></label>)"
+        R"(<label for="actual_username"><span>Username or email</span><input type="text" name="actual_username" id="actual_username"></label>)"
+        R"(<label for="password"><span>Password</span><input type="password" name="password" id="password"></label>)"
+        R"(<input type="submit" value="Login">)"
+        R"(</form></main>)";
+    }
+
+    static auto write_register_form(Response& rsp, optional<string_view> error = {}) noexcept -> void {
+      rsp << R"(<main><form class="form-page" method="post" action="/do/register">)";
+      if (error) {
+        rsp << R"(<p class="error-message">⚠️ )" << Escape{*error} << "</p>";
+      }
+      rsp << R"(<label for="username" class="a11y"><span>Don't type here unless you're a bot</span>)"
+        R"(<input type="text" name="username" id="username" tabindex="-1" autocomplete="off"></label>)"
+        R"(<label for="actual_username"><span>Username</span><input type="text" name="actual_username" id="actual_username"></label>)"
+        R"(<label for="email"><span>Email address</span><input type="email" name="email" id="email"></label>)"
+        R"(<label for="password"><span>Password</span><input type="password" name="password" id="password"></label>)"
+        R"(<label for="confirm_password"><span>Confirm password</span><input type="password" name="confirm_password" id="confirm_password"></label>)"
+        R"(<input type="submit" value="Register">)"
+        R"(</form></main>)";
+    }
+
+    static inline auto write_redirect_back(Request& req, Response& rsp) -> void {
+      const auto referer = req.getHeader("referer");
+      rsp.cork([&]() {
+        if (referer.empty()) {
+          rsp.writeStatus(http_status(202));
+        } else {
+          rsp.writeStatus(http_status(303));
+          rsp.writeHeader("Location", referer);
+        }
+        rsp.endWithoutBody({}, true);
+      });
     }
 
     auto serve_static(
@@ -578,17 +784,35 @@ namespace Ludwig {
     }
 
     auto register_routes(App& app) -> void {
+      // -----------------------------------------------------------------------
+      // STATIC FILES
+      // -----------------------------------------------------------------------
+      serve_static(app,
+        "default-theme.css", "text/css; charset=utf-8",
+        default_theme_css, default_theme_css_len);
+      serve_static(app,
+        "htmx.min.js", "text/javascript; charset=utf-8",
+        htmx_min_js, htmx_min_js_len);
+      serve_static(app,
+        "feather-sprite.svg", "image/svg+xml; charset=utf-8",
+        feather_sprite_svg, feather_sprite_svg_len);
+
+      // -----------------------------------------------------------------------
+      // PAGES
+      // -----------------------------------------------------------------------
       app.get("/", safe_page([](auto self, auto page) {
         auto txn = self->controller->open_read_txn();
         const SiteDetail* site;
-        optional<LocalUserDetailResponse> login;
         ListBoardsResponse boards;
-        page([&](auto& req) {
+        page(txn, [&](auto&, auto&) {
           site = self->controller->site_detail();
-          login = self->get_logged_in_user(txn, req);
           boards = self->controller->list_local_boards(txn);
-        }, [&](auto& rsp) {
-          write_html_header(rsp, site, login, {"/"}, {site->name});
+        }, [&](auto& rsp, auto& login) {
+          write_html_header(rsp, site, login, {
+            .canonical_path = "/",
+            .banner_title = site->name,
+            .banner_link = "/",
+          });
           rsp << "<div>";
           write_sidebar(rsp, site, login);
           rsp << "<main>";
@@ -600,13 +824,12 @@ namespace Ludwig {
       app.get("/b/:name", safe_page([](Self self, SafePage page) {
         auto txn = self->controller->open_read_txn();
         const SiteDetail* site;
-        optional<LocalUserDetailResponse> login;
         BoardDetailResponse board;
         ListPagesResponse pages;
         ListNotesResponse notes;
         std::string_view sort_str;
         bool show_posts, show_images, show_cws;
-        page([&](Request& req) {
+        page(txn, [&](Request& req, auto& login) {
           const auto name = req.getParameter(0);
           const auto board_id = txn.get_board_id(name);
           if (!board_id) throw ControllerError("Board name does not exist", 404);
@@ -618,21 +841,26 @@ namespace Ludwig {
           show_images = req.getQuery("images") == "1" || sort_str.empty();
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           site = self->controller->site_detail();
-          login = self->get_logged_in_user(txn, req);
           board = self->controller->board_detail(txn, *board_id);
           if (show_posts) {
             pages = self->controller->list_board_pages(txn, *board_id, sort, login ? (*login).id : 0, !show_cws, from);
           } else {
             notes = self->controller->list_board_notes(txn, *board_id, sort, login ? (*login).id : 0, !show_cws, from);
           }
-        }, [&](auto& rsp) {
-          write_html_header(rsp, site, login, {"/b/" + board.board->name()->str()}, {board.board->name()->string_view()});
+        }, [&](auto& rsp, auto& login) {
+          write_html_header(rsp, site, login, {
+            .canonical_path = "/b/" + board.board->name()->str(),
+            .banner_title = display_name(board.board),
+            .banner_link = "/b/" + board.board->name()->str(),
+            .banner_image = board.board->banner_url() ? optional(board.board->banner_url()->string_view()) : nullopt,
+            .card_image = board.board->icon_url() ? optional(board.board->icon_url()->string_view()) : nullopt
+          });
           rsp << "<div>";
           write_sidebar(rsp, site, login, {board});
           rsp << "<main>";
           write_sort_options(rsp, sort_str.empty() ? "Hot" : sort_str, SortFormType::Board, show_posts, show_images, show_cws);
-          if (show_posts) write_page_list(rsp, pages, !!login, show_images);
-          else write_note_list(rsp, notes, !!login);
+          if (show_posts) write_page_list(rsp, pages, !!login, true, false, show_images);
+          else write_note_list(rsp, notes, !!login, true, true);
           rsp << "</main></div>";
           rsp.end(HTML_FOOTER);
         });
@@ -640,13 +868,12 @@ namespace Ludwig {
       app.get("/u/:name", safe_page([](Self self, SafePage page) {
         auto txn = self->controller->open_read_txn();
         const SiteDetail* site;
-        optional<LocalUserDetailResponse> login;
         UserDetailResponse user;
         ListPagesResponse pages;
         ListNotesResponse notes;
         std::string_view sort_str;
         bool show_posts, show_images, show_cws;
-        page([&](Request& req) {
+        page(txn, [&](Request& req, auto& login) {
           const auto name = req.getParameter(0);
           const auto user_id = txn.get_user_id(name);
           if (!user_id) throw ControllerError("User does not exist", 404);
@@ -658,46 +885,245 @@ namespace Ludwig {
           show_images = req.getQuery("images") == "1" || sort_str.empty();
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           site = self->controller->site_detail();
-          login = self->get_logged_in_user(txn, req);
           user = self->controller->user_detail(txn, *user_id);
           if (show_posts) {
             pages = self->controller->list_user_pages(txn, *user_id, sort, login ? (*login).id : 0, !show_cws, from);
           } else {
             notes = self->controller->list_user_notes(txn, *user_id, sort, login ? (*login).id : 0, !show_cws, from);
           }
-        }, [&](auto& rsp) {
-          write_html_header(rsp, site, login, {"/u/" + user.user->name()->str()}, {user.user->name()->string_view()});
+        }, [&](auto& rsp, auto& login) {
+          write_html_header(rsp, site, login, {
+            .canonical_path = "/u/" + user.user->name()->str(),
+            .banner_title = display_name(user.user),
+            .banner_link = "/u/" + user.user->name()->str(),
+            .banner_image = user.user->banner_url() ? optional(user.user->banner_url()->string_view()) : nullopt,
+            .card_image = user.user->avatar_url() ? optional(user.user->avatar_url()->string_view()) : nullopt
+          });
           rsp << "<div>";
           write_sidebar(rsp, site, login);
           rsp << "<main>";
           write_sort_options(rsp, sort_str.empty() ? "New" : sort_str, SortFormType::User, show_posts, show_images, show_cws);
-          if (show_posts) write_page_list(rsp, pages, !!login, show_images);
-          else write_note_list(rsp, notes, !!login);
+          if (show_posts) write_page_list(rsp, pages, !!login, false, true, show_images);
+          else write_note_list(rsp, notes, !!login, false, true);
+          rsp << "</main></div>";
+          rsp.end(HTML_FOOTER);
+        });
+      }));
+      app.get("/thread/:id", safe_page([](Self self, SafePage page) {
+        auto txn = self->controller->open_read_txn();
+        const SiteDetail* site;
+        BoardDetailResponse board;
+        PageDetailResponse detail;
+        std::string_view sort_str;
+        bool show_images, show_cws;
+        page(txn, [&](Request& req, auto& login) {
+          const auto id = Controller::parse_hex_id(std::string(req.getParameter(0)));
+          if (!id) throw ControllerError("Invalid hexadecimal post ID", 404);
+          // TODO: Get sort and filter settings from user
+          sort_str = req.getQuery("sort");
+          const auto sort = Controller::parse_comment_sort_type(sort_str);
+          const auto from = Controller::parse_hex_id(std::string(req.getQuery("from")));
+          show_images = req.getQuery("images") == "1" || sort_str.empty();
+          show_cws = req.getQuery("cws") == "1" || sort_str.empty();
+          site = self->controller->site_detail();
+          detail = self->controller->page_detail(txn, *id, sort, !show_cws, login ? (*login).id : 0, from);
+          board = self->controller->board_detail(txn, detail.page->board());
+        }, [&](auto& rsp, auto& login) {
+          write_html_header(rsp, site, login, {
+            .canonical_path = fmt::format("/thread/{:x}", detail.id),
+            .banner_title = display_name(board.board),
+            .banner_link = "/b/" + board.board->name()->str(),
+            .banner_image = board.board->banner_url() ? optional(board.board->banner_url()->string_view()) : nullopt,
+            .card_image = board.board->icon_url() ? optional(board.board->icon_url()->string_view()) : nullopt
+          });
+          rsp << "<div>";
+          write_sidebar(rsp, site, login, {board});
+          rsp << "<main>";
+          write_page_view(rsp, &detail, !!login, sort_str, show_cws, show_images);
           rsp << "</main></div>";
           rsp.end(HTML_FOOTER);
         });
       }));
       app.get("/login", safe_page([](auto self, auto page) {
+        auto txn = self->controller->open_read_txn();
         const SiteDetail* site;
-        bool logged_in;
-        page([&](auto& req) {
-          auto txn = self->controller->open_read_txn();
+        page(txn, [&](auto&, auto&) {
           site = self->controller->site_detail();
-          logged_in = !!self->get_logged_in_user(txn, req);
-        }, [&](auto& rsp) {
-          if (logged_in) {
-            rsp.writeStatus(http_status(302));
+        }, [&](auto& rsp, auto& login) {
+          if (login) {
+            rsp.writeStatus(http_status(303));
             rsp.writeHeader("Location", "/");
+            rsp.endWithoutBody({}, true);
           } else {
-            write_html_header(rsp, site, {}, {"/login"}, {"Login"});
-            rsp << LOGIN_FORM;
+            write_html_header(rsp, site, login, {
+              .canonical_path = "/login",
+              .banner_title = "Login",
+            });
+            write_login_form(rsp);
             rsp.end(HTML_FOOTER);
           }
         });
       }));
-      serve_static(app, "default-theme.css", "text/css; charset=utf-8", default_theme_css, default_theme_css_len);
-      serve_static(app, "htmx.min.js", "text/javascript; charset=utf-8", htmx_min_js, htmx_min_js_len);
-      serve_static(app, "feather-sprite.svg", "image/svg+xml; charset=utf-8", feather_sprite_svg, feather_sprite_svg_len);
+      app.get("/register", safe_page([](auto self, auto page) {
+        auto txn = self->controller->open_read_txn();
+        const SiteDetail* site;
+        page(txn, [&](auto&, auto&) {
+          site = self->controller->site_detail();
+        }, [&](auto& rsp, auto& login) {
+          if (login) {
+            rsp.writeStatus(http_status(303));
+            rsp.writeHeader("Location", "/");
+            rsp.endWithoutBody({}, true);
+          } else {
+            write_html_header(rsp, site, login, {
+              .canonical_path = "/register",
+              .banner_title = "Register",
+            });
+            write_register_form(rsp);
+            rsp.end(HTML_FOOTER);
+          }
+        });
+      }));
+
+      // -----------------------------------------------------------------------
+      // API ACTIONS
+      // -----------------------------------------------------------------------
+      app.post("/login", action_page([](Self self, auto& req, auto& rsp, auto body, auto) {
+        if (body.optional_string("username") /* actually a honeypot */) {
+          spdlog::warn("Caught a bot with honeypot field on login");
+          // just leave the connecting hanging, let the bots time out
+          rsp.writeStatus(http_status(418));
+          return;
+        }
+        LoginResponse login;
+        try {
+          login = self->controller->login(
+            body.required_string("actual_username"),
+            body.required_string("password"),
+            rsp.getRemoteAddressAsText(),
+            req.getHeader("user-agent")
+          );
+        } catch (ControllerError e) {
+          rsp.cork([&]() {
+            rsp.writeStatus(http_status(e.http_error()));
+            write_html_header(rsp, self->controller->site_detail(), {}, {
+              .canonical_path = "/login",
+              .banner_title = "Login",
+            });
+            write_login_form(rsp, {e.what()});
+            rsp.end(HTML_FOOTER);
+          });
+          return;
+        }
+        const auto referer = req.getHeader("referer");
+        rsp.cork([&]() {
+          rsp.writeStatus(http_status(303));
+          rsp.writeHeader("Set-Cookie",
+            fmt::format(COOKIE_NAME "={:x}; path=/; expires={:%a, %d %b %Y %T %Z}",
+              login.session_id, fmt::gmtime((time_t)login.expiration)));
+          rsp.writeHeader("Location", referer.empty() || referer == "/login" ? "/" : referer);
+          rsp.endWithoutBody({}, true);
+        });
+      }, false));
+      app.post("/register", action_page([](Self self, auto&, auto& rsp, auto body, auto) {
+        if (body.optional_string("username") /* actually a honeypot */) {
+          spdlog::warn("Caught a bot with honeypot field on register");
+          // just leave the connecting hanging, let the bots time out
+          rsp.writeStatus(http_status(418));
+          return;
+        }
+        try {
+          SecretString password = body.required_string("password"),
+            confirm_password = body.required_string("confirm_password");
+          if (password.str != confirm_password.str) {
+            throw ControllerError("Passwords do not match", 400);
+          }
+          self->controller->create_local_user(
+            body.required_string("actual_username"),
+            body.required_string("email"),
+            std::move(password)
+          );
+        } catch (ControllerError e) {
+          rsp.cork([&]() {
+            rsp.writeStatus(http_status(e.http_error()));
+            write_html_header(rsp, self->controller->site_detail(), {}, {
+              .canonical_path = "/register",
+              .banner_title = "Register",
+            });
+            write_register_form(rsp, {e.what()});
+            rsp.end(HTML_FOOTER);
+          });
+          return;
+        }
+        const SiteDetail* site = self->controller->site_detail();
+        rsp.cork([&]() {
+          write_html_header(rsp, site, {}, { .banner_title = "Register" });
+          rsp << R"(<main><div class="form-page"><h2>Registration complete!</h2>)"
+            R"(<p>Log in to your new account:</p><p><a class="big-button" href="/login">Login</a></p>)"
+            "</div></main>";
+          rsp.end(HTML_FOOTER);
+        });
+      }, false));
+      app.post("/create_board", action_page([](Self self, auto&, auto& rsp, auto body, auto logged_in_user) {
+        const auto name = body.required_string("name");
+        self->controller->create_local_board(
+          logged_in_user,
+          name,
+          body.optional_string("display_name"),
+          body.optional_string("content_warning"),
+          body.optional_bool("private"),
+          body.optional_bool("restricted_posting"),
+          body.optional_bool("local_only")
+        );
+        rsp.cork([&]() {
+          rsp.writeStatus(http_status(303));
+          rsp.writeHeader("Location", fmt::format("/b/{}", name));
+          rsp.endWithoutBody({}, true);
+        });
+      }));
+      app.post("/b/:name/create_thread", action_page([](Self self, auto&, auto& rsp, auto body, auto logged_in_user) {
+        const auto id = self->controller->create_local_page(
+          logged_in_user,
+          body.required_hex_id("board"),
+          body.required_string("title"),
+          body.optional_string("submission_url"),
+          body.optional_string("text_content"),
+          body.optional_string("content_warning")
+        );
+        rsp.cork([&]() {
+          rsp.writeStatus(http_status(303));
+          rsp.writeHeader("Location", fmt::format("/thread/{:x}", id));
+          rsp.endWithoutBody({}, true);
+        });
+      }));
+      app.post("/thread/:id/create_comment", action_page([](Self self, auto& req, auto& rsp, auto body, auto logged_in_user) {
+        self->controller->create_local_note(
+          logged_in_user,
+          body.required_hex_id("parent"),
+          body.required_string("text_content"),
+          body.optional_string("content_warning")
+        );
+        write_redirect_back(req, rsp);
+      }));
+      app.post("/do/vote", action_page([](Self self, auto& req, auto& rsp, auto body, auto logged_in_user) {
+        const auto vote_str = uWS::getDecodedQueryValue("vote", body.query);
+        Vote vote;
+        if (vote_str == "1") vote = Upvote;
+        else if (vote_str == "-1") vote = Downvote;
+        else if (vote_str == "0") vote = NoVote;
+        else throw ControllerError("Invalid or missing 'vote' parameter", 400);
+        self->controller->vote(logged_in_user, body.required_hex_id("post"), vote);
+        write_redirect_back(req, rsp);
+      }));
+      app.post("/do/subscribe", action_page([](Self self, auto& req, auto& rsp, auto body, auto logged_in_user) {
+        self->controller->subscribe(logged_in_user, body.required_hex_id("board"), true);
+        write_redirect_back(req, rsp);
+      }));
+      app.post("/do/unsubscribe", action_page([](Self self, auto& req, auto& rsp, auto body, auto logged_in_user) {
+        self->controller->subscribe(logged_in_user, body.required_hex_id("board"), false);
+        write_redirect_back(req, rsp);
+      }));
+
     }
   };
 

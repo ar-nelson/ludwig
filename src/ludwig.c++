@@ -36,11 +36,17 @@ int main(int argc, char** argv) {
   parser.add_option("--import")
     .dest("import")
     .help("database dump file to import; if present, database file (--db) must not exist yet");
+  parser.add_option("--log-level")
+    .dest("log_level")
+    .help("log level (debug, info, warn, error, critical)")
+    .set_default("info");
   parser.add_help_option();
 
   const optparse::Values options = parser.parse_args(argc, argv);
   const auto dbfile = options["db"].c_str();
   const auto map_size = std::stoull(options["map_size"]);
+  const auto log_level = options["log_level"];
+  spdlog::set_level(spdlog::level::from_str(log_level));
   if (options.is_set_by_user("import")) {
     const auto importfile = options["import"];
     std::ifstream in(importfile, std::ios_base::in);

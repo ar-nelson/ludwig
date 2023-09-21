@@ -43,26 +43,22 @@ namespace Ludwig {
   };
 
   struct SecretString {
-    std::string&& str;
+    std::string_view str;
+    SecretString(std::string_view str) : str(str) {};
+    SecretString(const SecretString&) = delete;
+    SecretString& operator=(const SecretString&) = delete;
     ~SecretString() {
-      crypto_wipe(str.data(), str.length());
+      crypto_wipe((char*)str.data(), str.length());
     }
   };
 
   struct LoginResponse {
-    uint64_t user_id;
-    SecretString jwt;
+    uint64_t user_id, session_id, expiration;
   };
 
   struct SiteDetail {
     std::string name, domain, description;
     std::optional<std::string> icon_url, banner_url;
-  };
-
-  struct PageDetailResponse {
-    uint64_t id;
-    const Page* page;
-    const PostStats* stats;
   };
 
   struct UserDetailResponse {
@@ -145,6 +141,41 @@ namespace Ludwig {
     std::optional<uint64_t> next;
   };
 
+  struct CommentTree {
+    std::unordered_map<uint64_t, uint64_t> continued;
+    std::multimap<uint64_t, NoteListEntry> notes;
+
+    inline auto size() -> size_t {
+      return notes.size();
+    }
+    inline auto emplace(uint64_t parent, NoteListEntry e) -> void {
+      notes.emplace(parent, e);
+    }
+    inline auto mark_continued(uint64_t parent, uint64_t from = 0) {
+      continued.emplace(parent, from);
+    }
+  };
+
+  struct PageDetailResponse {
+    uint64_t id;
+    Vote your_vote;
+    const Page* page;
+    const PostStats* stats;
+    const User* author;
+    const Board* board;
+    CommentTree comments;
+  };
+
+  struct NoteDetailResponse {
+    uint64_t id;
+    Vote your_vote;
+    const Note* note;
+    const PostStats* stats;
+    const User* author;
+    const Page* page;
+    CommentTree comments;
+  };
+
   class ControllerError : public std::runtime_error {
     private:
       uint16_t _http_error;
@@ -225,7 +256,6 @@ namespace Ludwig {
     std::multimap<std::pair<Event, uint64_t>, EventListener> event_listeners;
 
     auto dispatch_event(Event event, uint64_t subject_id = 0) -> void;
-    auto hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void;
   public:
     Controller(std::shared_ptr<DB> db, std::shared_ptr<asio::io_context> io);
 
@@ -275,19 +305,44 @@ namespace Ludwig {
       return db->open_read_txn();
     }
 
-    auto get_auth_user(SecretString&& jwt) -> uint64_t;
-    auto login(ReadTxn& txn, std::string_view username, SecretString&& password) -> LoginResponse;
+    inline auto validate_session(ReadTxnBase& txn, uint64_t session_id) -> std::optional<uint64_t> {
+      return txn.validate_session(session_id);
+    }
+
+    auto hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void;
+
+    auto login(
+      std::string_view username,
+      SecretString&& password,
+      string_view ip,
+      string_view user_agent
+    ) -> LoginResponse;
     inline auto site_detail() -> const SiteDetail* {
       return &cached_site_detail;
     }
-    auto page_detail(ReadTxn& txn, uint64_t id) -> PageDetailResponse;
-    auto user_detail(ReadTxn& txn, uint64_t id) -> UserDetailResponse;
-    auto local_user_detail(ReadTxn& txn, uint64_t id) -> LocalUserDetailResponse;
-    auto board_detail(ReadTxn& txn, uint64_t id) -> BoardDetailResponse;
-    auto list_local_users(ReadTxn& txn, std::optional<uint64_t> from_id = {}) -> ListUsersResponse;
-    auto list_local_boards(ReadTxn& txn, std::optional<uint64_t> from_id = {}) -> ListBoardsResponse;
+    auto page_detail(
+      ReadTxnBase& txn,
+      uint64_t id,
+      CommentSortType sort = CommentSortType::Hot,
+      bool skip_cw = false,
+      uint64_t viewer_user = 0,
+      std::optional<uint64_t> from_id = {}
+    ) -> PageDetailResponse;
+    auto note_detail(
+      ReadTxnBase& txn,
+      uint64_t id,
+      CommentSortType sort = CommentSortType::Hot,
+      bool skip_cw = false,
+      uint64_t viewer_user = 0,
+      std::optional<uint64_t> from_id = {}
+    ) -> NoteDetailResponse;
+    auto user_detail(ReadTxnBase& txn, uint64_t id) -> UserDetailResponse;
+    auto local_user_detail(ReadTxnBase& txn, uint64_t id) -> LocalUserDetailResponse;
+    auto board_detail(ReadTxnBase& txn, uint64_t id) -> BoardDetailResponse;
+    auto list_local_users(ReadTxnBase& txn, std::optional<uint64_t> from_id = {}) -> ListUsersResponse;
+    auto list_local_boards(ReadTxnBase& txn, std::optional<uint64_t> from_id = {}) -> ListBoardsResponse;
     auto list_board_pages(
-      ReadTxn& txn,
+      ReadTxnBase& txn,
       uint64_t board_id,
       SortType sort = SortType::Hot,
       bool skip_cw = false,
@@ -295,22 +350,15 @@ namespace Ludwig {
       std::optional<uint64_t> from_id = {}
     ) -> ListPagesResponse;
     auto list_board_notes(
-      ReadTxn& txn,
+      ReadTxnBase& txn,
       uint64_t board_id,
       SortType sort = SortType::Hot,
       bool skip_cw = false,
       uint64_t viewer_user = 0,
       std::optional<uint64_t> from_id = {}
     ) -> ListNotesResponse;
-    auto list_child_notes(
-      ReadTxn& txn,
-      uint64_t parent_id,
-      CommentSortType sort = CommentSortType::Hot,
-      uint64_t viewer_user = 0,
-      std::optional<uint64_t> from_id = {}
-    ) -> ListNotesResponse;
     auto list_user_pages(
-      ReadTxn& txn,
+      ReadTxnBase& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       bool skip_cw = false,
@@ -318,7 +366,7 @@ namespace Ludwig {
       std::optional<uint64_t> from_id = {}
     ) -> ListPagesResponse;
     auto list_user_notes(
-      ReadTxn& txn,
+      ReadTxnBase& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       bool skip_cw = false,
@@ -326,15 +374,15 @@ namespace Ludwig {
       std::optional<uint64_t> from_id = {}
     ) -> ListNotesResponse;
     auto create_local_user(
-      const char* username,
-      const char* email,
+      std::string_view username,
+      std::string_view email,
       SecretString&& password
     ) -> uint64_t;
     auto create_local_board(
       uint64_t owner,
-      const char* name,
-      std::optional<const char*> display_name,
-      std::optional<const char*> content_warning,
+      std::string_view name,
+      std::optional<std::string_view> display_name,
+      std::optional<std::string_view> content_warning = {},
       bool is_private = false,
       bool is_restricted_posting = false,
       bool is_local_only = false
@@ -342,15 +390,16 @@ namespace Ludwig {
     auto create_local_page(
       uint64_t author,
       uint64_t board,
-      const char* title,
-      std::optional<const char*> submission_url,
-      std::optional<const char*> text_content_markdown,
-      std::optional<const char*> content_warning
+      std::string_view title,
+      std::optional<std::string_view> submission_url,
+      std::optional<std::string_view> text_content_markdown,
+      std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
     auto create_local_note(
       uint64_t author,
       uint64_t parent,
-      const char* text_content_markdown
+      std::string_view text_content_markdown,
+      std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
     auto vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;
     auto subscribe(uint64_t user_id, uint64_t board_id, bool subscribed = true) -> void;

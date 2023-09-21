@@ -5,6 +5,14 @@ import { faker } from "npm:@faker-js/faker";
 import { decode as hexDecode } from "https://deno.land/std/encoding/hex.ts";
 import { encode as base64Encode } from "https://deno.land/std/encoding/base64.ts";
 
+// The default password is "fhqwhgads", for every account.
+const PASSWORD_SALT = new TextEncoder().encode("0123456789abcdef");
+const PASSWORD_HASH = hexDecode(
+  new TextEncoder().encode(
+    "1fbf4b3d9639fc815fb394b95ac2913d14e0f9375a5a7e6fa6291ab660b9d9e6",
+  ),
+);
+
 const SCALE = 10;
 let nextId = 0;
 let ludwigDomain = "localhost:2023";
@@ -13,9 +21,13 @@ function genInstance(): { id: number; domain: string } {
   return { id: nextId++, domain: `${faker.internet.domainWord()}.test` };
 }
 
-function genImageUrl(width: number, height: number = width): string {
+function genImageUrl(
+  width: number,
+  height: number = width,
+  word = faker.word.noun(),
+): string {
   return `https://loremflickr.com/${width}/${height}/${
-    faker.helpers.slugify(faker.word.noun())
+    faker.helpers.slugify(word)
   }?lock=${faker.number.int(100)}`;
 }
 
@@ -75,35 +87,22 @@ function genUser(
   };
 }
 
-async function genLocalUser(
+function genLocalUser(
   baseName: string,
-  password: string = faker.internet.password(),
-): Promise<{ id: number; user: User; localUser: LocalUser }> {
+  isAdmin = false,
+): { id: number; user: User; localUser: LocalUser } {
   const { id, user } = genUser(baseName);
-  const salt = faker.internet.password({ length: 16 });
-  const argon2 = new Deno.Command("argon2", {
-    args: [salt, "-k", "65536", "-r"],
-    stdout: "piped",
-    stdin: "piped",
-  }).spawn();
-  const inStream = argon2.stdin.getWriter();
-  const enc = new TextEncoder();
-  await inStream.write(enc.encode(password));
-  await inStream.close();
-  const result = await argon2.output();
-  if (!result.success) {
-    throw new Error("argon2 failed: " + result.stderr);
-  }
   return {
     id,
     user,
     localUser: {
       email: faker.internet.email(),
-      password_hash: { bytes: [...hexDecode(result.stdout.slice(0, 64))] },
-      password_salt: { bytes: [...enc.encode(salt)] },
+      password_hash: { bytes: [...PASSWORD_HASH] },
+      password_salt: { bytes: [...PASSWORD_SALT] },
       show_avatars: faker.datatype.boolean(0.8),
       show_karma: faker.datatype.boolean(0.8),
       hide_cw_posts: faker.datatype.boolean(0.5),
+      admin: isAdmin,
     },
   };
 }
@@ -130,13 +129,18 @@ function genBoard(
         { probability: 0.75 },
       ),
       icon_url: faker.helpers.maybe(
-        () => genImageUrl(faker.number.int({ min: 32, max: 512 })),
+        () =>
+          genImageUrl(
+            faker.number.int({ min: 32, max: 512 }),
+            undefined,
+            baseName,
+          ),
         { probability: 0.75 },
       ),
       banner_url: faker.helpers.maybe(() => {
         const w = faker.number.int({ min: 320, max: 1920 }),
           h = faker.number.int({ min: 100, max: Math.min(w, 720) });
-        return genImageUrl(w, h);
+        return genImageUrl(w, h, baseName);
       }, { probability: 0.5 }),
       content_warning: faker.datatype.boolean(0.1)
         ? faker.company.catchPhrase()
@@ -357,16 +361,18 @@ interface Note {
   mod_state?: ModState;
 }
 
-async function genAll(scale = 10) {
+function genAll(scale = 10) {
   const instances = faker.helpers.multiple(genInstance, { count: scale }),
     usernames = faker.helpers.uniqueArray(
       faker.internet.domainWord,
       scale * 10,
     ),
     boardNames = faker.helpers.uniqueArray(faker.word.noun, scale * 3),
-    localUsers = await Promise.all(
-      usernames.slice(0, scale).map((name) => genLocalUser(name)),
-    ),
+    adminPassword = faker.internet.password({ length: 8 }),
+    localUsers = [
+      genLocalUser("admin", true),
+      ...usernames.slice(0, scale).map((name) => genLocalUser(name)),
+    ],
     users = [
       ...localUsers,
       ...usernames.slice(scale).map((name) =>
@@ -459,7 +465,6 @@ async function genAll(scale = 10) {
   console.log(`S media_upload_enabled ${uint64Base64(0n)}`);
   console.log(`S board_creation_admin_only ${uint64Base64(1n)}`);
   console.log(`S federation_enabled ${uint64Base64(0n)}`);
-  console.log(`S nsfw_allowed ${uint64Base64(1n)}`);
 
   for (const u of users) {
     console.log(`u ${u.id} ${JSON.stringify(u.user)}`);

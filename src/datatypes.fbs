@@ -5,6 +5,7 @@ enum ModState : ubyte { Visible, Flagged, Locked, Hidden, Removed }
 table Session {
   user: uint64;
   ip: string;
+  user_agent: string;
   created_at: uint64;
   expires_at: uint64;
 }

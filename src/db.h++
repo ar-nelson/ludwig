@@ -158,6 +158,7 @@ namespace Ludwig {
   class WriteTxn : public ReadTxnBase {
   protected:
     bool committed = false;
+    std::atomic<uint8_t> session_counter;
     auto delete_child_note(uint64_t id, uint64_t board_id) -> uint64_t;
 
     WriteTxn(DB& db): ReadTxnBase(db) {
@@ -177,7 +178,12 @@ namespace Ludwig {
     auto set_setting(std::string_view key, std::string_view value) -> void;
     auto set_setting(std::string_view key, uint64_t value) -> void;
 
-    auto create_session(uint64_t user, uint64_t lifetime_seconds = 15 * 60) -> uint64_t;
+    auto create_session(
+      uint64_t user,
+      std::string_view ip,
+      std::string_view user_agent,
+      uint64_t lifetime_seconds = 15 * 60
+    ) -> std::pair<uint64_t, uint64_t>;
 
     auto create_user(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
     auto set_user(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;

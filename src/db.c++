@@ -24,7 +24,7 @@ namespace Ludwig {
 
   enum Dbi {
     Settings,
-    Session,
+    Session_Session,
 
     User_User,
     User_Name,
@@ -141,6 +141,20 @@ namespace Ludwig {
     }
   }
 
+  struct MDBCursor {
+    MDB_cursor* cur;
+    MDBCursor(MDB_txn* txn, MDB_dbi dbi) {
+      auto err = mdb_cursor_open(txn, dbi, &cur);
+      if (err) throw DBError("Failed to open database cursor", err);
+    }
+    ~MDBCursor() {
+      mdb_cursor_close(cur);
+    }
+    inline operator MDB_cursor*() {
+      return cur;
+    }
+  };
+
   auto DB::init_env(const char* filename, MDB_txn** txn) -> int {
     int err;
     if ((err =
@@ -153,7 +167,7 @@ namespace Ludwig {
 
 #   define MK_DBI(NAME, FLAGS) if ((err = mdb_dbi_open(*txn, #NAME, FLAGS | MDB_CREATE, dbis + NAME))) return err;
     MK_DBI(Settings, 0)
-    MK_DBI(Session, MDB_INTEGERKEY)
+    MK_DBI(Session_Session, MDB_INTEGERKEY)
 
     MK_DBI(User_User, MDB_INTEGERKEY)
     MK_DBI(User_Name, MDB_INTEGERKEY)
@@ -398,6 +412,18 @@ namespace Ludwig {
     return val_as<uint64_t>(v);
   }
 
+  auto ReadTxnBase::validate_session(uint64_t session_id) -> optional<uint64_t> {
+    MDB_val v;
+    if (db_get(txn, db.dbis[Session_Session], session_id, v)) {
+      spdlog::debug("Session {:x} does not exist", session_id);
+      return {};
+    }
+    const auto session = GetRoot<Session>(v.mv_data);
+    if (session->expires_at() > now_s()) return { session->user() };
+    spdlog::debug("Session {:x} is expired", session_id);
+    return {};
+  }
+
   auto ReadTxnBase::get_user_id(string_view name) -> optional<uint64_t> {
     // TODO: Handle hash collisions, maybe double hashing.
     MDB_val v;
@@ -603,8 +629,7 @@ namespace Ludwig {
     Cursor to,
     const std::function<void(MDB_val& k, MDB_val& v)>& fn = [](MDB_val&, MDB_val&){}
   ) -> void {
-    MDB_cursor* cur;
-    mdb_cursor_open(txn, dbi, &cur);
+    MDBCursor cur(txn, dbi);
     MDB_val k = from.val(), v;
     auto err = mdb_cursor_get(cur, &k, &v, MDB_SET_RANGE);
     auto end = to.val();
@@ -626,6 +651,44 @@ namespace Ludwig {
   }
   auto WriteTxn::set_setting(string_view key, uint64_t value) -> void {
     db_put(txn, db.dbis[Settings], key, value);
+  }
+  auto WriteTxn::create_session(
+    uint64_t user,
+    string_view ip,
+    string_view user_agent,
+    uint64_t lifetime_seconds
+  ) -> std::pair<uint64_t, uint64_t> {
+    uint64_t id, now = now_s();
+    if (!(++db.session_counter % 4)) {
+      // Every 4 sessions, clean up old sessions.
+      // TODO: Change this to 256; the low number is for testing.
+      MDBCursor cur(txn, db.dbis[Session_Session]);
+      MDB_val k, v;
+      int err;
+      for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = err || mdb_cursor_get(cur, &k, &v, MDB_NEXT)) {
+        auto session = GetRoot<Session>(v.mv_data);
+        if (session->expires_at() <= now) {
+          spdlog::debug("Deleting expired session {:x} for user {:x}", val_as<uint64_t>(k), session->user());
+          err = mdb_cursor_del(cur, 0);
+        }
+      }
+      if (err && err != MDB_NOTFOUND) {
+        spdlog::warn("Database error when deleting expired sessions: {}", mdb_strerror(err));
+      }
+    }
+    duthomhas::csprng prng;
+    prng(id);
+    FlatBufferBuilder fbb;
+    fbb.Finish(CreateSession(fbb,
+      user,
+      fbb.CreateString(ip),
+      fbb.CreateString(user_agent),
+      now,
+      now + lifetime_seconds
+    ));
+    db_put(txn, db.dbis[Session_Session], id, fbb);
+    spdlog::debug("Created session {:x} for user {:x} (IP {}, user agent {})", id, user, ip, user_agent);
+    return { id, now + lifetime_seconds };
   }
   auto WriteTxn::create_user(FlatBufferBuilder& builder) -> uint64_t {
     uint64_t id = next_id();
