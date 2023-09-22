@@ -15,8 +15,6 @@ using std::optional, std::nullopt, std::string, std::string_view;
 #define COOKIE_NAME "ludwig_session"
 
 namespace Ludwig {
-  static constexpr std::string_view
-    HTML_FOOTER = R"(<div class="spacer"></div> <footer>Powered by Ludwig</body></html>)";
   static const std::regex cookie_regex(
     R"((?:^|;)\s*)" COOKIE_NAME R"(\s*=\s*([^;]+))",
     std::regex_constants::ECMAScript
@@ -49,7 +47,7 @@ namespace Ludwig {
     string_view query;
     inline auto required_hex_id(string_view key) -> uint64_t {
       try {
-        return std::stoull(std::string(uWS::getDecodedQueryValue(key, query)));
+        return std::stoull(std::string(uWS::getDecodedQueryValue(key, query)), nullptr, 16);
       } catch (...) {
         throw ControllerError(fmt::format("Invalid or missing '{}' parameter", key).c_str(), 400);
       }
@@ -95,8 +93,9 @@ namespace Ludwig {
       Self self;
       Request& req;
       Response& rsp;
+      std::chrono::time_point<std::chrono::steady_clock> start;
     public:
-      SafePage(Self self, Request& req, Response& rsp) : self(self), req(req), rsp(rsp) {}
+      SafePage(Self self, Request& req, Response& rsp) : self(self), req(req), rsp(rsp), start(std::chrono::steady_clock::now()) {}
 
       inline auto operator()(
         ReadTxnBase& txn,
@@ -136,6 +135,11 @@ namespace Ludwig {
           rsp.writeHeader("Set-Cookie", COOKIE_NAME "=deleted; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT");
         }
         after(rsp, logged_in_user);
+      }
+
+      inline auto time_elapsed() {
+        const auto end = std::chrono::steady_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
       }
     };
 
@@ -284,6 +288,13 @@ namespace Ludwig {
       }
     }
 
+    static inline auto end_with_html_footer(Response& rsp, long time_elapsed) noexcept -> void {
+      rsp.end(fmt::format(
+        R"(<div class="spacer"></div><footer><small>Powered by Ludwig · Generated in {:L}μs</small></footer></body></html>)",
+        time_elapsed
+      ));
+    }
+
     static inline auto hide_cw_posts(const optional<LocalUserDetailResponse>& logged_in_user) -> bool {
       if (!logged_in_user) return false;
       return logged_in_user->local_user->hide_cw_posts();
@@ -324,15 +335,14 @@ namespace Ludwig {
           R"(<input type="submit" value="Login" class="big-button"></form>)"
           R"(<a href="/register" class="big-button">Register</a>)"
           "</section>";
-      } else if (board) {
+      } else if (board && Controller::can_create_page(*board, logged_in_user)) {
         rsp << R"(<section id="actions-section"><h2>Actions</h2><a class="big-button" href="/b/)"
-          << Escape{board->board->name()->string_view()} << R"(/submit">Submit a new link</a><a class="big-button" href="/b/)"
-          << Escape{board->board->name()->string_view()} << R"(/submit?text=true">Submit a new text post</a></section>)";
+          << Escape{board->board->name()->string_view()} << R"(/create_thread">Submit a new link</a><a class="big-button" href="/b/)"
+          << Escape{board->board->name()->string_view()} << R"(/create_thread?text=true">Submit a new text post</a></section>)";
       }
       if (board) {
         rsp << R"(<section id="board-sidebar"><h2>)" << board_name << "</h2>";
         // TODO: Banner image
-        // TODO: Allow safe HTML in description
         if (board->board->description_safe()) {
           rsp << "<p>" << board->board->description_safe()->string_view() << "</p>";
         }
@@ -456,9 +466,10 @@ namespace Ludwig {
       Response& rsp,
       std::string_view sort_name,
       SortFormType type,
-      bool show_posts = true,
-      bool show_images = true,
-      bool show_cws = true
+      bool can_hide_cws,
+      bool show_posts,
+      bool show_images,
+      bool show_cws
     ) noexcept -> void {
       rsp << R"(<details class="sort-options"><summary>Sort and Filter ()" << sort_name
         << R"()</summary><form class="sort-form" method="get">)";
@@ -494,7 +505,7 @@ namespace Ludwig {
       }
       rsp << R"(</select></label><label for="images"><input name="images" type="checkbox" value="1")"
         << (show_images ? " checked" : "") << R"(> Show images</label>)";
-      if (type != SortFormType::Comments) {
+      if (can_hide_cws) {
         rsp << R"(<label for="cws"><input name="cws" type="checkbox" value="1")"
           << (show_cws ? " checked" : "") << R"(> Show posts with Content Warnings</label>)";
       }
@@ -513,10 +524,10 @@ namespace Ludwig {
         rsp << R"(<form class="vote-buttons" id="votes-)" << id
           << R"(" method="post" action="/do/vote"><input type="hidden" name="post" value=")" << id
           << R"("><output class="karma" id="karma-)" << id << R"(">)" << karma
-          << R"(</output><label class="upvote"><button type="submit" name="vote")"
-          << (your_vote == Upvote ? R"( class="voted")" : "")
-          << R"( value="1"><span class="a11y">Upvote</span></button></label><label class="downvote"><button type="submit" name="vote")"
-          << (your_vote == Downvote ? R"( class="voted")" : "") << R"( value="-1"><span class="a11y">Downvote</span></button></label></form>)";
+          << R"(</output><label class="upvote"><button type="submit" name="vote" )"
+          << (your_vote > 0 ? R"(class="voted" value="0")" : R"(value="1")")
+          << R"(><span class="a11y">Upvote</span></button></label><label class="downvote"><button type="submit" name="vote" )"
+          << (your_vote < 0 ? R"(class="voted" value="0")" : R"(value="-1")") << R"(><span class="a11y">Downvote</span></button></label></form>)";
       } else {
         rsp << R"(<div class="vote-buttons" id="votes-)" << id
           << R"("><output class="karma" id="karma-)" << id << R"(">)" << karma
@@ -525,9 +536,30 @@ namespace Ludwig {
       }
     }
 
+    static inline auto write_pagination(
+      Response& rsp,
+      string_view base_url,
+      bool is_first,
+      optional<uint64_t> next
+    ) noexcept -> void {
+      rsp << R"(<div class="pagination">)";
+      if (!is_first) {
+        rsp << R"(<a class="big-button" href=")" << Escape{base_url} << R"(">← First</a>)";
+      }
+      if (next) {
+        const auto sep = base_url.find('?') == string_view::npos ? "?" : "&";
+        rsp << R"(<a class="big-button" href=")" << Escape{base_url} << sep << "from=" << hexstring(*next) << R"(">Next →</a>)";
+      }
+      if (is_first && !next) {
+        rsp << "<small>And that's it!</small>";
+      }
+      rsp << R"(</div>)";
+    }
+
     static auto write_page_list(
       Response& rsp,
       const ListPagesResponse& list,
+      string_view base_url,
       bool logged_in,
       bool show_user = true,
       bool show_board = true,
@@ -576,11 +608,13 @@ namespace Ludwig {
           << R"(">Report</a></form></div></div></article>)";
       }
       rsp << "</ol>";
+      write_pagination(rsp, base_url, list.is_first, list.next);
     }
 
     static auto write_note_list(
       Response& rsp,
       const ListNotesResponse& list,
+      string_view base_url,
       bool logged_in,
       bool show_user = true,
       bool show_page = true
@@ -617,6 +651,7 @@ namespace Ludwig {
           << R"(">Report</a></form></div></div></article>)";
       }
       rsp << "</ol>";
+      write_pagination(rsp, base_url, list.is_first, list.next);
     }
 
     static auto write_comment_tree(
@@ -717,7 +752,11 @@ namespace Ludwig {
       }
       rsp << R"(<section class="comments"><h2>)" << page->stats->descendant_count() << R"( comments</h2>)";
       if (page->stats->descendant_count()) {
-        write_sort_options(rsp, sort_str.empty() ? "Hot" : sort_str, SortFormType::Comments, false, show_images, show_cws);
+        write_sort_options(
+          rsp, sort_str.empty() ? "Hot" : sort_str, SortFormType::Comments,
+          !page->board->content_warning() && !page->page->content_warning(),
+          false, show_images, show_cws
+        );
         write_comment_tree(rsp, page->comments, page->id, logged_in);
       }
       rsp << "</section></article>";
@@ -750,6 +789,16 @@ namespace Ludwig {
         R"(<input type="submit" value="Register">)"
         R"(</form></main>)";
     }
+
+    /*
+    static auto write_create_page_form(Response& rsp, optional<string_view> error = {}) noexcept -> void {
+
+    }
+
+    static auto write_reply_form(Response& rsp, uint64_t parent) noexcept -> void {
+
+    }
+    */
 
     static inline auto write_redirect_back(Request& req, Response& rsp) -> void {
       const auto referer = req.getHeader("referer");
@@ -818,7 +867,7 @@ namespace Ludwig {
           rsp << "<main>";
           write_board_list(rsp, boards);
           rsp << "</main></div>";
-          rsp.end(HTML_FOOTER);
+          end_with_html_footer(rsp, page.time_elapsed());
         });
       }));
       app.get("/b/:name", safe_page([](Self self, SafePage page) {
@@ -843,9 +892,9 @@ namespace Ludwig {
           site = self->controller->site_detail();
           board = self->controller->board_detail(txn, *board_id);
           if (show_posts) {
-            pages = self->controller->list_board_pages(txn, *board_id, sort, login ? (*login).id : 0, !show_cws, from);
+            pages = self->controller->list_board_pages(txn, *board_id, sort, login, !show_cws, from);
           } else {
-            notes = self->controller->list_board_notes(txn, *board_id, sort, login ? (*login).id : 0, !show_cws, from);
+            notes = self->controller->list_board_notes(txn, *board_id, sort, login, !show_cws, from);
           }
         }, [&](auto& rsp, auto& login) {
           write_html_header(rsp, site, login, {
@@ -858,11 +907,18 @@ namespace Ludwig {
           rsp << "<div>";
           write_sidebar(rsp, site, login, {board});
           rsp << "<main>";
-          write_sort_options(rsp, sort_str.empty() ? "Hot" : sort_str, SortFormType::Board, show_posts, show_images, show_cws);
-          if (show_posts) write_page_list(rsp, pages, !!login, true, false, show_images);
-          else write_note_list(rsp, notes, !!login, true, true);
+          write_sort_options(rsp, sort_str.empty() ? "Hot" : sort_str, SortFormType::Board, !board.board->content_warning(), show_posts, show_images, show_cws);
+          const auto base_url = fmt::format("/b/{}?type={}&sort={}&images={}&cws={}",
+            board.board->name()->string_view(),
+            show_posts ? "posts" : "comments",
+            sort_str,
+            show_images ? 1 : 0,
+            show_cws ? 1 : 0
+          );
+          if (show_posts) write_page_list(rsp, pages, base_url, !!login, true, false, show_images);
+          else write_note_list(rsp, notes, base_url, !!login, true, true);
           rsp << "</main></div>";
-          rsp.end(HTML_FOOTER);
+          end_with_html_footer(rsp, page.time_elapsed());
         });
       }));
       app.get("/u/:name", safe_page([](Self self, SafePage page) {
@@ -887,9 +943,9 @@ namespace Ludwig {
           site = self->controller->site_detail();
           user = self->controller->user_detail(txn, *user_id);
           if (show_posts) {
-            pages = self->controller->list_user_pages(txn, *user_id, sort, login ? (*login).id : 0, !show_cws, from);
+            pages = self->controller->list_user_pages(txn, *user_id, sort, login, !show_cws, from);
           } else {
-            notes = self->controller->list_user_notes(txn, *user_id, sort, login ? (*login).id : 0, !show_cws, from);
+            notes = self->controller->list_user_notes(txn, *user_id, sort, login, !show_cws, from);
           }
         }, [&](auto& rsp, auto& login) {
           write_html_header(rsp, site, login, {
@@ -902,11 +958,18 @@ namespace Ludwig {
           rsp << "<div>";
           write_sidebar(rsp, site, login);
           rsp << "<main>";
-          write_sort_options(rsp, sort_str.empty() ? "New" : sort_str, SortFormType::User, show_posts, show_images, show_cws);
-          if (show_posts) write_page_list(rsp, pages, !!login, false, true, show_images);
-          else write_note_list(rsp, notes, !!login, false, true);
+          write_sort_options(rsp, sort_str.empty() ? "New" : sort_str, SortFormType::User, true, show_posts, show_images, show_cws);
+          const auto base_url = fmt::format("/u/{}?type={}&sort={}&images={}&cws={}",
+            user.user->name()->string_view(),
+            show_posts ? "posts" : "comments",
+            sort_str,
+            show_images ? 1 : 0,
+            show_cws ? 1 : 0
+          );
+          if (show_posts) write_page_list(rsp, pages, base_url, !!login, false, true, show_images);
+          else write_note_list(rsp, notes, base_url, !!login, false, true);
           rsp << "</main></div>";
-          rsp.end(HTML_FOOTER);
+          end_with_html_footer(rsp, page.time_elapsed());
         });
       }));
       app.get("/thread/:id", safe_page([](Self self, SafePage page) {
@@ -926,7 +989,7 @@ namespace Ludwig {
           show_images = req.getQuery("images") == "1" || sort_str.empty();
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           site = self->controller->site_detail();
-          detail = self->controller->page_detail(txn, *id, sort, !show_cws, login ? (*login).id : 0, from);
+          detail = self->controller->page_detail(txn, *id, sort, login, !show_cws, from);
           board = self->controller->board_detail(txn, detail.page->board());
         }, [&](auto& rsp, auto& login) {
           write_html_header(rsp, site, login, {
@@ -941,7 +1004,7 @@ namespace Ludwig {
           rsp << "<main>";
           write_page_view(rsp, &detail, !!login, sort_str, show_cws, show_images);
           rsp << "</main></div>";
-          rsp.end(HTML_FOOTER);
+          end_with_html_footer(rsp, page.time_elapsed());
         });
       }));
       app.get("/login", safe_page([](auto self, auto page) {
@@ -960,7 +1023,7 @@ namespace Ludwig {
               .banner_title = "Login",
             });
             write_login_form(rsp);
-            rsp.end(HTML_FOOTER);
+            end_with_html_footer(rsp, page.time_elapsed());
           }
         });
       }));
@@ -980,7 +1043,7 @@ namespace Ludwig {
               .banner_title = "Register",
             });
             write_register_form(rsp);
-            rsp.end(HTML_FOOTER);
+            end_with_html_footer(rsp, page.time_elapsed());
           }
         });
       }));
@@ -1011,7 +1074,7 @@ namespace Ludwig {
               .banner_title = "Login",
             });
             write_login_form(rsp, {e.what()});
-            rsp.end(HTML_FOOTER);
+            end_with_html_footer(rsp, 0);
           });
           return;
         }
@@ -1051,7 +1114,7 @@ namespace Ludwig {
               .banner_title = "Register",
             });
             write_register_form(rsp, {e.what()});
-            rsp.end(HTML_FOOTER);
+            end_with_html_footer(rsp, 0);
           });
           return;
         }
@@ -1061,7 +1124,7 @@ namespace Ludwig {
           rsp << R"(<main><div class="form-page"><h2>Registration complete!</h2>)"
             R"(<p>Log in to your new account:</p><p><a class="big-button" href="/login">Login</a></p>)"
             "</div></main>";
-          rsp.end(HTML_FOOTER);
+          end_with_html_footer(rsp, 0);
         });
       }, false));
       app.post("/create_board", action_page([](Self self, auto&, auto& rsp, auto body, auto logged_in_user) {

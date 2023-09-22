@@ -319,6 +319,14 @@ ol.page-list, ol.note-list, ol.comment-list, ol.board-list {
   padding: 0;
 }
 
+.pagination {
+  display: flex;
+}
+
+.pagination a:not(:first-child) {
+  margin-left: 2rem;
+}
+
 .page {
   list-style-type: none;
   display: grid;

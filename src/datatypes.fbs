@@ -1,6 +1,6 @@
 namespace Ludwig;
 
-enum ModState : ubyte { Visible, Flagged, Locked, Hidden, Removed }
+enum ModState : ubyte { Visible, Flagged, Locked, Removed }
 
 table Session {
   user: uint64;
@@ -25,6 +25,7 @@ table User {
   banner_url: string;
   bot: bool = false;
   mod_state: ModState = Visible;
+  mod_reason: string;
 }
 
 table UserStats {
@@ -82,6 +83,7 @@ table Board {
   can_downvote: bool = true;
   invite_only: bool = false;
   mod_state: ModState = Visible;
+  mod_reason: string;
 }
 
 table BoardStats {
@@ -114,6 +116,7 @@ table Page {
   content_text_safe: string;
   content_warning: string;
   mod_state: ModState = Visible;
+  mod_reason: string;
   has_card: bool = false;
   fetch_tries: uint64 = 0;
   last_fetch_at: uint64 = null;
@@ -145,6 +148,7 @@ table Note {
   content_safe: string (required);
   content_warning: string;
   mod_state: ModState = Visible;
+  mod_reason: string;
 }
 
 enum MediaCategory : ubyte { Image, Audio, Video }

@@ -11,6 +11,11 @@ namespace Ludwig {
     Upvote = 1
   };
 
+  static inline auto karma_uint(int64_t karma) -> uint64_t {
+    if (karma < 0) return (uint64_t)(std::numeric_limits<int64_t>::max() + karma);
+    return (uint64_t)std::numeric_limits<int64_t>::max() + (uint64_t)karma;
+  }
+
   class StringVal {
   private:
     const std::string str;

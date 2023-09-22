@@ -888,10 +888,6 @@ namespace Ludwig {
     set_page(id, builder);
     return id;
   }
-  static inline auto karma_uint(int64_t karma) -> uint64_t {
-    if (karma < 0) return (uint64_t)(std::numeric_limits<int64_t>::max() + karma);
-    return (uint64_t)std::numeric_limits<int64_t>::max() + (uint64_t)karma;
-  }
   auto WriteTxn::set_page(uint64_t id, FlatBufferBuilder& builder) -> void {
     auto page = GetRoot<Page>(builder.GetBufferPointer());
     auto old_page_opt = get_page(id);
