@@ -121,20 +121,20 @@ namespace Ludwig {
     auto list_subscribed_boards(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_created_boards(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
 
-    auto get_page(uint64_t id) -> std::optional<const Page*>;
+    auto get_thread(uint64_t id) -> std::optional<const Thread*>;
     auto get_post_stats(uint64_t id) -> std::optional<const PostStats*>;
-    auto list_pages_of_board_new(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_pages_of_board_top(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_pages_of_user_new(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_pages_of_user_top(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_threads_of_board_new(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_threads_of_board_top(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_threads_of_user_new(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_threads_of_user_top(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
 
-    auto get_note(uint64_t id) -> std::optional<const Note*>;
-    auto list_notes_of_post_new(uint64_t post_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_notes_of_post_top(uint64_t post_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_notes_of_board_new(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_notes_of_board_top(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_notes_of_user_new(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_notes_of_user_top(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto get_comment(uint64_t id) -> std::optional<const Comment*>;
+    auto list_comments_of_post_new(uint64_t post_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_comments_of_post_top(uint64_t post_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_comments_of_board_new(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_comments_of_board_top(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_comments_of_user_new(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_comments_of_user_top(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
 
     auto get_vote_of_user_for_post(uint64_t user_id, uint64_t post_id) -> Vote;
     //auto list_upvoted_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
@@ -164,7 +164,7 @@ namespace Ludwig {
   protected:
     bool committed = false;
     std::atomic<uint8_t> session_counter;
-    auto delete_child_note(uint64_t id, uint64_t board_id) -> uint64_t;
+    auto delete_child_comment(uint64_t id, uint64_t board_id) -> uint64_t;
 
     WriteTxn(DB& db): ReadTxnBase(db) {
       if (auto err = mdb_txn_begin(db.env, nullptr, 0, &txn)) {
@@ -201,13 +201,13 @@ namespace Ludwig {
     auto delete_board(uint64_t id) -> bool;
     auto set_subscription(uint64_t user_id, uint64_t board_id, bool subscribed) -> void;
 
-    auto create_page(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
-    auto set_page(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
-    auto delete_page(uint64_t id) -> bool;
+    auto create_thread(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
+    auto set_thread(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
+    auto delete_thread(uint64_t id) -> bool;
 
-    auto create_note(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
-    auto set_note(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
-    auto delete_note(uint64_t id) -> uint64_t;
+    auto create_comment(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
+    auto set_comment(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
+    auto delete_comment(uint64_t id) -> uint64_t;
 
     auto set_vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;
 

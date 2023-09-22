@@ -29,10 +29,10 @@ table User {
 }
 
 table UserStats {
-  note_count: uint64;
-  note_karma: int64;
-  page_count: uint64;
-  page_karma: int64;
+  comment_count: uint64;
+  comment_karma: int64;
+  thread_count: uint64;
+  thread_karma: int64;
 }
 
 struct Hash {
@@ -87,8 +87,8 @@ table Board {
 }
 
 table BoardStats {
-  page_count: uint64 = 0;
-  note_count: uint64 = 0;
+  thread_count: uint64 = 0;
+  comment_count: uint64 = 0;
   subscriber_count: uint64 = 0;
   users_active_half_year: uint32 = 0;
   users_active_month: uint32 = 0;
@@ -102,7 +102,7 @@ table LocalBoard {
   private: bool = false;
 }
 
-table Page {
+table Thread {
   author: uint64;
   board: uint64;
   title: string (required);
@@ -135,10 +135,10 @@ table PostStats {
   karma: int64 = 0;
 }
 
-table Note {
+table Comment {
   author: uint64;
   parent: uint64;
-  page: uint64;
+  thread: uint64;
   created_at: uint64;
   updated_at: uint64 = null;
   instance: uint64 = null;

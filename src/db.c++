@@ -31,10 +31,10 @@ namespace Ludwig {
     UserStats_User,
     LocalUser_User,
     Owner_UserBoard,
-    Owner_UserPage,
-    Owner_UserNote,
-    PagesTop_UserKarmaPage,
-    NotesTop_UserKarmaNote,
+    Owner_UserThread,
+    Owner_UserComment,
+    ThreadsTop_UserKarmaThread,
+    CommentsTop_UserKarmaComment,
     Bookmark_UserPost,
     Hide_UserPost,
     Hide_UserUser,
@@ -46,21 +46,21 @@ namespace Ludwig {
     Board_Name,
     BoardStats_Board,
     LocalBoard_Board,
-    PagesTop_BoardKarmaPage,
-    PagesNew_BoardTimePage,
-    PagesNewComments_BoardTimePage,
-    PagesMostComments_BoardCommentsPage,
-    NotesTop_BoardKarmaNote,
-    NotesNew_BoardTimeNote,
-    NotesNewComments_BoardTimeNote,
-    NotesMostComments_BoardCommentsNote,
+    ThreadsTop_BoardKarmaThread,
+    ThreadsNew_BoardTimeThread,
+    ThreadsNewComments_BoardTimeThread,
+    ThreadsMostComments_BoardCommentsThread,
+    CommentsTop_BoardKarmaComment,
+    CommentsNew_BoardTimeComment,
+    CommentsNewComments_BoardTimeComment,
+    CommentsMostComments_BoardCommentsComment,
     Subscription_BoardUser,
 
-    Page_Page,
-    Note_Note,
+    Thread_Thread,
+    Comment_Comment,
     PostStats_Post,
-    ChildrenNew_PostTimeNote,
-    ChildrenTop_PostKarmaNote,
+    ChildrenNew_PostTimeComment,
+    ChildrenTop_PostKarmaComment,
     Contains_PostMedia,
 
     Vote_UserPost,
@@ -174,10 +174,10 @@ namespace Ludwig {
     MK_DBI(UserStats_User, MDB_INTEGERKEY)
     MK_DBI(LocalUser_User, MDB_INTEGERKEY)
     MK_DBI(Owner_UserBoard, 0)
-    MK_DBI(Owner_UserPage, 0)
-    MK_DBI(Owner_UserNote, 0)
-    MK_DBI(PagesTop_UserKarmaPage, 0)
-    MK_DBI(NotesTop_UserKarmaNote, 0)
+    MK_DBI(Owner_UserThread, 0)
+    MK_DBI(Owner_UserComment, 0)
+    MK_DBI(ThreadsTop_UserKarmaThread, 0)
+    MK_DBI(CommentsTop_UserKarmaComment, 0)
     MK_DBI(Bookmark_UserPost, 0)
     MK_DBI(Hide_UserPost, 0)
     MK_DBI(Hide_UserUser, 0)
@@ -189,21 +189,21 @@ namespace Ludwig {
     MK_DBI(Board_Name, MDB_INTEGERKEY)
     MK_DBI(BoardStats_Board, MDB_INTEGERKEY)
     MK_DBI(LocalBoard_Board, MDB_INTEGERKEY)
-    MK_DBI(PagesTop_BoardKarmaPage, 0)
-    MK_DBI(PagesNew_BoardTimePage, 0)
-    MK_DBI(PagesNewComments_BoardTimePage, 0)
-    MK_DBI(PagesMostComments_BoardCommentsPage, 0)
-    MK_DBI(NotesTop_BoardKarmaNote, 0)
-    MK_DBI(NotesNew_BoardTimeNote, 0)
-    MK_DBI(NotesNewComments_BoardTimeNote, 0)
-    MK_DBI(NotesMostComments_BoardCommentsNote, 0)
+    MK_DBI(ThreadsTop_BoardKarmaThread, 0)
+    MK_DBI(ThreadsNew_BoardTimeThread, 0)
+    MK_DBI(ThreadsNewComments_BoardTimeThread, 0)
+    MK_DBI(ThreadsMostComments_BoardCommentsThread, 0)
+    MK_DBI(CommentsTop_BoardKarmaComment, 0)
+    MK_DBI(CommentsNew_BoardTimeComment, 0)
+    MK_DBI(CommentsNewComments_BoardTimeComment, 0)
+    MK_DBI(CommentsMostComments_BoardCommentsComment, 0)
     MK_DBI(Subscription_BoardUser, 0)
 
-    MK_DBI(Page_Page, MDB_INTEGERKEY)
-    MK_DBI(Note_Note, MDB_INTEGERKEY)
+    MK_DBI(Thread_Thread, MDB_INTEGERKEY)
+    MK_DBI(Comment_Comment, MDB_INTEGERKEY)
     MK_DBI(PostStats_Post, MDB_INTEGERKEY)
-    MK_DBI(ChildrenNew_PostTimeNote, 0)
-    MK_DBI(ChildrenTop_PostKarmaNote, 0)
+    MK_DBI(ChildrenNew_PostTimeComment, 0)
+    MK_DBI(ChildrenTop_PostKarmaComment, 0)
     MK_DBI(Contains_PostMedia, 0)
 
     MK_DBI(Vote_UserPost, 0)
@@ -344,18 +344,18 @@ namespace Ludwig {
             txn.set_local_board(std::stoull(match[2]), parser.builder_);
             break;
           case 'p':
-            parser.SetRootType("Page");
+            parser.SetRootType("Thread");
             if (!parser.ParseJson(match[3].str().c_str())) {
-              throw std::runtime_error("Failed to parse Page JSON: " + match[3].str());
+              throw std::runtime_error("Failed to parse Thread JSON: " + match[3].str());
             }
-            txn.set_page(std::stoull(match[2]), parser.builder_);
+            txn.set_thread(std::stoull(match[2]), parser.builder_);
             break;
           case 'n':
-            parser.SetRootType("Note");
+            parser.SetRootType("Comment");
             if (!parser.ParseJson(match[3].str().c_str())) {
-              throw std::runtime_error("Failed to parse Note JSON: " + match[3].str());
+              throw std::runtime_error("Failed to parse Comment JSON: " + match[3].str());
             }
-            txn.set_note(std::stoull(match[2]), parser.builder_);
+            txn.set_comment(std::stoull(match[2]), parser.builder_);
             break;
         }
       } else if (std::regex_match(line, match, setting_line)) {
@@ -522,94 +522,94 @@ namespace Ludwig {
     if (db_get(txn, db.dbis[PostStats_Post], id, v)) return {};
     return { GetRoot<PostStats>(v.mv_data) };
   }
-  auto ReadTxnBase::get_page(uint64_t id) -> optional<const Page*> {
+  auto ReadTxnBase::get_thread(uint64_t id) -> optional<const Thread*> {
     MDB_val v;
-    if (db_get(txn, db.dbis[Page_Page], id, v)) return {};
-    return { GetRoot<Page>(v.mv_data) };
+    if (db_get(txn, db.dbis[Thread_Thread], id, v)) return {};
+    return { GetRoot<Thread>(v.mv_data) };
   }
-  auto ReadTxnBase::list_pages_of_board_new(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
+  auto ReadTxnBase::list_threads_of_board_new(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
     return DBIterReverse<uint64_t>(
-      db.dbis[PagesNew_BoardTimePage],
+      db.dbis[ThreadsNew_BoardTimeThread],
       txn,
       cursor ? cursor : optional(Cursor(board_id, ID_MAX, ID_MAX)),
       { Cursor(board_id, 0, 0) }
     );
   }
-  auto ReadTxnBase::list_pages_of_board_top(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
+  auto ReadTxnBase::list_threads_of_board_top(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
     return DBIterReverse<uint64_t>(
-      db.dbis[PagesTop_BoardKarmaPage],
+      db.dbis[ThreadsTop_BoardKarmaThread],
       txn,
       cursor ? cursor : optional(Cursor(board_id, ID_MAX, ID_MAX)),
       { Cursor(board_id, 0, 0) }
     );
   }
-  auto ReadTxnBase::list_pages_of_user_new(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
+  auto ReadTxnBase::list_threads_of_user_new(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
     return DBIterReverse<uint64_t>(
-      db.dbis[Owner_UserPage],
+      db.dbis[Owner_UserThread],
       txn,
       cursor ? cursor : optional(Cursor(user_id, ID_MAX)),
       { Cursor(user_id, 0) },
       second_key
     );
   }
-  auto ReadTxnBase::list_pages_of_user_top(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
+  auto ReadTxnBase::list_threads_of_user_top(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
     return DBIterReverse<uint64_t>(
-      db.dbis[PagesTop_UserKarmaPage],
+      db.dbis[ThreadsTop_UserKarmaThread],
       txn,
       cursor ? cursor : optional(Cursor(user_id, ID_MAX, ID_MAX)),
       { Cursor(user_id, 0, 0) }
     );
   }
 
-  auto ReadTxnBase::get_note(uint64_t id) -> optional<const Note*> {
+  auto ReadTxnBase::get_comment(uint64_t id) -> optional<const Comment*> {
     MDB_val v;
-    if (db_get(txn, db.dbis[Note_Note], id, v)) return {};
-    return { GetRoot<Note>(v.mv_data) };
+    if (db_get(txn, db.dbis[Comment_Comment], id, v)) return {};
+    return { GetRoot<Comment>(v.mv_data) };
   }
-  auto ReadTxnBase::list_notes_of_post_new(uint64_t post_id, OptCursor cursor) -> DBIter<uint64_t> {
+  auto ReadTxnBase::list_comments_of_post_new(uint64_t post_id, OptCursor cursor) -> DBIter<uint64_t> {
     return DBIterReverse<uint64_t>(
-      db.dbis[ChildrenNew_PostTimeNote],
+      db.dbis[ChildrenNew_PostTimeComment],
       txn,
       cursor ? cursor : optional(Cursor(post_id, ID_MAX, ID_MAX)),
       { Cursor(post_id, 0, 0) }
     );
   }
-  auto ReadTxnBase::list_notes_of_post_top(uint64_t post_id, OptCursor cursor) -> DBIter<uint64_t> {
+  auto ReadTxnBase::list_comments_of_post_top(uint64_t post_id, OptCursor cursor) -> DBIter<uint64_t> {
     return DBIterReverse<uint64_t>(
-      db.dbis[ChildrenTop_PostKarmaNote],
+      db.dbis[ChildrenTop_PostKarmaComment],
       txn,
       cursor ? cursor : optional(Cursor(post_id, ID_MAX, ID_MAX)),
       { Cursor(post_id, 0, 0) }
     );
   }
-  auto ReadTxnBase::list_notes_of_board_new(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
+  auto ReadTxnBase::list_comments_of_board_new(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
     return DBIterReverse<uint64_t>(
-      db.dbis[NotesNew_BoardTimeNote],
+      db.dbis[CommentsNew_BoardTimeComment],
       txn,
       cursor ? cursor : optional(Cursor(board_id, ID_MAX, ID_MAX)),
       { Cursor(board_id, 0, 0) }
     );
   }
-  auto ReadTxnBase::list_notes_of_board_top(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
+  auto ReadTxnBase::list_comments_of_board_top(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
     return DBIterReverse<uint64_t>(
-      db.dbis[NotesTop_BoardKarmaNote],
+      db.dbis[CommentsTop_BoardKarmaComment],
       txn,
       cursor ? cursor : optional(Cursor(board_id, ID_MAX, ID_MAX)),
       { Cursor(board_id, 0, 0) }
     );
   }
-  auto ReadTxnBase::list_notes_of_user_new(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
+  auto ReadTxnBase::list_comments_of_user_new(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
     return DBIterReverse<uint64_t>(
-      db.dbis[Owner_UserNote],
+      db.dbis[Owner_UserComment],
       txn,
       cursor ? cursor : optional(Cursor(user_id, ID_MAX)),
       { Cursor(user_id, 0) },
       second_key
     );
   }
-  auto ReadTxnBase::list_notes_of_user_top(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
+  auto ReadTxnBase::list_comments_of_user_top(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
     return DBIterReverse<uint64_t>(
-      db.dbis[NotesTop_UserKarmaNote],
+      db.dbis[CommentsTop_UserKarmaComment],
       txn,
       cursor ? cursor : optional(Cursor(user_id, ID_MAX, ID_MAX)),
       { Cursor(user_id, 0, 0) }
@@ -742,8 +742,8 @@ namespace Ludwig {
           auto s = *board_stats;
           FlatBufferBuilder fbb;
           fbb.Finish(CreateBoardStats(fbb,
-            s->page_count(),
-            s->note_count(),
+            s->thread_count(),
+            s->comment_count(),
             std::min(s->subscriber_count(), s->subscriber_count() - 1),
             s->users_active_half_year(),
             s->users_active_month(),
@@ -754,15 +754,15 @@ namespace Ludwig {
         }
       }
     );
-    delete_range(txn, db.dbis[Owner_UserPage], Cursor(id, 0), Cursor(id, ID_MAX));
-    delete_range(txn, db.dbis[Owner_UserNote], Cursor(id, 0), Cursor(id, ID_MAX));
+    delete_range(txn, db.dbis[Owner_UserThread], Cursor(id, 0), Cursor(id, ID_MAX));
+    delete_range(txn, db.dbis[Owner_UserComment], Cursor(id, 0), Cursor(id, ID_MAX));
     delete_range(txn, db.dbis[Owner_UserBoard], Cursor(id, 0), Cursor(id, ID_MAX));
     delete_range(txn, db.dbis[Owner_UserMedia], Cursor(id, 0), Cursor(id, ID_MAX));
     delete_range(txn, db.dbis[Hide_UserPost], Cursor(id, 0), Cursor(id, ID_MAX));
     delete_range(txn, db.dbis[Hide_UserUser], Cursor(id, 0), Cursor(id, ID_MAX));
     delete_range(txn, db.dbis[Hide_UserBoard], Cursor(id, 0), Cursor(id, ID_MAX));
-    delete_range(txn, db.dbis[PagesTop_UserKarmaPage], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
-    delete_range(txn, db.dbis[NotesTop_UserKarmaNote], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
+    delete_range(txn, db.dbis[ThreadsTop_UserKarmaThread], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
+    delete_range(txn, db.dbis[CommentsTop_UserKarmaComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
     delete_range(txn, db.dbis[Vote_UserPost], Cursor(id, 0), Cursor(id, ID_MAX),
       [&](MDB_val& k, MDB_val&) {
         Cursor c(k);
@@ -839,10 +839,10 @@ namespace Ludwig {
         db_del(txn, db.dbis[Subscription_UserBoard], Cursor(c.int_field_1(), c.int_field_0()));
       }
     );
-    delete_range(txn, db.dbis[PagesNew_BoardTimePage], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
-    delete_range(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
-    delete_range(txn, db.dbis[NotesNew_BoardTimeNote], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
-    delete_range(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
+    delete_range(txn, db.dbis[ThreadsNew_BoardTimeThread], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
+    delete_range(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
+    delete_range(txn, db.dbis[CommentsNew_BoardTimeComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
+    delete_range(txn, db.dbis[CommentsTop_BoardKarmaComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
 
     return true;
   }
@@ -871,8 +871,8 @@ namespace Ludwig {
       auto s = *board_stats;
       FlatBufferBuilder fbb;
       fbb.Finish(CreateBoardStats(fbb,
-        s->page_count(),
-        s->note_count(),
+        s->thread_count(),
+        s->comment_count(),
         subscriber_count,
         s->users_active_half_year(),
         s->users_active_month(),
@@ -883,112 +883,112 @@ namespace Ludwig {
     }
   }
 
-  auto WriteTxn::create_page(FlatBufferBuilder& builder) -> uint64_t {
+  auto WriteTxn::create_thread(FlatBufferBuilder& builder) -> uint64_t {
     uint64_t id = next_id();
-    set_page(id, builder);
+    set_thread(id, builder);
     return id;
   }
-  auto WriteTxn::set_page(uint64_t id, FlatBufferBuilder& builder) -> void {
-    auto page = GetRoot<Page>(builder.GetBufferPointer());
-    auto old_page_opt = get_page(id);
+  auto WriteTxn::set_thread(uint64_t id, FlatBufferBuilder& builder) -> void {
+    auto thread = GetRoot<Thread>(builder.GetBufferPointer());
+    auto old_thread_opt = get_thread(id);
     FlatBufferBuilder fbb;
     int64_t karma = 0;
-    if (old_page_opt) {
-      spdlog::debug("Updating top-level post {:x} (board {:x}, author {:x})", id, page->board(), page->author());
+    if (old_thread_opt) {
+      spdlog::debug("Updating top-level post {:x} (board {:x}, author {:x})", id, thread->board(), thread->author());
       auto stats_opt = get_post_stats(id);
-      assert_fmt(!!stats_opt, "set_page: post_stats not in database for existing page {:x}", id);
+      assert_fmt(!!stats_opt, "set_thread: post_stats not in database for existing thread {:x}", id);
       karma = (*stats_opt)->karma();
-      auto old_page = *old_page_opt;
-      assert_fmt(page->author() == old_page->author(), "set_page: cannot change author of page {:x}", id);
-      assert_fmt(page->created_at() == old_page->created_at(), "set_page: cannot change created_at of page {:x}", id);
-      if (page->board() != old_page->board()) {
-        db_del(txn, db.dbis[PagesNew_BoardTimePage], Cursor(old_page->board(), page->created_at(), id));
-        db_del(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(old_page->board(), karma_uint(karma), id));
-        if (auto board_stats = get_board_stats(old_page->board())) {
+      auto old_thread = *old_thread_opt;
+      assert_fmt(thread->author() == old_thread->author(), "set_thread: cannot change author of thread {:x}", id);
+      assert_fmt(thread->created_at() == old_thread->created_at(), "set_thread: cannot change created_at of thread {:x}", id);
+      if (thread->board() != old_thread->board()) {
+        db_del(txn, db.dbis[ThreadsNew_BoardTimeThread], Cursor(old_thread->board(), thread->created_at(), id));
+        db_del(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(old_thread->board(), karma_uint(karma), id));
+        if (auto board_stats = get_board_stats(old_thread->board())) {
           auto s = *board_stats;
           fbb.Finish(CreateBoardStats(fbb,
-            std::min(s->page_count(), s->page_count() - 1),
-            s->note_count(),
+            std::min(s->thread_count(), s->thread_count() - 1),
+            s->comment_count(),
             s->subscriber_count(),
             s->users_active_half_year(),
             s->users_active_month(),
             s->users_active_week(),
             s->users_active_day()
           ));
-          db_put(txn, db.dbis[BoardStats_Board], old_page->board(), fbb);
+          db_put(txn, db.dbis[BoardStats_Board], old_thread->board(), fbb);
         }
       }
     } else {
-      spdlog::debug("Creating top-level post {:x} (board {:x}, author {:x})", id, page->board(), page->author());
-      db_put(txn, db.dbis[Owner_UserPage], Cursor(page->author(), id), page->author());
-      db_put(txn, db.dbis[PagesTop_UserKarmaPage], Cursor(page->author(), 1, id), id);
-      db_put(txn, db.dbis[PagesNew_BoardTimePage], Cursor(page->board(), page->created_at(), id), id);
-      db_put(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(page->board(), karma_uint(karma), id), id);
-      db_put(txn, db.dbis[PagesNewComments_BoardTimePage], Cursor(page->board(), page->created_at(), id), id);
-      db_put(txn, db.dbis[PagesMostComments_BoardCommentsPage], Cursor(page->board(), 0, id), id);
+      spdlog::debug("Creating top-level post {:x} (board {:x}, author {:x})", id, thread->board(), thread->author());
+      db_put(txn, db.dbis[Owner_UserThread], Cursor(thread->author(), id), thread->author());
+      db_put(txn, db.dbis[ThreadsTop_UserKarmaThread], Cursor(thread->author(), 1, id), id);
+      db_put(txn, db.dbis[ThreadsNew_BoardTimeThread], Cursor(thread->board(), thread->created_at(), id), id);
+      db_put(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(thread->board(), karma_uint(karma), id), id);
+      db_put(txn, db.dbis[ThreadsNewComments_BoardTimeThread], Cursor(thread->board(), thread->created_at(), id), id);
+      db_put(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(thread->board(), 0, id), id);
       fbb.ForceDefaults(true);
-      fbb.Finish(CreatePostStats(fbb, page->created_at()));
+      fbb.Finish(CreatePostStats(fbb, thread->created_at()));
       db_put(txn, db.dbis[PostStats_Post], id, fbb);
-      if (auto user_stats = get_user_stats(page->author())) {
+      if (auto user_stats = get_user_stats(thread->author())) {
         auto s = *user_stats;
         fbb.Clear();
         fbb.Finish(CreateUserStats(fbb,
-          s->note_count(),
-          s->note_karma(),
-          s->page_count() + 1,
-          s->page_karma()
+          s->comment_count(),
+          s->comment_karma(),
+          s->thread_count() + 1,
+          s->thread_karma()
         ));
-        db_put(txn, db.dbis[UserStats_User], page->author(), fbb);
+        db_put(txn, db.dbis[UserStats_User], thread->author(), fbb);
       }
-      if (auto board_stats = get_board_stats(page->board())) {
+      if (auto board_stats = get_board_stats(thread->board())) {
         auto s = *board_stats;
         fbb.Clear();
         fbb.Finish(CreateBoardStats(fbb,
-          s->page_count() + 1,
-          s->note_count(),
+          s->thread_count() + 1,
+          s->comment_count(),
           s->subscriber_count(),
           s->users_active_half_year(),
           s->users_active_month(),
           s->users_active_week(),
           s->users_active_day()
         ));
-        db_put(txn, db.dbis[BoardStats_Board], page->board(), fbb);
+        db_put(txn, db.dbis[BoardStats_Board], thread->board(), fbb);
       }
     }
-    db_put(txn, db.dbis[Page_Page], id, builder);
+    db_put(txn, db.dbis[Thread_Thread], id, builder);
   }
-  auto WriteTxn::delete_child_note(uint64_t id, uint64_t board_id) -> uint64_t {
-    const auto note_opt = get_note(id);
+  auto WriteTxn::delete_child_comment(uint64_t id, uint64_t board_id) -> uint64_t {
+    const auto comment_opt = get_comment(id);
     const auto stats_opt = get_post_stats(id);
-    if (!note_opt || !stats_opt) {
+    if (!comment_opt || !stats_opt) {
       spdlog::warn("Tried to delete nonexistent comment {:x}", id);
       return 0;
     }
-    const auto note = *note_opt;
+    const auto comment = *comment_opt;
     const auto stats = *stats_opt;
     const auto karma = stats->karma();
     const auto latest_comment = stats->latest_comment(),
       descendant_count = stats->descendant_count(),
-      author = note->author(),
-      created_at = note->created_at(),
-      parent = note->parent();
+      author = comment->author(),
+      created_at = comment->created_at(),
+      parent = comment->parent();
 
     spdlog::debug("Deleting comment {:x} (parent {:x}, author {:x}, board {:x})", id, parent, author, board_id);
     if (auto user_stats = get_user_stats(author)) {
       auto s = *user_stats;
       FlatBufferBuilder fbb;
       fbb.Finish(CreateUserStats(fbb,
-        std::min(s->note_count(), s->note_count() - 1),
-        karma > 0 ? std::min(s->note_karma(), s->note_karma() - karma) : s->note_karma() - karma,
-        s->page_count(),
-        s->page_karma()
+        std::min(s->comment_count(), s->comment_count() - 1),
+        karma > 0 ? std::min(s->comment_karma(), s->comment_karma() - karma) : s->comment_karma() - karma,
+        s->thread_count(),
+        s->thread_karma()
       ));
-      db_put(txn, db.dbis[UserStats_User], note->author(), fbb);
+      db_put(txn, db.dbis[UserStats_User], comment->author(), fbb);
     }
-    db_del(txn, db.dbis[NotesNew_BoardTimeNote], Cursor(board_id, created_at, id));
-    db_del(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor(board_id, karma_uint(karma), id));
-    db_del(txn, db.dbis[NotesNewComments_BoardTimeNote], Cursor(board_id, latest_comment, id));
-    db_del(txn, db.dbis[NotesMostComments_BoardCommentsNote], Cursor(board_id, descendant_count, id));
+    db_del(txn, db.dbis[CommentsNew_BoardTimeComment], Cursor(board_id, created_at, id));
+    db_del(txn, db.dbis[CommentsTop_BoardKarmaComment], Cursor(board_id, karma_uint(karma), id));
+    db_del(txn, db.dbis[CommentsNewComments_BoardTimeComment], Cursor(board_id, latest_comment, id));
+    db_del(txn, db.dbis[CommentsMostComments_BoardCommentsComment], Cursor(board_id, descendant_count, id));
 
     delete_range(txn, db.dbis[Vote_PostUser], Cursor(id, 0), Cursor(id, ID_MAX),
       [&](MDB_val& k, MDB_val&) {
@@ -997,39 +997,39 @@ namespace Ludwig {
       }
     );
     std::set<uint64_t> children;
-    delete_range(txn, db.dbis[ChildrenNew_PostTimeNote], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX),
+    delete_range(txn, db.dbis[ChildrenNew_PostTimeComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX),
       [&children](MDB_val&, MDB_val& v) {
         children.insert(val_as<uint64_t>(v));
       }
     );
-    delete_range(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
+    delete_range(txn, db.dbis[ChildrenTop_PostKarmaComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
 
-    db_del(txn, db.dbis[Note_Note], id);
+    db_del(txn, db.dbis[Comment_Comment], id);
     db_del(txn, db.dbis[PostStats_Post], id);
-    db_del(txn, db.dbis[Owner_UserNote], Cursor(author, id));
-    db_del(txn, db.dbis[ChildrenNew_PostTimeNote], Cursor(parent, created_at, id));
-    db_del(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor(parent, karma_uint(karma), id));
+    db_del(txn, db.dbis[Owner_UserComment], Cursor(author, id));
+    db_del(txn, db.dbis[ChildrenNew_PostTimeComment], Cursor(parent, created_at, id));
+    db_del(txn, db.dbis[ChildrenTop_PostKarmaComment], Cursor(parent, karma_uint(karma), id));
 
     uint64_t n = 0;
     for (uint64_t child : children) {
       assert(child != id);
-      n += delete_child_note(child, board_id);
+      n += delete_child_comment(child, board_id);
     }
     return n;
   }
-  auto WriteTxn::delete_page(uint64_t id) -> bool {
-    const auto page_opt = get_page(id);
+  auto WriteTxn::delete_thread(uint64_t id) -> bool {
+    const auto thread_opt = get_thread(id);
     const auto stats_opt = get_post_stats(id);
-    if (!page_opt || !stats_opt) {
+    if (!thread_opt || !stats_opt) {
       spdlog::warn("Tried to delete nonexistent top-level post {:x}", id);
       return false;
     }
-    const auto page = *page_opt;
+    const auto thread = *thread_opt;
     const auto stats = *stats_opt;
     const auto karma = stats->karma();
-    const auto author = page->author(),
-      board = page->board(),
-      created_at = page->created_at(),
+    const auto author = thread->author(),
+      board = thread->board(),
+      created_at = thread->created_at(),
       latest_comment = stats->latest_comment(),
       descendant_count = stats->descendant_count();
 
@@ -1038,10 +1038,10 @@ namespace Ludwig {
     if (auto user_stats = get_user_stats(author)) {
       auto s = *user_stats;
       fbb.Finish(CreateUserStats(fbb,
-        s->note_count(),
-        s->note_karma(),
-        std::min(s->page_count(), s->page_count() - 1),
-        karma > 0 ? std::min(s->page_karma(), s->page_karma() - karma) : s->page_karma() - karma
+        s->comment_count(),
+        s->comment_karma(),
+        std::min(s->thread_count(), s->thread_count() - 1),
+        karma > 0 ? std::min(s->thread_karma(), s->thread_karma() - karma) : s->thread_karma() - karma
       ));
       db_put(txn, db.dbis[UserStats_User], author, fbb);
       fbb.Clear();
@@ -1049,8 +1049,8 @@ namespace Ludwig {
     if (auto board_stats = get_board_stats(board)) {
       auto s = *board_stats;
       fbb.Finish(CreateBoardStats(fbb,
-        std::min(s->page_count(), s->page_count() - 1),
-        std::min(s->note_count(), s->note_count() - descendant_count),
+        std::min(s->thread_count(), s->thread_count() - 1),
+        std::min(s->comment_count(), s->comment_count() - descendant_count),
         s->subscriber_count(),
         s->users_active_half_year(),
         s->users_active_month(),
@@ -1068,81 +1068,81 @@ namespace Ludwig {
       }
     );
     std::set<uint64_t> children;
-    delete_range(txn, db.dbis[ChildrenNew_PostTimeNote], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX),
+    delete_range(txn, db.dbis[ChildrenNew_PostTimeComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX),
       [&children](MDB_val&, MDB_val& v) {
         children.insert(val_as<uint64_t>(v));
       }
     );
-    delete_range(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
+    delete_range(txn, db.dbis[ChildrenTop_PostKarmaComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
 
-    db_del(txn, db.dbis[Page_Page], id);
+    db_del(txn, db.dbis[Thread_Thread], id);
     db_del(txn, db.dbis[PostStats_Post], id);
-    db_del(txn, db.dbis[Owner_UserPage], Cursor(author, id));
-    db_del(txn, db.dbis[PagesTop_UserKarmaPage], Cursor(author, karma_uint(karma), id));
-    db_del(txn, db.dbis[PagesNew_BoardTimePage], Cursor(board, created_at, id));
-    db_del(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(board, karma_uint(karma), id));
-    db_del(txn, db.dbis[PagesNewComments_BoardTimePage], Cursor(board, latest_comment, id));
-    db_del(txn, db.dbis[PagesMostComments_BoardCommentsPage], Cursor(board, descendant_count, id));
+    db_del(txn, db.dbis[Owner_UserThread], Cursor(author, id));
+    db_del(txn, db.dbis[ThreadsTop_UserKarmaThread], Cursor(author, karma_uint(karma), id));
+    db_del(txn, db.dbis[ThreadsNew_BoardTimeThread], Cursor(board, created_at, id));
+    db_del(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(board, karma_uint(karma), id));
+    db_del(txn, db.dbis[ThreadsNewComments_BoardTimeThread], Cursor(board, latest_comment, id));
+    db_del(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(board, descendant_count, id));
 
-    for (uint64_t child : children) delete_child_note(child, board);
+    for (uint64_t child : children) delete_child_comment(child, board);
 
     return true;
   }
 
-  auto WriteTxn::create_note(FlatBufferBuilder& builder) -> uint64_t {
+  auto WriteTxn::create_comment(FlatBufferBuilder& builder) -> uint64_t {
     uint64_t id = next_id();
-    set_note(id, builder);
+    set_comment(id, builder);
     return id;
   }
-  auto WriteTxn::set_note(uint64_t id, FlatBufferBuilder& builder) -> void {
-    const auto note = GetRoot<Note>(builder.GetBufferPointer());
-    const auto old_note_opt = get_note(id);
+  auto WriteTxn::set_comment(uint64_t id, FlatBufferBuilder& builder) -> void {
+    const auto comment = GetRoot<Comment>(builder.GetBufferPointer());
+    const auto old_comment_opt = get_comment(id);
     const auto stats_opt = get_post_stats(id);
-    const auto page_opt = get_page(note->page());
+    const auto thread_opt = get_thread(comment->thread());
     int64_t karma = 0;
-    assert_fmt(!!page_opt, "set_note: note {:x} top-level ancestor page {:x} does not exist", id, note->page());
-    const auto page = *page_opt;
-    const auto author = note->author(), board = page->board();
-    if (old_note_opt) {
-      spdlog::debug("Updating comment {:x} (parent {:x}, author {:x})", id, note->parent(), note->author());
+    assert_fmt(!!thread_opt, "set_comment: comment {:x} top-level ancestor thread {:x} does not exist", id, comment->thread());
+    const auto thread = *thread_opt;
+    const auto author = comment->author(), board = thread->board();
+    if (old_comment_opt) {
+      spdlog::debug("Updating comment {:x} (parent {:x}, author {:x})", id, comment->parent(), comment->author());
       assert(!!stats_opt);
-      const auto old_note = *old_note_opt;
+      const auto old_comment = *old_comment_opt;
       const auto stats = *stats_opt;
       karma = stats->karma();
-      assert(note->author() == old_note->author());
-      assert(note->parent() == old_note->parent());
-      assert(note->page() == old_note->page());
-      assert(note->created_at() == old_note->created_at());
+      assert(comment->author() == old_comment->author());
+      assert(comment->parent() == old_comment->parent());
+      assert(comment->thread() == old_comment->thread());
+      assert(comment->created_at() == old_comment->created_at());
     } else {
-      spdlog::debug("Creating comment {:x} (parent {:x}, author {:x})", id, note->parent(), note->author());
-      db_put(txn, db.dbis[Owner_UserNote], Cursor(author, id), author);
-      db_put(txn, db.dbis[NotesTop_UserKarmaNote], Cursor(author, karma_uint(karma), id), id);
-      db_put(txn, db.dbis[NotesNew_BoardTimeNote], Cursor(board, note->created_at(), id), id);
-      db_put(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor(board, karma_uint(karma), id), id);
-      db_put(txn, db.dbis[ChildrenNew_PostTimeNote], Cursor(note->parent(), note->created_at(), id), id);
-      db_put(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor(note->parent(), karma_uint(karma), id), id);
+      spdlog::debug("Creating comment {:x} (parent {:x}, author {:x})", id, comment->parent(), comment->author());
+      db_put(txn, db.dbis[Owner_UserComment], Cursor(author, id), author);
+      db_put(txn, db.dbis[CommentsTop_UserKarmaComment], Cursor(author, karma_uint(karma), id), id);
+      db_put(txn, db.dbis[CommentsNew_BoardTimeComment], Cursor(board, comment->created_at(), id), id);
+      db_put(txn, db.dbis[CommentsTop_BoardKarmaComment], Cursor(board, karma_uint(karma), id), id);
+      db_put(txn, db.dbis[ChildrenNew_PostTimeComment], Cursor(comment->parent(), comment->created_at(), id), id);
+      db_put(txn, db.dbis[ChildrenTop_PostKarmaComment], Cursor(comment->parent(), karma_uint(karma), id), id);
       FlatBufferBuilder fbb;
       fbb.ForceDefaults(true);
-      fbb.Finish(CreatePostStats(fbb, note->created_at()));
+      fbb.Finish(CreatePostStats(fbb, comment->created_at()));
       db_put(txn, db.dbis[PostStats_Post], id, fbb);
 
-      for (optional<const Note*> note_opt = {note}; note_opt; note_opt = get_note((*note_opt)->parent())) {
-        const auto parent = (*note_opt)->parent();
+      for (optional<const Comment*> comment_opt = {comment}; comment_opt; comment_opt = get_comment((*comment_opt)->parent())) {
+        const auto parent = (*comment_opt)->parent();
         if (const auto parent_stats_opt = get_post_stats(parent)) {
           uint64_t parent_created_at;
-          if (auto parent_opt = get_note(parent)) parent_created_at = (*parent_opt)->created_at();
-          else if (parent == note->page()) parent_created_at = page->created_at();
+          if (auto parent_opt = get_comment(parent)) parent_created_at = (*parent_opt)->created_at();
+          else if (parent == comment->thread()) parent_created_at = thread->created_at();
           else continue;
           const auto s = *parent_stats_opt;
-          const bool is_active = note->created_at() >= parent_created_at &&
-              note->created_at() - parent_created_at <= ACTIVE_COMMENT_MAX_AGE,
-            is_newer = is_active && note->created_at() > s->latest_comment();
+          const bool is_active = comment->created_at() >= parent_created_at &&
+              comment->created_at() - parent_created_at <= ACTIVE_COMMENT_MAX_AGE,
+            is_newer = is_active && comment->created_at() > s->latest_comment();
           const auto last_latest_comment = s->latest_comment(),
             last_descendant_count = s->descendant_count();
           fbb.Clear();
           fbb.Finish(CreatePostStats(fbb,
-            is_newer ? note->created_at() : s->latest_comment(),
-            is_active ? s->latest_comment_necro() : std::max(s->latest_comment_necro(), note->created_at()),
+            is_newer ? comment->created_at() : s->latest_comment(),
+            is_active ? s->latest_comment_necro() : std::max(s->latest_comment_necro(), comment->created_at()),
             s->descendant_count() + 1,
             s->child_count() + 1,
             s->upvotes(),
@@ -1150,20 +1150,20 @@ namespace Ludwig {
             s->karma()
           ));
           db_put(txn, db.dbis[PostStats_Post], parent, fbb);
-          if (parent == note->page()) {
+          if (parent == comment->thread()) {
             if (is_newer) {
-              db_del(txn, db.dbis[PagesNewComments_BoardTimePage], Cursor(board, last_latest_comment, parent));
-              db_put(txn, db.dbis[PagesNewComments_BoardTimePage], Cursor(board, note->created_at(), parent), parent);
+              db_del(txn, db.dbis[ThreadsNewComments_BoardTimeThread], Cursor(board, last_latest_comment, parent));
+              db_put(txn, db.dbis[ThreadsNewComments_BoardTimeThread], Cursor(board, comment->created_at(), parent), parent);
             }
-            db_del(txn, db.dbis[PagesMostComments_BoardCommentsPage], Cursor(board, last_descendant_count, parent));
-            db_put(txn, db.dbis[PagesMostComments_BoardCommentsPage], Cursor(board, last_descendant_count + 1, parent), parent);
+            db_del(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(board, last_descendant_count, parent));
+            db_put(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(board, last_descendant_count + 1, parent), parent);
           } else {
             if (is_newer) {
-              db_del(txn, db.dbis[NotesNewComments_BoardTimeNote], Cursor(board, last_latest_comment, parent));
-              db_put(txn, db.dbis[NotesNewComments_BoardTimeNote], Cursor(board, note->created_at(), parent), parent);
+              db_del(txn, db.dbis[CommentsNewComments_BoardTimeComment], Cursor(board, last_latest_comment, parent));
+              db_put(txn, db.dbis[CommentsNewComments_BoardTimeComment], Cursor(board, comment->created_at(), parent), parent);
             }
-            db_del(txn, db.dbis[NotesMostComments_BoardCommentsNote], Cursor(board, last_descendant_count, parent));
-            db_put(txn, db.dbis[NotesMostComments_BoardCommentsNote], Cursor(board, last_descendant_count + 1, parent), parent);
+            db_del(txn, db.dbis[CommentsMostComments_BoardCommentsComment], Cursor(board, last_descendant_count, parent));
+            db_put(txn, db.dbis[CommentsMostComments_BoardCommentsComment], Cursor(board, last_descendant_count + 1, parent), parent);
           }
         }
       }
@@ -1171,10 +1171,10 @@ namespace Ludwig {
         auto s = *user_stats;
         fbb.Clear();
         fbb.Finish(CreateUserStats(fbb,
-          s->note_count() + 1,
-          s->note_karma(),
-          s->page_count(),
-          s->page_karma()
+          s->comment_count() + 1,
+          s->comment_karma(),
+          s->thread_count(),
+          s->thread_karma()
         ));
         db_put(txn, db.dbis[UserStats_User], author, fbb);
       }
@@ -1182,8 +1182,8 @@ namespace Ludwig {
         auto s = *board_stats;
         fbb.Clear();
         fbb.Finish(CreateBoardStats(fbb,
-          s->page_count(),
-          s->note_count() + 1,
+          s->thread_count(),
+          s->comment_count() + 1,
           s->subscriber_count(),
           s->users_active_half_year(),
           s->users_active_month(),
@@ -1193,26 +1193,26 @@ namespace Ludwig {
         db_put(txn, db.dbis[BoardStats_Board], board, fbb);
       }
     }
-    db_put(txn, db.dbis[Note_Note], id, builder);
+    db_put(txn, db.dbis[Comment_Comment], id, builder);
   }
-  auto WriteTxn::delete_note(uint64_t id) -> uint64_t {
-    const auto note_opt = get_note(id);
+  auto WriteTxn::delete_comment(uint64_t id) -> uint64_t {
+    const auto comment_opt = get_comment(id);
     const auto stats_opt = get_post_stats(id);
-    if (!note_opt || !stats_opt) {
+    if (!comment_opt || !stats_opt) {
       spdlog::warn("Tried to delete nonexistent comment {:x}", id);
       return false;
     }
-    const auto note = *note_opt;
+    const auto comment = *comment_opt;
     const auto stats = *stats_opt;
-    const auto page_id = note->page();
-    const auto page_opt = get_page(page_id);
-    assert_fmt(!!page_opt, "delete_note: note {:x} top-level ancestor page {:x} does not exist", id, page_id);
-    const auto board_id = (*page_opt)->board(),
+    const auto thread_id = comment->thread();
+    const auto thread_opt = get_thread(thread_id);
+    assert_fmt(!!thread_opt, "delete_comment: comment {:x} top-level ancestor thread {:x} does not exist", id, thread_id);
+    const auto board_id = (*thread_opt)->board(),
       descendant_count = stats->descendant_count();
 
     FlatBufferBuilder fbb;
-    for (optional<const Note*> note_opt = {note}; note_opt; note_opt = get_note((*note_opt)->parent())) {
-      const auto parent = (*note_opt)->parent();
+    for (optional<const Comment*> comment_opt = {comment}; comment_opt; comment_opt = get_comment((*comment_opt)->parent())) {
+      const auto parent = (*comment_opt)->parent();
       if (const auto parent_stats_opt = get_post_stats(parent)) {
         const auto s = *parent_stats_opt;
         const auto last_descendant_count = s->descendant_count(),
@@ -1223,7 +1223,7 @@ namespace Ludwig {
           s->latest_comment(),
           s->latest_comment_necro(),
           next_descendant_count,
-          parent == note->parent()
+          parent == comment->parent()
             ? std::min(s->child_count(), s->child_count() - 1)
             : s->child_count(),
           s->upvotes(),
@@ -1231,12 +1231,12 @@ namespace Ludwig {
           s->karma()
         ));
         db_put(txn, db.dbis[PostStats_Post], parent, fbb);
-        if (parent == note->page()) {
-          db_del(txn, db.dbis[PagesMostComments_BoardCommentsPage], Cursor(board_id, last_descendant_count, parent));
-          db_put(txn, db.dbis[PagesMostComments_BoardCommentsPage], Cursor(board_id, next_descendant_count, parent), parent);
+        if (parent == comment->thread()) {
+          db_del(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(board_id, last_descendant_count, parent));
+          db_put(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(board_id, next_descendant_count, parent), parent);
         } else {
-          db_del(txn, db.dbis[NotesMostComments_BoardCommentsNote], Cursor(board_id, last_descendant_count, parent));
-          db_put(txn, db.dbis[NotesMostComments_BoardCommentsNote], Cursor(board_id, next_descendant_count, parent), parent);
+          db_del(txn, db.dbis[CommentsMostComments_BoardCommentsComment], Cursor(board_id, last_descendant_count, parent));
+          db_put(txn, db.dbis[CommentsMostComments_BoardCommentsComment], Cursor(board_id, next_descendant_count, parent), parent);
         }
       }
     }
@@ -1244,8 +1244,8 @@ namespace Ludwig {
       const auto s = *board_stats_opt;
       fbb.Clear();
       fbb.Finish(CreateBoardStats(fbb,
-        s->page_count(),
-        (descendant_count + 1) > s->note_count() ? 0 : s->note_count() - (descendant_count + 1),
+        s->thread_count(),
+        (descendant_count + 1) > s->comment_count() ? 0 : s->comment_count() - (descendant_count + 1),
         s->subscriber_count(),
         s->users_active_half_year(),
         s->users_active_month(),
@@ -1255,17 +1255,17 @@ namespace Ludwig {
       db_put(txn, db.dbis[BoardStats_Board], board_id, fbb);
     }
 
-    return delete_child_note(id, board_id);
+    return delete_child_comment(id, board_id);
   }
 
   auto WriteTxn::set_vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void {
     const auto existing = get_vote_of_user_for_post(user_id, post_id);
     const int64_t diff = vote - existing;
     if (!diff) return;
-    const auto page_opt = get_page(post_id);
-    const auto note_opt = page_opt ? std::nullopt : get_note(post_id);
-    assert(page_opt || note_opt);
-    const auto op_id = page_opt ? (*page_opt)->author() : (*note_opt)->author();
+    const auto thread_opt = get_thread(post_id);
+    const auto comment_opt = thread_opt ? std::nullopt : get_comment(post_id);
+    assert(thread_opt || comment_opt);
+    const auto op_id = thread_opt ? (*thread_opt)->author() : (*comment_opt)->author();
     const auto op = get_user(op_id);
     assert(!!op);
     spdlog::debug("Setting vote from user {:x} on post {:x} to {}", user_id, post_id, (int8_t)vote);
@@ -1301,30 +1301,30 @@ namespace Ludwig {
       const auto s = *op_stats_opt;
       fbb.Clear();
       fbb.Finish(CreateUserStats(fbb,
-        s->note_count(),
-        s->note_karma() + (page_opt ? 0 : diff),
-        s->page_count(),
-        s->page_karma() + (page_opt ? diff : 0)
+        s->comment_count(),
+        s->comment_karma() + (thread_opt ? 0 : diff),
+        s->thread_count(),
+        s->thread_karma() + (thread_opt ? diff : 0)
       ));
       db_put(txn, db.dbis[UserStats_User], op_id, fbb);
     }
-    if (page_opt) {
-      const auto page = *page_opt;
-      db_del(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(page->board(), karma_uint(old_karma), post_id));
-      db_del(txn, db.dbis[PagesTop_UserKarmaPage], Cursor(page->author(), karma_uint(old_karma), post_id));
-      db_put(txn, db.dbis[PagesTop_BoardKarmaPage], Cursor(page->board(), karma_uint(new_karma), post_id), post_id);
-      db_put(txn, db.dbis[PagesTop_UserKarmaPage], Cursor(page->author(), karma_uint(new_karma), post_id), post_id);
+    if (thread_opt) {
+      const auto thread = *thread_opt;
+      db_del(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(thread->board(), karma_uint(old_karma), post_id));
+      db_del(txn, db.dbis[ThreadsTop_UserKarmaThread], Cursor(thread->author(), karma_uint(old_karma), post_id));
+      db_put(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(thread->board(), karma_uint(new_karma), post_id), post_id);
+      db_put(txn, db.dbis[ThreadsTop_UserKarmaThread], Cursor(thread->author(), karma_uint(new_karma), post_id), post_id);
     } else {
-      const auto note = *note_opt;
-      const auto note_page_opt = get_page(note->page());
-      assert(!!note_page_opt);
-      const auto note_page = *note_page_opt;
-      db_del(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor(note_page->board(), karma_uint(old_karma), post_id));
-      db_del(txn, db.dbis[NotesTop_UserKarmaNote], Cursor(note->author(), karma_uint(old_karma), post_id));
-      db_del(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor(note->parent(), karma_uint(old_karma), post_id));
-      db_put(txn, db.dbis[NotesTop_BoardKarmaNote], Cursor(note_page->board(), karma_uint(new_karma), post_id), post_id);
-      db_put(txn, db.dbis[NotesTop_UserKarmaNote], Cursor(note->author(), karma_uint(new_karma), post_id), post_id);
-      db_put(txn, db.dbis[ChildrenTop_PostKarmaNote], Cursor(note->parent(), karma_uint(new_karma), post_id), post_id);
+      const auto comment = *comment_opt;
+      const auto comment_thread_opt = get_thread(comment->thread());
+      assert(!!comment_thread_opt);
+      const auto comment_thread = *comment_thread_opt;
+      db_del(txn, db.dbis[CommentsTop_BoardKarmaComment], Cursor(comment_thread->board(), karma_uint(old_karma), post_id));
+      db_del(txn, db.dbis[CommentsTop_UserKarmaComment], Cursor(comment->author(), karma_uint(old_karma), post_id));
+      db_del(txn, db.dbis[ChildrenTop_PostKarmaComment], Cursor(comment->parent(), karma_uint(old_karma), post_id));
+      db_put(txn, db.dbis[CommentsTop_BoardKarmaComment], Cursor(comment_thread->board(), karma_uint(new_karma), post_id), post_id);
+      db_put(txn, db.dbis[CommentsTop_UserKarmaComment], Cursor(comment->author(), karma_uint(new_karma), post_id), post_id);
+      db_put(txn, db.dbis[ChildrenTop_PostKarmaComment], Cursor(comment->parent(), karma_uint(new_karma), post_id), post_id);
     }
   }
 }

@@ -308,12 +308,12 @@ summary + * {
   margin-left: 1rem;
 }
 
-ol.page-list, ol.note-list, ol.comment-list, ol.board-list {
+ol.thread-list, ol.comment-list, ol.board-list {
   margin: 0;
   padding: 0;
 }
 
-.page-list > li, .note-list > li, .comment-list > li, .board-list > li {
+.thread-list > li, .comment-list > li, .board-list > li {
   list-style-type: none;
   margin: 0;
   padding: 0;
@@ -327,7 +327,7 @@ ol.page-list, ol.note-list, ol.comment-list, ol.board-list {
   margin-left: 2rem;
 }
 
-.page {
+.thread {
   list-style-type: none;
   display: grid;
   margin: 0;
@@ -341,7 +341,7 @@ ol.page-list, ol.note-list, ol.comment-list, ol.board-list {
   min-width: 0;
 }
 
-.note {
+.comment {
   list-style-type: none;
   display: grid;
   margin: 0.5rem 0;
@@ -356,28 +356,28 @@ ol.page-list, ol.note-list, ol.comment-list, ol.board-list {
   min-width: 0;
 }
 
-.page-title {
+.thread-title {
   grid-area: title;
   font-size: 1.25rem;
   min-width: 0;
   margin: 0;
 }
 
-.page-source {
+.thread-source {
   font-weight: normal;
   font-size: 0.8rem;
 }
 
-a:link.page-title-link, a:visited.page-title-link, .controls a:link, .controls a:visited {
+a:link.thread-title-link, a:visited.thread-title-link, .controls a:link, .controls a:visited {
   font-weight: bold;
   text-decoration: none;
 }
 
-.page-info a:link, .page-info a:visited, .note-info a:link, .note-info a:visited {
+.thread-info a:link, .thread-info a:visited, .comment-info a:link, .comment-info a:visited {
   text-decoration: none;
 }
 
-a:hover.page-title-link, .page-info a:hover, .note-info a:hover, .controls a:hover {
+a:hover.thread-title-link, .thread-info a:hover, .comment-info a:hover, .controls a:hover {
   text-decoration: underline;
 }
 
@@ -401,7 +401,7 @@ a:hover.page-title-link, .page-info a:hover, .note-info a:hover, .controls a:hov
   color: var(--color-fg-dim);
 }
 
-.page-info {
+.thread-info {
   grid-area: info;
   color: var(--color-fg-dim);
   font-size: 0.8rem;
@@ -409,7 +409,7 @@ a:hover.page-title-link, .page-info a:hover, .note-info a:hover, .controls a:hov
   margin: 0.5rem 0;
 }
 
-.note-info {
+.comment-info {
   grid-area: info;
   font-size: 0.8rem;
   font-weight: bold;
@@ -417,7 +417,7 @@ a:hover.page-title-link, .page-info a:hover, .note-info a:hover, .controls a:hov
   margin: 0;
 }
 
-.page-info img, .page-info .icon, .note-info img, .note-info .icon {
+.thread-info img, .thread-info .icon, .comment-info img, .comment-info .icon {
   display: inline-block;
   width: 1rem;
   height: 1rem;
@@ -459,12 +459,12 @@ time, abbr {
   text-decoration-style: dotted;
 }
 
-.note-content {
+.comment-content {
   grid-area: content;
   margin: 1rem 0;
 }
 
-.page-content {
+.thread-content {
   background-color: var(--color-bg-dim);
   border: dotted var(--color-fg);
   border-width: 1px 0;
@@ -576,11 +576,11 @@ label.upvote, label.downvote {
   text-decoration: underline;
 }
 
-.note-with-comments .comment-list {
+.comment-with-comments .comment-list {
   margin-left: 1rem;
 }
 
-.comment-list .note {
+.comment {
   border-left: 2px solid var(--color-accent);
 }
 

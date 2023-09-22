@@ -157,12 +157,12 @@ function genLocalBoard(
   return { id, board, localBoard: { owner } };
 }
 
-function genPage(
+function genThread(
   date: Date,
   author: number,
   board: number,
   instance?: { id: number; domain: string },
-): { id: number; page: Page } {
+): { id: number; thread: Thread } {
   let title: string,
     content_url: string | undefined,
     content_text_safe: string | undefined;
@@ -180,7 +180,7 @@ function genPage(
   const id = nextId++;
   return {
     id,
-    page: {
+    thread: {
       author,
       board,
       title,
@@ -210,20 +210,20 @@ function genPage(
   };
 }
 
-function genNote(
+function genComment(
   parent: number,
   date: Date,
   author: number,
-  page: number,
+  thread: number,
   instance?: { id: number; domain: string },
-): { id: number; note: Note } {
+): { id: number; comment: Comment } {
   const id = nextId++;
   return {
     id,
-    note: {
+    comment: {
       author,
       parent,
-      page,
+      thread,
       created_at: Math.floor(date.valueOf() / 1000),
       updated_at: faker.helpers.maybe(
         () =>
@@ -330,7 +330,7 @@ interface LocalBoard {
   private?: boolean;
 }
 
-interface Page {
+interface Thread {
   author: number;
   board: number;
   title: string;
@@ -346,10 +346,10 @@ interface Page {
   mod_state?: ModState;
 }
 
-interface Note {
+interface Comment {
   author: number;
   parent: number;
-  page: number;
+  thread: number;
   created_at: number;
   updated_at?: number;
   instance?: number;
@@ -394,34 +394,34 @@ function genAll(scale = 10) {
       to: Date(),
       count: scale * 100,
     }),
-    { pages, notes } = postDates.slice(scale).reduce(
-      ({ pages, notes }, date) => {
+    { threads, comments } = postDates.slice(scale).reduce(
+      ({ threads, comments }, date) => {
         const user = faker.helpers.arrayElement(users);
         const instance = instances.find((i) => i.id === user.user.instance);
         if (faker.datatype.boolean()) {
           return {
-            pages: [
-              ...pages,
-              genPage(
+            threads: [
+              ...threads,
+              genThread(
                 date,
                 user.id,
                 faker.helpers.arrayElement(boards).id,
                 instance,
               ),
             ],
-            notes,
+            comments,
           };
         } else {
-          const parent = faker.helpers.arrayElement([...pages, ...notes]);
+          const parent = faker.helpers.arrayElement([...threads, ...comments]);
           return {
-            pages,
-            notes: [
-              ...notes,
-              genNote(
+            threads,
+            comments: [
+              ...comments,
+              genComment(
                 parent.id,
                 date,
                 user.id,
-                "page" in parent ? parent.id : parent.note.page,
+                "thread" in parent ? parent.id : parent.comment.thread,
                 instance,
               ),
             ],
@@ -429,16 +429,16 @@ function genAll(scale = 10) {
         }
       },
       {
-        pages: postDates.slice(0, scale).map((date) => {
+        threads: postDates.slice(0, scale).map((date) => {
           const user = faker.helpers.arrayElement(users);
-          return genPage(
+          return genThread(
             date,
             user.id,
             faker.helpers.arrayElement(boards).id,
             instances.find((i) => i.id === user.user.instance),
           );
         }),
-        notes: [] as { id: number; note: Note }[],
+        comments: [] as { id: number; comment: Comment }[],
       },
     );
 
@@ -478,13 +478,18 @@ function genAll(scale = 10) {
   for (const b of localBoards) {
     console.log(`B ${b.id} ${JSON.stringify(b.localBoard)}`);
   }
-  for (const p of pages) {
-    console.log(`p ${p.id} ${JSON.stringify(p.page)}`);
+  for (const p of threads) {
+    console.log(`p ${p.id} ${JSON.stringify(p.thread)}`);
   }
-  for (const n of notes) {
-    console.log(`n ${n.id} ${JSON.stringify(n.note)}`);
+  for (const n of comments) {
+    console.log(`n ${n.id} ${JSON.stringify(n.comment)}`);
   }
-  for (const post of [...pages.map((p) => p.id), ...notes.map((n) => n.id)]) {
+  for (
+    const post of [
+      ...threads.map((p) => p.id),
+      ...comments.map((n) => n.id),
+    ]
+  ) {
     const totalVotes = faker.number.int({ min: 0, max: users.length }),
       voters = faker.helpers.arrayElements(users, totalVotes);
     for (const { id: user } of voters) {

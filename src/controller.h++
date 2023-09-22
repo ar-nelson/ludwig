@@ -71,24 +71,24 @@ namespace Ludwig {
     const Board* board;
   };
 
-  struct PageListEntry {
+  struct ThreadListEntry {
     uint64_t id;
     double rank;
     Vote your_vote;
-    const Page* page;
+    const Thread* thread;
     const PostStats* stats;
     const User* author;
     const Board* board;
   };
 
-  struct NoteListEntry {
+  struct CommentListEntry {
     uint64_t id;
     double rank;
     Vote your_vote;
-    const Note* note;
+    const Comment* comment;
     const PostStats* stats;
     const User* author;
-    const Page* page;
+    const Thread* thread;
     const Board* board;
   };
 
@@ -106,15 +106,15 @@ namespace Ludwig {
     std::optional<uint64_t> next;
   };
 
-  struct ListPagesResponse {
-    std::array<PageListEntry, ITEMS_PER_PAGE> page;
+  struct ListThreadsResponse {
+    std::array<ThreadListEntry, ITEMS_PER_PAGE> page;
     size_t size;
     bool is_first;
     std::optional<uint64_t> next;
   };
 
-  struct ListNotesResponse {
-    std::array<NoteListEntry, ITEMS_PER_PAGE> page;
+  struct ListCommentsResponse {
+    std::array<CommentListEntry, ITEMS_PER_PAGE> page;
     size_t size;
     bool is_first;
     std::optional<uint64_t> next;
@@ -122,13 +122,13 @@ namespace Ludwig {
 
   struct CommentTree {
     std::unordered_map<uint64_t, uint64_t> continued;
-    std::multimap<uint64_t, NoteListEntry> notes;
+    std::multimap<uint64_t, CommentListEntry> comments;
 
     inline auto size() -> size_t {
-      return notes.size();
+      return comments.size();
     }
-    inline auto emplace(uint64_t parent, NoteListEntry e) -> void {
-      notes.emplace(parent, e);
+    inline auto emplace(uint64_t parent, CommentListEntry e) -> void {
+      comments.emplace(parent, e);
     }
     inline auto mark_continued(uint64_t parent, uint64_t from = 0) {
       continued.emplace(parent, from);
@@ -151,11 +151,11 @@ namespace Ludwig {
     const LocalBoard* local_board;
   };
 
-  struct PageDetailResponse : PageListEntry {
+  struct ThreadDetailResponse : ThreadListEntry {
     CommentTree comments;
   };
 
-  struct NoteDetailResponse : NoteListEntry {
+  struct CommentDetailResponse : CommentListEntry {
     CommentTree comments;
   };
 
@@ -186,10 +186,10 @@ namespace Ludwig {
     BoardDelete,
     PageUpdate,
     PageStatsUpdate,
-    PageDelete,
-    NoteUpdate,
-    NoteStatsUpdate,
-    NoteDelete,
+    ThreadDelete,
+    CommentUpdate,
+    CommentStatsUpdate,
+    CommentDelete,
     MaxEvent
   };
 
@@ -286,20 +286,20 @@ namespace Ludwig {
 
     using Login = const std::optional<LocalUserDetailResponse>&;
 
-    static auto should_show(const PageListEntry& page, Login login, bool hide_cw = false) -> bool;
-    static auto should_show(const NoteListEntry& note, Login login, bool hide_cw = false) -> bool;
+    static auto should_show(const ThreadListEntry& thread, Login login, bool hide_cw = false) -> bool;
+    static auto should_show(const CommentListEntry& comment, Login login, bool hide_cw = false) -> bool;
     static auto should_show(const BoardListEntry& board, Login login, bool hide_cw = false) -> bool;
-    static auto can_create_page(const BoardListEntry& board, Login login) -> bool;
-    static auto can_reply_to(const PageListEntry& page, Login login) -> bool;
-    static auto can_reply_to(const NoteListEntry& note, Login login) -> bool;
-    static auto can_edit(const PageListEntry& page, Login login) -> bool;
-    static auto can_edit(const NoteListEntry& note, Login login) -> bool;
-    static auto can_delete(const PageListEntry& page, Login login) -> bool;
-    static auto can_delete(const NoteListEntry& note, Login login) -> bool;
-    static auto can_upvote(const PageListEntry& page, Login login) -> bool;
-    static auto can_upvote(const NoteListEntry& note, Login login) -> bool;
-    static auto can_downvote(const PageListEntry& page, Login login) -> bool;
-    static auto can_downvote(const NoteListEntry& note, Login login) -> bool;
+    static auto can_create_thread(const BoardListEntry& board, Login login) -> bool;
+    static auto can_reply_to(const ThreadListEntry& thread, Login login) -> bool;
+    static auto can_reply_to(const CommentListEntry& comment, Login login) -> bool;
+    static auto can_edit(const ThreadListEntry& thread, Login login) -> bool;
+    static auto can_edit(const CommentListEntry& comment, Login login) -> bool;
+    static auto can_delete(const ThreadListEntry& thread, Login login) -> bool;
+    static auto can_delete(const CommentListEntry& comment, Login login) -> bool;
+    static auto can_upvote(const ThreadListEntry& thread, Login login) -> bool;
+    static auto can_upvote(const CommentListEntry& comment, Login login) -> bool;
+    static auto can_downvote(const ThreadListEntry& thread, Login login) -> bool;
+    static auto can_downvote(const CommentListEntry& comment, Login login) -> bool;
 
     inline auto open_read_txn() -> ReadTxn {
       return db->open_read_txn();
@@ -320,59 +320,59 @@ namespace Ludwig {
     inline auto site_detail() -> const SiteDetail* {
       return &cached_site_detail;
     }
-    auto page_detail(
+    auto thread_detail(
       ReadTxnBase& txn,
       uint64_t id,
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
       bool skip_cw = false,
       std::optional<uint64_t> from_id = {}
-    ) -> PageDetailResponse;
-    auto note_detail(
+    ) -> ThreadDetailResponse;
+    auto comment_detail(
       ReadTxnBase& txn,
       uint64_t id,
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
       bool skip_cw = false,
       std::optional<uint64_t> from_id = {}
-    ) -> NoteDetailResponse;
+    ) -> CommentDetailResponse;
     auto user_detail(ReadTxnBase& txn, uint64_t id) -> UserDetailResponse;
     auto local_user_detail(ReadTxnBase& txn, uint64_t id) -> LocalUserDetailResponse;
     auto board_detail(ReadTxnBase& txn, uint64_t id) -> BoardDetailResponse;
     auto list_local_users(ReadTxnBase& txn, std::optional<uint64_t> from_id = {}) -> ListUsersResponse;
     auto list_local_boards(ReadTxnBase& txn, std::optional<uint64_t> from_id = {}) -> ListBoardsResponse;
-    auto list_board_pages(
+    auto list_board_threads(
       ReadTxnBase& txn,
       uint64_t board_id,
       SortType sort = SortType::Hot,
       Login login = {},
       bool skip_cw = false,
       std::optional<uint64_t> from_id = {}
-    ) -> ListPagesResponse;
-    auto list_board_notes(
+    ) -> ListThreadsResponse;
+    auto list_board_comments(
       ReadTxnBase& txn,
       uint64_t board_id,
       SortType sort = SortType::Hot,
       Login login = {},
       bool skip_cw = false,
       std::optional<uint64_t> from_id = {}
-    ) -> ListNotesResponse;
-    auto list_user_pages(
+    ) -> ListCommentsResponse;
+    auto list_user_threads(
       ReadTxnBase& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
       bool skip_cw = false,
       std::optional<uint64_t> from_id = {}
-    ) -> ListPagesResponse;
-    auto list_user_notes(
+    ) -> ListThreadsResponse;
+    auto list_user_comments(
       ReadTxnBase& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
       bool skip_cw = false,
       std::optional<uint64_t> from_id = {}
-    ) -> ListNotesResponse;
+    ) -> ListCommentsResponse;
     auto create_local_user(
       std::string_view username,
       std::string_view email,
@@ -387,7 +387,7 @@ namespace Ludwig {
       bool is_restricted_posting = false,
       bool is_local_only = false
     ) -> uint64_t;
-    auto create_local_page(
+    auto create_local_thread(
       uint64_t author,
       uint64_t board,
       std::string_view title,
@@ -395,7 +395,7 @@ namespace Ludwig {
       std::optional<std::string_view> text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
-    auto create_local_note(
+    auto create_local_comment(
       uint64_t author,
       uint64_t parent,
       std::string_view text_content_markdown,

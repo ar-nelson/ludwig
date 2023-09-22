@@ -269,7 +269,7 @@ namespace Ludwig {
         // TODO: Subscribed boards
         rsp << R"(<li id="topbar-user"><a href="/u/)" << Escape{logged_in_user->user->name()->string_view()}
           << R"(">)" << Escape{logged_in_user->user->display_name()->string_view()}
-          << R"(</a> ()" << (logged_in_user->stats->page_karma() + logged_in_user->stats->note_karma())
+          << R"(</a> ()" << (logged_in_user->stats->thread_karma() + logged_in_user->stats->comment_karma())
           << R"()<li><a href="/settings">Settings</a><li><a href="/logout">Logout</a></ul></nav>)";
       } else {
         // TODO: Top local boards
@@ -335,7 +335,7 @@ namespace Ludwig {
           R"(<input type="submit" value="Login" class="big-button"></form>)"
           R"(<a href="/register" class="big-button">Register</a>)"
           "</section>";
-      } else if (board && Controller::can_create_page(*board, logged_in_user)) {
+      } else if (board && Controller::can_create_thread(*board, logged_in_user)) {
         rsp << R"(<section id="actions-section"><h2>Actions</h2><a class="big-button" href="/b/)"
           << Escape{board->board->name()->string_view()} << R"(/create_thread">Submit a new link</a><a class="big-button" href="/b/)"
           << Escape{board->board->name()->string_view()} << R"(/create_thread?text=true">Submit a new text post</a></section>)";
@@ -556,51 +556,51 @@ namespace Ludwig {
       rsp << R"(</div>)";
     }
 
-    static auto write_page_list(
+    static auto write_thread_list(
       Response& rsp,
-      const ListPagesResponse& list,
+      const ListThreadsResponse& list,
       string_view base_url,
       bool logged_in,
       bool show_user = true,
       bool show_board = true,
       bool show_images = true
     ) noexcept -> void {
-      rsp << R"(<ol class="page-list">)";
+      rsp << R"(<ol class="thread-list">)";
       for (size_t i = 0; i < list.size; i++) {
-        const auto page = &list.page[i];
-        const auto id = hexstring(page->id);
-        rsp << R"(<li><article class="page" id="page-)" << id <<
-          R"("><h2 class="page-title"><a class="page-title-link" href=")";
-        if (page->page->content_url()) {
-          rsp << Escape{page->page->content_url()->string_view()};
+        const auto thread = &list.page[i];
+        const auto id = hexstring(thread->id);
+        rsp << R"(<li><article class="thread" id="thread-)" << id <<
+          R"("><h2 class="thread-title"><a class="thread-title-link" href=")";
+        if (thread->thread->content_url()) {
+          rsp << Escape{thread->thread->content_url()->string_view()};
         } else {
           rsp << "/thread/" << id;
         }
-        rsp << R"(">)" << Escape{page->page->title()->string_view()} << "</a></h2>";
-        // TODO: page-source (link URL)
+        rsp << R"(">)" << Escape{thread->thread->title()->string_view()} << "</a></h2>";
+        // TODO: thread-source (link URL)
         // TODO: thumbnail
         rsp << R"(<div class="thumbnail"><svg class="icon"><use href="/static/feather-sprite.svg#)"
-          << (page->page->content_warning() ? "alert-octagon" : (page->page->content_url() ? "link" : "file-text"))
-          << R"("></svg></div><div class="page-info">)";
-        if (page->page->content_warning()) {
+          << (thread->thread->content_warning() ? "alert-octagon" : (thread->thread->content_url() ? "link" : "file-text"))
+          << R"("></svg></div><div class="thread-info">)";
+        if (thread->thread->content_warning()) {
           rsp << R"(<p class="content-warning"><strong class="content-warning-label">Content Warning<span class="a11y">:</span></strong> )"
-            << Escape{page->page->content_warning()->string_view()} << "</p>";
+            << Escape{thread->thread->content_warning()->string_view()} << "</p>";
         }
         rsp << "submitted ";
-        write_datetime(rsp, page->page->created_at());
+        write_datetime(rsp, thread->thread->created_at());
         if (show_user) {
           rsp << " by ";
-          write_user_link(rsp, page->author);
+          write_user_link(rsp, thread->author);
         }
         if (show_board) {
           rsp << " to ";
-          write_board_link(rsp, page->board);
+          write_board_link(rsp, thread->board);
         }
         rsp << "</div>";
-        write_vote_buttons(rsp, page->id, page->stats->karma(), logged_in, page->your_vote);
+        write_vote_buttons(rsp, thread->id, thread->stats->karma(), logged_in, thread->your_vote);
         rsp << R"(<div class="controls"><a id="comment-link-)" << id
-          << R"(" href="/thread/)" << id << R"(#comments">)" << page->stats->descendant_count()
-          << (page->stats->descendant_count() == 1 ? " comment" : " comments")
+          << R"(" href="/thread/)" << id << R"(#comments">)" << thread->stats->descendant_count()
+          << (thread->stats->descendant_count() == 1 ? " comment" : " comments")
           << R"(</a><div class="controls-submenu-wrapper"><button type="button" class="controls-submenu-expand">More</button>)"
             R"(<form class="controls-submenu" method="post"><input type="hidden" name="post" value=")" << id
           << R"("><button type="submit" formaction="/do/save">Save</button>)"
@@ -611,39 +611,39 @@ namespace Ludwig {
       write_pagination(rsp, base_url, list.is_first, list.next);
     }
 
-    static auto write_note_list(
+    static auto write_comment_list(
       Response& rsp,
-      const ListNotesResponse& list,
+      const ListCommentsResponse& list,
       string_view base_url,
       bool logged_in,
       bool show_user = true,
-      bool show_page = true
+      bool show_thread = true
     ) noexcept -> void {
-      rsp << R"(<ol class="note-list">)";
+      rsp << R"(<ol class="comment-list">)";
       for (size_t i = 0; i < list.size; i++) {
-        const auto note = &list.page[i];
-        const auto id = hexstring(note->id);
-        rsp << R"(<li><article class="note" id="note-)" << id
-          << R"("><h2 class="note-info">)";
+        const auto comment = &list.page[i];
+        const auto id = hexstring(comment->id);
+        rsp << R"(<li><article class="comment" id="comment-)" << id
+          << R"("><h2 class="comment-info">)";
         if (show_user) {
-          write_user_link(rsp, note->author);
+          write_user_link(rsp, comment->author);
           rsp << " ";
         }
         rsp << "commented ";
-        write_datetime(rsp, note->note->created_at());
-        if (show_page) {
-          rsp << R"( on <a href="/thread/)" << hexstring(note->note->page()) << R"(">)"
-            << Escape{note->page->title()->string_view()} << "</a>";
-          if (note->page->content_warning()) {
+        write_datetime(rsp, comment->comment->created_at());
+        if (show_thread) {
+          rsp << R"( on <a href="/thread/)" << hexstring(comment->comment->thread()) << R"(">)"
+            << Escape{comment->thread->title()->string_view()} << "</a>";
+          if (comment->thread->content_warning()) {
             rsp << R"( <abbr class="content-warning-label" title="Content Warning: )" <<
-              Escape{note->page->content_warning()->string_view()} << R"(">CW</abbr>)";
+              Escape{comment->thread->content_warning()->string_view()} << R"(">CW</abbr>)";
           }
         }
-        rsp << R"(</h2><div class="note-content">)" << note->note->content_safe()->string_view() << "</div>";
-        write_vote_buttons(rsp, note->id, note->stats->karma(), logged_in, note->your_vote);
+        rsp << R"(</h2><div class="comment-content">)" << comment->comment->content_safe()->string_view() << "</div>";
+        write_vote_buttons(rsp, comment->id, comment->stats->karma(), logged_in, comment->your_vote);
         rsp << R"(<div class="controls"><a id="comment-link-)" << id
-          << R"(" href="/comment/)" << id << R"(#replies">)" << note->stats->child_count()
-          << (note->stats->child_count() == 1 ? " reply" : " replies")
+          << R"(" href="/comment/)" << id << R"(#replies">)" << comment->stats->child_count()
+          << (comment->stats->child_count() == 1 ? " reply" : " replies")
           << R"(</a><div class="controls-submenu-wrapper"><button type="button" class="controls-submenu-expand">More</button>)"
             R"(<form class="controls-submenu" method="post"><input type="hidden" name="post" value=")" << id
           << R"("><button type="submit" formaction="/do/save">Save</button>)"
@@ -659,27 +659,27 @@ namespace Ludwig {
       const CommentTree& comments,
       uint64_t root,
       bool logged_in,
-      bool is_page = true
+      bool is_thread = true
     ) noexcept -> void {
       // TODO: Include existing query params
-      auto range = comments.notes.equal_range(root);
+      auto range = comments.comments.equal_range(root);
       if (range.first == range.second) {
-        if (is_page) rsp << R"(<div class="no-comments">No comments</div>)";
+        if (is_thread) rsp << R"(<div class="no-comments">No comments</div>)";
         return;
       }
       rsp << R"(<ol class="comment-list" id="comments-)" << hexstring(root) << R"(">)";
       for (auto iter = range.first; iter != range.second; iter++) {
-        const auto note = &iter->second;
-        const auto id = hexstring(note->id);
-        rsp << R"(<li><article class="note-with-comments"><div class="note" id=")" << id
-          << R"("><h3 class="note-info">)";
-        write_user_link(rsp, note->author);
+        const auto comment = &iter->second;
+        const auto id = hexstring(comment->id);
+        rsp << R"(<li><article class="comment-with-comments"><div class="comment" id=")" << id
+          << R"("><h3 class="comment-info">)";
+        write_user_link(rsp, comment->author);
         rsp << " commented ";
-        write_datetime(rsp, note->note->created_at());
-        rsp << R"(</h3><div class="note-content">)" << note->note->content_safe()->string_view() << "</div>";
-        write_vote_buttons(rsp, note->id, note->stats->karma(), logged_in, note->your_vote);
+        write_datetime(rsp, comment->comment->created_at());
+        rsp << R"(</h3><div class="comment-content">)" << comment->comment->content_safe()->string_view() << "</div>";
+        write_vote_buttons(rsp, comment->id, comment->stats->karma(), logged_in, comment->your_vote);
         rsp << R"(<div class="controls">)";
-        if (logged_in && note->note->mod_state() < ModState::Locked) {
+        if (logged_in && comment->comment->mod_state() < ModState::Locked) {
           rsp << R"(<a href="/comment/)" << id << R"(#reply">Reply</a>)";
         }
         rsp << R"(<div class="controls-submenu-wrapper"><button type="button" class="controls-submenu-expand">More</button>)"
@@ -687,13 +687,13 @@ namespace Ludwig {
           << R"("><button type="submit" formaction="/do/save">Save</button>)"
             R"(<button type="submit" formaction="/do/hide">Hide</button><a target="_blank" href="/report_post/)" << id
           << R"(">Report</a></form></div></div></div>)";
-        const auto cont = comments.continued.find(note->id);
+        const auto cont = comments.continued.find(comment->id);
         if (cont != comments.continued.end() && cont->second == 0) {
           rsp << R"(<div class="comments-continued" id="continue-)" << id << R"("><a href="/comment/)" << id
             << R"(">More comments…</a></div>)";
-        } else if (note->stats->child_count()) {
+        } else if (comment->stats->child_count()) {
           rsp << R"(<section class="comments" aria-title="Replies">)";
-          write_comment_tree(rsp, comments, note->id, logged_in, false);
+          write_comment_tree(rsp, comments, comment->id, logged_in, false);
           rsp << "</section>";
         }
         rsp << "</article>";
@@ -701,63 +701,63 @@ namespace Ludwig {
       const auto cont = comments.continued.find(root);
       if (cont != comments.continued.end()) {
         rsp << R"(<li><div class="comments-continued" id="continue-)" << root << R"("><a href="/)"
-          << (is_page ? "post" : "comment") << "/" << hexstring(root) << "?from=" << hexstring(cont->second)
+          << (is_thread ? "thread" : "comment") << "/" << hexstring(root) << "?from=" << hexstring(cont->second)
           << R"(">More comments…</a></div>)";
       }
       rsp << "</ol>";
     }
 
-    static auto write_page_view(
+    static auto write_thread_view(
       Response& rsp,
-      const PageDetailResponse* page,
+      const ThreadDetailResponse* thread,
       bool logged_in,
       std::string_view sort_str = "",
       bool show_images = false,
       bool show_cws = false
     ) noexcept -> void {
-      const auto id = hexstring(page->id);
-      rsp << R"(<article class="page-with-comments"><div class="page" id="page-)" << id <<
-        R"("><h2 class="page-title">)";
-      if (page->page->content_url()) {
-        rsp << R"(<a class="page-title-link" href=")" << Escape{page->page->content_url()->string_view()} << R"(">)";
+      const auto id = hexstring(thread->id);
+      rsp << R"(<article class="thread-with-comments"><div class="thread" id="thread-)" << id <<
+        R"("><h2 class="thread-title">)";
+      if (thread->thread->content_url()) {
+        rsp << R"(<a class="thread-title-link" href=")" << Escape{thread->thread->content_url()->string_view()} << R"(">)";
       }
-      rsp << Escape{page->page->title()->string_view()};
-      if (page->page->content_url()) rsp << "</a>";
+      rsp << Escape{thread->thread->title()->string_view()};
+      if (thread->thread->content_url()) rsp << "</a>";
       rsp << "</h2>";
-      // TODO: page-source (link URL)
+      // TODO: thread-source (link URL)
       // TODO: thumbnail
       rsp << R"(<div class="thumbnail"><svg class="icon"><use href="/static/feather-sprite.svg#)"
-        << (page->page->content_warning() ? "alert-octagon" : (page->page->content_url() ? "link" : "file-text"))
-        << R"("></svg></div><div class="page-info">)";
-      if (page->page->content_warning()) {
+        << (thread->thread->content_warning() ? "alert-octagon" : (thread->thread->content_url() ? "link" : "file-text"))
+        << R"("></svg></div><div class="thread-info">)";
+      if (thread->thread->content_warning()) {
         rsp << R"(<p class="content-warning"><strong class="content-warning-label">Content Warning<span class="a11y">:</span></strong> )"
-          << Escape{page->page->content_warning()->string_view()} << "</p>";
+          << Escape{thread->thread->content_warning()->string_view()} << "</p>";
       }
       rsp << "submitted ";
-      write_datetime(rsp, page->page->created_at());
+      write_datetime(rsp, thread->thread->created_at());
       rsp << " by ";
-      write_user_link(rsp, page->author);
+      write_user_link(rsp, thread->author);
       rsp << " to ";
-      write_board_link(rsp, page->board);
+      write_board_link(rsp, thread->board);
       rsp << "</div>";
-      write_vote_buttons(rsp, page->id, page->stats->karma(), logged_in, page->your_vote);
+      write_vote_buttons(rsp, thread->id, thread->stats->karma(), logged_in, thread->your_vote);
       rsp << R"(<div class="controls"><div class="controls-submenu-wrapper"><button type="button" class="controls-submenu-expand">More</button>)"
           R"(<form class="controls-submenu" method="post"><input type="hidden" name="post" value=")" << id
         << R"("><button type="submit" formaction="/do/save">Save</button>)"
           R"(<button type="submit" formaction="/do/hide">Hide</button><a target="_blank" href="/report_post/)" << id
         << R"(">Report</a></form></div></div></div>)";
-      if (page->page->content_text_safe()) {
-        rsp << R"(<div class="page-content">)" << page->page->content_text_safe()->string_view()
+      if (thread->thread->content_text_safe()) {
+        rsp << R"(<div class="thread-content">)" << thread->thread->content_text_safe()->string_view()
           << "</div>";
       }
-      rsp << R"(<section class="comments"><h2>)" << page->stats->descendant_count() << R"( comments</h2>)";
-      if (page->stats->descendant_count()) {
+      rsp << R"(<section class="comments"><h2>)" << thread->stats->descendant_count() << R"( comments</h2>)";
+      if (thread->stats->descendant_count()) {
         write_sort_options(
           rsp, sort_str.empty() ? "Hot" : sort_str, SortFormType::Comments,
-          !page->board->content_warning() && !page->page->content_warning(),
+          !thread->board->content_warning() && !thread->thread->content_warning(),
           false, show_images, show_cws
         );
-        write_comment_tree(rsp, page->comments, page->id, logged_in);
+        write_comment_tree(rsp, thread->comments, thread->id, logged_in);
       }
       rsp << "</section></article>";
     }
@@ -791,7 +791,7 @@ namespace Ludwig {
     }
 
     /*
-    static auto write_create_page_form(Response& rsp, optional<string_view> error = {}) noexcept -> void {
+    static auto write_create_thread_form(Response& rsp, optional<string_view> error = {}) noexcept -> void {
 
     }
 
@@ -874,8 +874,8 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         const SiteDetail* site;
         BoardDetailResponse board;
-        ListPagesResponse pages;
-        ListNotesResponse notes;
+        ListThreadsResponse threads;
+        ListCommentsResponse comments;
         std::string_view sort_str;
         bool show_posts, show_images, show_cws;
         page(txn, [&](Request& req, auto& login) {
@@ -892,9 +892,9 @@ namespace Ludwig {
           site = self->controller->site_detail();
           board = self->controller->board_detail(txn, *board_id);
           if (show_posts) {
-            pages = self->controller->list_board_pages(txn, *board_id, sort, login, !show_cws, from);
+            threads = self->controller->list_board_threads(txn, *board_id, sort, login, !show_cws, from);
           } else {
-            notes = self->controller->list_board_notes(txn, *board_id, sort, login, !show_cws, from);
+            comments = self->controller->list_board_comments(txn, *board_id, sort, login, !show_cws, from);
           }
         }, [&](auto& rsp, auto& login) {
           write_html_header(rsp, site, login, {
@@ -915,8 +915,8 @@ namespace Ludwig {
             show_images ? 1 : 0,
             show_cws ? 1 : 0
           );
-          if (show_posts) write_page_list(rsp, pages, base_url, !!login, true, false, show_images);
-          else write_note_list(rsp, notes, base_url, !!login, true, true);
+          if (show_posts) write_thread_list(rsp, threads, base_url, !!login, true, false, show_images);
+          else write_comment_list(rsp, comments, base_url, !!login, true, true);
           rsp << "</main></div>";
           end_with_html_footer(rsp, page.time_elapsed());
         });
@@ -925,8 +925,8 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         const SiteDetail* site;
         UserDetailResponse user;
-        ListPagesResponse pages;
-        ListNotesResponse notes;
+        ListThreadsResponse threads;
+        ListCommentsResponse comments;
         std::string_view sort_str;
         bool show_posts, show_images, show_cws;
         page(txn, [&](Request& req, auto& login) {
@@ -943,9 +943,9 @@ namespace Ludwig {
           site = self->controller->site_detail();
           user = self->controller->user_detail(txn, *user_id);
           if (show_posts) {
-            pages = self->controller->list_user_pages(txn, *user_id, sort, login, !show_cws, from);
+            threads = self->controller->list_user_threads(txn, *user_id, sort, login, !show_cws, from);
           } else {
-            notes = self->controller->list_user_notes(txn, *user_id, sort, login, !show_cws, from);
+            comments = self->controller->list_user_comments(txn, *user_id, sort, login, !show_cws, from);
           }
         }, [&](auto& rsp, auto& login) {
           write_html_header(rsp, site, login, {
@@ -966,8 +966,8 @@ namespace Ludwig {
             show_images ? 1 : 0,
             show_cws ? 1 : 0
           );
-          if (show_posts) write_page_list(rsp, pages, base_url, !!login, false, true, show_images);
-          else write_note_list(rsp, notes, base_url, !!login, false, true);
+          if (show_posts) write_thread_list(rsp, threads, base_url, !!login, false, true, show_images);
+          else write_comment_list(rsp, comments, base_url, !!login, false, true);
           rsp << "</main></div>";
           end_with_html_footer(rsp, page.time_elapsed());
         });
@@ -976,7 +976,7 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         const SiteDetail* site;
         BoardDetailResponse board;
-        PageDetailResponse detail;
+        ThreadDetailResponse detail;
         std::string_view sort_str;
         bool show_images, show_cws;
         page(txn, [&](Request& req, auto& login) {
@@ -989,8 +989,8 @@ namespace Ludwig {
           show_images = req.getQuery("images") == "1" || sort_str.empty();
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           site = self->controller->site_detail();
-          detail = self->controller->page_detail(txn, *id, sort, login, !show_cws, from);
-          board = self->controller->board_detail(txn, detail.page->board());
+          detail = self->controller->thread_detail(txn, *id, sort, login, !show_cws, from);
+          board = self->controller->board_detail(txn, detail.thread->board());
         }, [&](auto& rsp, auto& login) {
           write_html_header(rsp, site, login, {
             .canonical_path = fmt::format("/thread/{:x}", detail.id),
@@ -1002,7 +1002,7 @@ namespace Ludwig {
           rsp << "<div>";
           write_sidebar(rsp, site, login, {board});
           rsp << "<main>";
-          write_page_view(rsp, &detail, !!login, sort_str, show_cws, show_images);
+          write_thread_view(rsp, &detail, !!login, sort_str, show_cws, show_images);
           rsp << "</main></div>";
           end_with_html_footer(rsp, page.time_elapsed());
         });
@@ -1145,7 +1145,7 @@ namespace Ludwig {
         });
       }));
       app.post("/b/:name/create_thread", action_page([](Self self, auto&, auto& rsp, auto body, auto logged_in_user) {
-        const auto id = self->controller->create_local_page(
+        const auto id = self->controller->create_local_thread(
           logged_in_user,
           body.required_hex_id("board"),
           body.required_string("title"),
@@ -1160,7 +1160,7 @@ namespace Ludwig {
         });
       }));
       app.post("/thread/:id/create_comment", action_page([](Self self, auto& req, auto& rsp, auto body, auto logged_in_user) {
-        self->controller->create_local_note(
+        self->controller->create_local_comment(
           logged_in_user,
           body.required_hex_id("parent"),
           body.required_string("text_content"),
