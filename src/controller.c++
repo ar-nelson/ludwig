@@ -67,12 +67,12 @@ namespace Ludwig {
     if (!stats) return Cursor(prefix, 0, 0);
     return Cursor(prefix, (*stats)->descendant_count(), (*from_id) - 1);
   }
-  static inline auto get_thread_entry(
+  auto Controller::get_thread_entry(
     ReadTxnBase& txn,
     uint64_t thread_id,
     Controller::Login login,
-    optional<const User*> author = {},
-    optional<const Board*> board = {}
+    optional<const User*> author,
+    optional<const Board*> board
   ) -> ThreadListEntry {
     const auto thread = txn.get_thread(thread_id);
     const auto stats = txn.get_post_stats(thread_id);
@@ -107,13 +107,13 @@ namespace Ludwig {
       .board = *board
     };
   }
-  static inline auto get_comment_entry(
+  auto Controller::get_comment_entry(
     ReadTxnBase& txn,
     uint64_t comment_id,
     Controller::Login login,
-    optional<const User*> author = {},
-    optional<const Thread*> thread = {},
-    optional<const Board*> board = {}
+    optional<const User*> author,
+    optional<const Thread*> thread,
+    optional<const Board*> board
   ) -> CommentListEntry {
       const auto comment = txn.get_comment(comment_id);
       const auto stats = txn.get_post_stats(comment_id);
@@ -242,7 +242,7 @@ namespace Ludwig {
           txn.list_comments_of_post_top(parent),
           login,
           skip_cw,
-          [&](uint64_t id) { return get_comment_entry(txn, id, login, {}, thread, board); },
+          [&](uint64_t id) { return Controller::get_comment_entry(txn, id, login, {}, thread, board); },
           [&](auto& e) { return e.comment->created_at(); },
           comment_rank_cmp,
           from_id,
@@ -275,7 +275,7 @@ namespace Ludwig {
         tree.mark_continued(parent, id);
         return;
       }
-      auto entry = get_comment_entry(txn, id, login, {}, thread, board);
+      auto entry = Controller::get_comment_entry(txn, id, login, {}, thread, board);
       if (!Controller::should_show(entry, login, skip_cw)) continue;
       const auto children = entry.stats->child_count();
       tree.emplace(parent, entry);
@@ -306,7 +306,6 @@ namespace Ludwig {
     static std::mutex mutex;
     static uint8_t work_area[ARGON2_CONFIG.nb_blocks * 1024];
     std::lock_guard<std::mutex> lock(mutex);
-    spdlog::info("Hashing password {} with salt {}", password.str, string_view(reinterpret_cast<const char*>(salt), 16));
     crypto_argon2(
       hash, 32, work_area, ARGON2_CONFIG, crypto_argon2_inputs {
         .pass = reinterpret_cast<const uint8_t*>(password.str.data()),
@@ -439,7 +438,7 @@ namespace Ludwig {
     CommentSortType sort,
     Login login,
     bool skip_cw,
-    std::optional<uint64_t> from_id
+    optional<uint64_t> from_id
   ) -> ThreadDetailResponse {
     ThreadDetailResponse rsp { get_thread_entry(txn, id, login), {} };
     comment_tree(txn, rsp.comments, id, sort, login, skip_cw, rsp.thread, rsp.board, from_id);
@@ -451,7 +450,7 @@ namespace Ludwig {
     CommentSortType sort,
     Login login,
     bool skip_cw,
-    std::optional<uint64_t> from_id
+    optional<uint64_t> from_id
   ) -> CommentDetailResponse {
     CommentDetailResponse rsp { get_comment_entry(txn, id, login), {} };
     comment_tree(txn, rsp.comments, id, sort, login, skip_cw, rsp.thread, rsp.board, from_id);

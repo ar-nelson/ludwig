@@ -301,6 +301,23 @@ namespace Ludwig {
     static auto can_downvote(const ThreadListEntry& thread, Login login) -> bool;
     static auto can_downvote(const CommentListEntry& comment, Login login) -> bool;
 
+    static auto get_thread_entry(
+      ReadTxnBase& txn,
+      uint64_t thread_id,
+      Login login,
+      std::optional<const User*> author = {},
+      std::optional<const Board*> board = {}
+    ) -> ThreadListEntry;
+
+    static auto get_comment_entry(
+      ReadTxnBase& txn,
+      uint64_t comment_id,
+      Login login,
+      std::optional<const User*> author = {},
+      std::optional<const Thread*> thread = {},
+      std::optional<const Board*> board = {}
+    ) -> CommentListEntry;
+
     inline auto open_read_txn() -> ReadTxn {
       return db->open_read_txn();
     }

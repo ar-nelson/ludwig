@@ -99,8 +99,8 @@ namespace Ludwig {
 
       inline auto operator()(
         ReadTxnBase& txn,
-        std::function<void (Request&, const optional<LocalUserDetailResponse>&)> before,
-        std::function<void (Response&, const optional<LocalUserDetailResponse>&)> after
+        std::function<void (Request&, Controller::Login)> before,
+        std::function<void (Response&, Controller::Login)> after
       ) -> void {
         bool remove_cookie = false;
         optional<LocalUserDetailResponse> logged_in_user;
@@ -241,7 +241,8 @@ namespace Ludwig {
         << Escape{site->name};
       if (opt.page_title) rsp << " - " << Escape{*opt.page_title};
       else if (opt.banner_title) rsp << " - " << Escape{*opt.banner_title};
-      rsp << R"(</title><link rel="stylesheet" href="/static/default-theme.css">)";
+      rsp << R"(</title><link rel="stylesheet" href="/static/default-theme.css">)"
+        R"(<script src="/static/htmx.min.js"></script>)";
       if (opt.canonical_path) {
         const auto canonical_path = *opt.canonical_path;
         rsp << R"(<link rel="canonical" href=")" << Escape{site->domain} << Escape{canonical_path} <<
@@ -512,25 +513,27 @@ namespace Ludwig {
       rsp << R"(<input type="submit" value="Apply"></form></details>)";
     }
 
-    static auto write_vote_buttons(
+    template <typename T> static auto write_vote_buttons(
       Response& rsp,
-      uint64_t post_id,
-      int64_t karma,
-      bool logged_in,
-      Vote your_vote
+      const T* entry,
+      Controller::Login login
     ) noexcept -> void {
-      const auto id = hexstring(post_id);
-      if (logged_in) {
+      const auto id = hexstring(entry->id);
+      const auto can_upvote = Controller::can_upvote(*entry, login),
+        can_downvote = Controller::can_downvote(*entry, login);
+      if (can_upvote || can_downvote) {
         rsp << R"(<form class="vote-buttons" id="votes-)" << id
-          << R"(" method="post" action="/do/vote"><input type="hidden" name="post" value=")" << id
-          << R"("><output class="karma" id="karma-)" << id << R"(">)" << karma
+          << R"(" method="post" action="/do/vote" hx-post="/do/vote" hx-swap="outerHTML"><input type="hidden" name="post" value=")" << id
+          << R"("><output class="karma" id="karma-)" << id << R"(">)" << entry->stats->karma()
           << R"(</output><label class="upvote"><button type="submit" name="vote" )"
-          << (your_vote > 0 ? R"(class="voted" value="0")" : R"(value="1")")
+          << (can_upvote ? "" : "disabled ")
+          << (entry->your_vote > 0 ? R"(class="voted" value="0")" : R"(value="1")")
           << R"(><span class="a11y">Upvote</span></button></label><label class="downvote"><button type="submit" name="vote" )"
-          << (your_vote < 0 ? R"(class="voted" value="0")" : R"(value="-1")") << R"(><span class="a11y">Downvote</span></button></label></form>)";
+          << (can_downvote ? "" : "disabled ")
+          << (entry->your_vote < 0 ? R"(class="voted" value="0")" : R"(value="-1")") << R"(><span class="a11y">Downvote</span></button></label></form>)";
       } else {
         rsp << R"(<div class="vote-buttons" id="votes-)" << id
-          << R"("><output class="karma" id="karma-)" << id << R"(">)" << karma
+          << R"("><output class="karma" id="karma-)" << id << R"(">)" << entry->stats->karma()
           << R"(</output><div class="upvote"><button type="button" disabled><span class="a11y">Upvote</span></button></div>)"
           << R"(<div class="downvote"><button type="button" disabled><span class="a11y">Downvote</span></button></div></div>)";
       }
@@ -560,7 +563,7 @@ namespace Ludwig {
       Response& rsp,
       const ListThreadsResponse& list,
       string_view base_url,
-      bool logged_in,
+      Controller::Login login,
       bool show_user = true,
       bool show_board = true,
       bool show_images = true
@@ -597,7 +600,7 @@ namespace Ludwig {
           write_board_link(rsp, thread->board);
         }
         rsp << "</div>";
-        write_vote_buttons(rsp, thread->id, thread->stats->karma(), logged_in, thread->your_vote);
+        write_vote_buttons(rsp, thread, login);
         rsp << R"(<div class="controls"><a id="comment-link-)" << id
           << R"(" href="/thread/)" << id << R"(#comments">)" << thread->stats->descendant_count()
           << (thread->stats->descendant_count() == 1 ? " comment" : " comments")
@@ -615,7 +618,7 @@ namespace Ludwig {
       Response& rsp,
       const ListCommentsResponse& list,
       string_view base_url,
-      bool logged_in,
+      Controller::Login login,
       bool show_user = true,
       bool show_thread = true
     ) noexcept -> void {
@@ -640,7 +643,7 @@ namespace Ludwig {
           }
         }
         rsp << R"(</h2><div class="comment-content">)" << comment->comment->content_safe()->string_view() << "</div>";
-        write_vote_buttons(rsp, comment->id, comment->stats->karma(), logged_in, comment->your_vote);
+        write_vote_buttons(rsp, comment, login);
         rsp << R"(<div class="controls"><a id="comment-link-)" << id
           << R"(" href="/comment/)" << id << R"(#replies">)" << comment->stats->child_count()
           << (comment->stats->child_count() == 1 ? " reply" : " replies")
@@ -658,7 +661,7 @@ namespace Ludwig {
       Response& rsp,
       const CommentTree& comments,
       uint64_t root,
-      bool logged_in,
+      Controller::Login login,
       bool is_thread = true
     ) noexcept -> void {
       // TODO: Include existing query params
@@ -677,9 +680,9 @@ namespace Ludwig {
         rsp << " commented ";
         write_datetime(rsp, comment->comment->created_at());
         rsp << R"(</h3><div class="comment-content">)" << comment->comment->content_safe()->string_view() << "</div>";
-        write_vote_buttons(rsp, comment->id, comment->stats->karma(), logged_in, comment->your_vote);
+        write_vote_buttons(rsp, comment, login);
         rsp << R"(<div class="controls">)";
-        if (logged_in && comment->comment->mod_state() < ModState::Locked) {
+        if (Controller::can_reply_to(*comment, login)) {
           rsp << R"(<a href="/comment/)" << id << R"(#reply">Reply</a>)";
         }
         rsp << R"(<div class="controls-submenu-wrapper"><button type="button" class="controls-submenu-expand">More</button>)"
@@ -693,7 +696,7 @@ namespace Ludwig {
             << R"(">More comments…</a></div>)";
         } else if (comment->stats->child_count()) {
           rsp << R"(<section class="comments" aria-title="Replies">)";
-          write_comment_tree(rsp, comments, comment->id, logged_in, false);
+          write_comment_tree(rsp, comments, comment->id, login, false);
           rsp << "</section>";
         }
         rsp << "</article>";
@@ -710,7 +713,7 @@ namespace Ludwig {
     static auto write_thread_view(
       Response& rsp,
       const ThreadDetailResponse* thread,
-      bool logged_in,
+      Controller::Login login,
       std::string_view sort_str = "",
       bool show_images = false,
       bool show_cws = false
@@ -740,7 +743,7 @@ namespace Ludwig {
       rsp << " to ";
       write_board_link(rsp, thread->board);
       rsp << "</div>";
-      write_vote_buttons(rsp, thread->id, thread->stats->karma(), logged_in, thread->your_vote);
+      write_vote_buttons(rsp, thread, login);
       rsp << R"(<div class="controls"><div class="controls-submenu-wrapper"><button type="button" class="controls-submenu-expand">More</button>)"
           R"(<form class="controls-submenu" method="post"><input type="hidden" name="post" value=")" << id
         << R"("><button type="submit" formaction="/do/save">Save</button>)"
@@ -757,7 +760,7 @@ namespace Ludwig {
           !thread->board->content_warning() && !thread->thread->content_warning(),
           false, show_images, show_cws
         );
-        write_comment_tree(rsp, thread->comments, thread->id, logged_in);
+        write_comment_tree(rsp, thread->comments, thread->id, login);
       }
       rsp << "</section></article>";
     }
@@ -915,8 +918,8 @@ namespace Ludwig {
             show_images ? 1 : 0,
             show_cws ? 1 : 0
           );
-          if (show_posts) write_thread_list(rsp, threads, base_url, !!login, true, false, show_images);
-          else write_comment_list(rsp, comments, base_url, !!login, true, true);
+          if (show_posts) write_thread_list(rsp, threads, base_url, login, true, false, show_images);
+          else write_comment_list(rsp, comments, base_url, login, true, true);
           rsp << "</main></div>";
           end_with_html_footer(rsp, page.time_elapsed());
         });
@@ -966,8 +969,8 @@ namespace Ludwig {
             show_images ? 1 : 0,
             show_cws ? 1 : 0
           );
-          if (show_posts) write_thread_list(rsp, threads, base_url, !!login, false, true, show_images);
-          else write_comment_list(rsp, comments, base_url, !!login, false, true);
+          if (show_posts) write_thread_list(rsp, threads, base_url, login, false, true, show_images);
+          else write_comment_list(rsp, comments, base_url, login, false, true);
           rsp << "</main></div>";
           end_with_html_footer(rsp, page.time_elapsed());
         });
@@ -1002,7 +1005,7 @@ namespace Ludwig {
           rsp << "<div>";
           write_sidebar(rsp, site, login, {board});
           rsp << "<main>";
-          write_thread_view(rsp, &detail, !!login, sort_str, show_cws, show_images);
+          write_thread_view(rsp, &detail, login, sort_str, show_cws, show_images);
           rsp << "</main></div>";
           end_with_html_footer(rsp, page.time_elapsed());
         });
@@ -1051,6 +1054,16 @@ namespace Ludwig {
       // -----------------------------------------------------------------------
       // API ACTIONS
       // -----------------------------------------------------------------------
+      app.get("/logout", [](Response* rsp, Request* req) {
+        rsp->writeStatus(http_status(303));
+        rsp->writeHeader("Set-Cookie", COOKIE_NAME "=deleted; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT");
+        if (req->getHeader("referer").empty()) {
+          rsp->writeHeader("Location", "/");
+        } else {
+          rsp->writeHeader("Location", req->getHeader("referer"));
+        }
+        rsp->endWithoutBody({}, true);
+      });
       app.post("/login", action_page([](Self self, auto& req, auto& rsp, auto body, auto) {
         if (body.optional_string("username") /* actually a honeypot */) {
           spdlog::warn("Caught a bot with honeypot field on login");
@@ -1175,8 +1188,29 @@ namespace Ludwig {
         else if (vote_str == "-1") vote = Downvote;
         else if (vote_str == "0") vote = NoVote;
         else throw ControllerError("Invalid or missing 'vote' parameter", 400);
-        self->controller->vote(logged_in_user, body.required_hex_id("post"), vote);
-        write_redirect_back(req, rsp);
+        const auto post_id = body.required_hex_id("post");
+        self->controller->vote(logged_in_user, post_id, vote);
+        if (req.getHeader("hx-request").data() == nullptr) {
+          write_redirect_back(req, rsp);
+        } else {
+          auto txn = self->controller->open_read_txn();
+          const auto login = self->controller->local_user_detail(txn, logged_in_user);
+          try {
+            const auto thread = Controller::get_thread_entry(txn, post_id, login);
+            rsp.cork([&]() {
+              rsp.writeHeader("Content-Type", "text/html; encoding=utf-8");
+              write_vote_buttons(rsp, &thread, login);
+              rsp.end();
+            });
+          } catch (ControllerError) {
+            const auto comment = Controller::get_comment_entry(txn, post_id, login);
+            rsp.cork([&]() {
+              rsp.writeHeader("Content-Type", "text/html; encoding=utf-8");
+              write_vote_buttons(rsp, &comment, login);
+              rsp.end();
+            });
+          }
+        }
       }));
       app.post("/do/subscribe", action_page([](Self self, auto& req, auto& rsp, auto body, auto logged_in_user) {
         self->controller->subscribe(logged_in_user, body.required_hex_id("board"), true);
