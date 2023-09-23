@@ -99,7 +99,7 @@ namespace Ludwig {
     auto get_setting_str(std::string_view key) -> std::string_view;
     auto get_setting_int(std::string_view key) -> uint64_t;
 
-    auto validate_session(uint64_t session_id) -> std::optional<uint64_t>;
+    auto get_session(uint64_t session_id) -> std::optional<const Session*>;
 
     auto get_user_id(std::string_view name) -> std::optional<uint64_t>;
     auto get_user(uint64_t id) -> std::optional<const User*>;
@@ -187,8 +187,10 @@ namespace Ludwig {
       uint64_t user,
       std::string_view ip,
       std::string_view user_agent,
+      bool remember = false,
       uint64_t lifetime_seconds = 15 * 60
     ) -> std::pair<uint64_t, uint64_t>;
+    auto delete_session(uint64_t session) -> void;
 
     auto create_user(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
     auto set_user(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;

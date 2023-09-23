@@ -62,6 +62,8 @@ summary, input[type=submit], button {
   fill: none;
 }
 
+#login-section label[for=actual_username] span,
+#login-section label[for=password] span,
 .a11y {
   position: absolute;
   appearance: none;
@@ -148,6 +150,16 @@ a:visited {
 }
 a:hover, a:active, a:focus {
   color: var(--color-accent-hover);
+}
+
+textarea {
+  display: block;
+  width: 100%;
+  height: 6rem;
+}
+
+small {
+  color: var(--color-fg-dim);
 }
 
 .big-button,
@@ -274,7 +286,8 @@ form label {
 form label input[type=text],
 form label input[type=password],
 form label input[type=search],
-form label input[type=email] {
+form label input[type=email],
+form label > div {
   flex: 1 1;
 }
 
@@ -290,9 +303,12 @@ aside section {
   margin: auto;
 }
 
-.login label span {
-  display: inline-block;
-  width: 90px;
+#login-section label[for=remember] input[type=checkbox] {
+  order: 1;
+}
+
+#login-section label[for=remember] span {
+  order: 2;
 }
 
 summary {
@@ -325,6 +341,10 @@ ol.thread-list, ol.comment-list, ol.board-list {
 
 .pagination a:not(:first-child) {
   margin-left: 2rem;
+}
+
+.pagination.hx-request > *:not(.spinner) {
+  display: none;
 }
 
 .thread {
@@ -593,6 +613,7 @@ label.upvote, label.downvote {
 .form-page label {
   display: flex;
   margin-bottom: 1rem;
+  align-items: stretch;
 }
 
 .form-page label > span {
@@ -601,6 +622,8 @@ label.upvote, label.downvote {
   padding-right: 0.5rem;
   margin-right: 0.5rem;
   border-right: 1px dotted var(--color-fg);
+  font-size: 0.8rem;
+  color: var(--color-fg-dim);
 }
 
 .form-page input[type=submit] {
@@ -624,6 +647,71 @@ body > footer {
   clear: both;
   padding: 1rem;
   color: var(--color-fg-dim);
+}
+
+.hx-request .spinner {
+  display: block;
+}
+
+.spinner,
+.spinner:before,
+.spinner:after {
+  background: #ffffff;
+  -webkit-animation: load1 1s infinite ease-in-out;
+  animation: load1 1s infinite ease-in-out;
+  width: 1em;
+  height: 4em;
+}
+.spinner {
+  display: none;
+  color: #ffffff;
+  text-indent: -9999em;
+  margin: 88px auto;
+  position: relative;
+  font-size: 11px;
+  -webkit-transform: translateZ(0);
+  -ms-transform: translateZ(0);
+  transform: translateZ(0);
+  -webkit-animation-delay: -0.16s;
+  animation-delay: -0.16s;
+}
+.spinner:before,
+.spinner:after {
+  position: absolute;
+  top: 0;
+  content: '';
+}
+.spinner:before {
+  left: -1.5em;
+  -webkit-animation-delay: -0.32s;
+  animation-delay: -0.32s;
+}
+.spinner:after {
+  left: 1.5em;
+}
+@-webkit-keyframes spinner {
+  0%,
+  80%,
+  100% {
+    box-shadow: 0 0;
+    height: 4em;
+  }
+  40% {
+    box-shadow: 0 -2em;
+    height: 5em;
+  }
+}
+@keyframes spinner {
+  0%,
+  80%,
+  100% {
+    box-shadow: 0 0;
+    height: 4em;
+  }
+  40% {
+    box-shadow: 0 -2em;
+    height: 5em;
+  }
 }
 
 @media only screen and (max-width: 45rem) {

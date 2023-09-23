@@ -2,13 +2,19 @@
 #include <regex>
 #include <string>
 #include <string_view>
+#include <sstream>
 #include <spdlog/fmt/fmt.h>
 #include <uWebSockets/App.h>
 
 namespace Ludwig {
-  static constexpr std::string_view ESCAPED = "<>'\"&";
+  static constexpr std::string_view ESCAPED = "<>'\"&",
+    TYPE_HTML = "text/html; charset=utf-8",
+    TYPE_CSS = "text/css; charset=utf-8",
+    TYPE_JS = "text/javascript; charset=utf-8",
+    TYPE_SVG = "image/svg+xml; charset=utf-8",
+    TYPE_WEBP = "image/webp";
 
-  static constexpr auto http_status(uint16_t code) -> std::string {
+  static constexpr auto http_status(uint16_t code) -> std::string_view {
     switch (code) {
       case 200: return "200 OK";
       case 201: return "201 Created";
@@ -38,7 +44,7 @@ namespace Ludwig {
       case 500: return "500 Internal Server Error";
       case 501: return "501 Not Implemented";
       case 503: return "503 Service Unavailable";
-      default: return std::to_string(code);
+      default: return "500 Internal Server Error";
     }
   }
 

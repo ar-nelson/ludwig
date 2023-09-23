@@ -15,7 +15,7 @@ using std::optional, std::string_view, flatbuffers::FlatBufferBuilder, flatbuffe
 
 namespace Ludwig {
   static const std::regex
-    json_line(R"(^([uUbBpndarm]) (\d+) (\{[^\n]+\})$)", std::regex::ECMAScript),
+    json_line(R"(^([uUbBtcdarm]) (\d+) (\{[^\n]+\})$)", std::regex::ECMAScript),
     setting_line(R"(^S (\w+) ([0-9a-zA-Z+/]+=*)$)", std::regex::ECMAScript),
     vote_line(R"(^v (\d+) (\d+) (1|-1)$)", std::regex::ECMAScript),
     subscription_line(R"(^s (\d+) (\d+) (\d+)$)", std::regex::ECMAScript);
@@ -48,11 +48,9 @@ namespace Ludwig {
     LocalBoard_Board,
     ThreadsTop_BoardKarmaThread,
     ThreadsNew_BoardTimeThread,
-    ThreadsNewComments_BoardTimeThread,
     ThreadsMostComments_BoardCommentsThread,
     CommentsTop_BoardKarmaComment,
     CommentsNew_BoardTimeComment,
-    CommentsNewComments_BoardTimeComment,
     CommentsMostComments_BoardCommentsComment,
     Subscription_BoardUser,
 
@@ -64,7 +62,6 @@ namespace Ludwig {
     Contains_PostMedia,
 
     Vote_UserPost,
-    Vote_PostUser,
 
     Media_Media,
     Contains_MediaPost,
@@ -191,11 +188,9 @@ namespace Ludwig {
     MK_DBI(LocalBoard_Board, MDB_INTEGERKEY)
     MK_DBI(ThreadsTop_BoardKarmaThread, 0)
     MK_DBI(ThreadsNew_BoardTimeThread, 0)
-    MK_DBI(ThreadsNewComments_BoardTimeThread, 0)
     MK_DBI(ThreadsMostComments_BoardCommentsThread, 0)
     MK_DBI(CommentsTop_BoardKarmaComment, 0)
     MK_DBI(CommentsNew_BoardTimeComment, 0)
-    MK_DBI(CommentsNewComments_BoardTimeComment, 0)
     MK_DBI(CommentsMostComments_BoardCommentsComment, 0)
     MK_DBI(Subscription_BoardUser, 0)
 
@@ -207,7 +202,6 @@ namespace Ludwig {
     MK_DBI(Contains_PostMedia, 0)
 
     MK_DBI(Vote_UserPost, 0)
-    MK_DBI(Vote_PostUser, 0)
 
     MK_DBI(Media_Media, MDB_INTEGERKEY)
     MK_DBI(Contains_MediaPost, 0)
@@ -343,14 +337,14 @@ namespace Ludwig {
             }
             txn.set_local_board(std::stoull(match[2]), parser.builder_);
             break;
-          case 'p':
+          case 't':
             parser.SetRootType("Thread");
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw std::runtime_error("Failed to parse Thread JSON: " + match[3].str());
             }
             txn.set_thread(std::stoull(match[2]), parser.builder_);
             break;
-          case 'n':
+          case 'c':
             parser.SetRootType("Comment");
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw std::runtime_error("Failed to parse Comment JSON: " + match[3].str());
@@ -412,14 +406,14 @@ namespace Ludwig {
     return val_as<uint64_t>(v);
   }
 
-  auto ReadTxnBase::validate_session(uint64_t session_id) -> optional<uint64_t> {
+  auto ReadTxnBase::get_session(uint64_t session_id) -> optional<const Session*> {
     MDB_val v;
     if (db_get(txn, db.dbis[Session_Session], session_id, v)) {
       spdlog::debug("Session {:x} does not exist", session_id);
       return {};
     }
     const auto session = GetRoot<Session>(v.mv_data);
-    if (session->expires_at() > now_s()) return { session->user() };
+    if (session->expires_at() > now_s()) return { session };
     spdlog::debug("Session {:x} is expired", session_id);
     return {};
   }
@@ -656,6 +650,7 @@ namespace Ludwig {
     uint64_t user,
     string_view ip,
     string_view user_agent,
+    bool remember,
     uint64_t lifetime_seconds
   ) -> std::pair<uint64_t, uint64_t> {
     uint64_t id, now = now_s();
@@ -684,11 +679,15 @@ namespace Ludwig {
       fbb.CreateString(ip),
       fbb.CreateString(user_agent),
       now,
-      now + lifetime_seconds
+      now + lifetime_seconds,
+      remember
     ));
     db_put(txn, db.dbis[Session_Session], id, fbb);
     spdlog::debug("Created session {:x} for user {:x} (IP {}, user agent {})", id, user, ip, user_agent);
     return { id, now + lifetime_seconds };
+  }
+  auto WriteTxn::delete_session(uint64_t session_id) -> void {
+    db_del(txn, db.dbis[Session_Session], session_id);
   }
   auto WriteTxn::create_user(FlatBufferBuilder& builder) -> uint64_t {
     uint64_t id = next_id();
@@ -763,12 +762,7 @@ namespace Ludwig {
     delete_range(txn, db.dbis[Hide_UserBoard], Cursor(id, 0), Cursor(id, ID_MAX));
     delete_range(txn, db.dbis[ThreadsTop_UserKarmaThread], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
     delete_range(txn, db.dbis[CommentsTop_UserKarmaComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
-    delete_range(txn, db.dbis[Vote_UserPost], Cursor(id, 0), Cursor(id, ID_MAX),
-      [&](MDB_val& k, MDB_val&) {
-        Cursor c(k);
-        db_del(txn, db.dbis[Vote_PostUser], Cursor(c.int_field_1(), c.int_field_0()));
-      }
-    );
+    delete_range(txn, db.dbis[Vote_UserPost], Cursor(id, 0), Cursor(id, ID_MAX));
 
     // TODO: Delete everything connected to the User
     // TODO: Does this delete owned posts and boards?
@@ -924,7 +918,6 @@ namespace Ludwig {
       db_put(txn, db.dbis[ThreadsTop_UserKarmaThread], Cursor(thread->author(), 1, id), id);
       db_put(txn, db.dbis[ThreadsNew_BoardTimeThread], Cursor(thread->board(), thread->created_at(), id), id);
       db_put(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(thread->board(), karma_uint(karma), id), id);
-      db_put(txn, db.dbis[ThreadsNewComments_BoardTimeThread], Cursor(thread->board(), thread->created_at(), id), id);
       db_put(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(thread->board(), 0, id), id);
       fbb.ForceDefaults(true);
       fbb.Finish(CreatePostStats(fbb, thread->created_at()));
@@ -967,8 +960,7 @@ namespace Ludwig {
     const auto comment = *comment_opt;
     const auto stats = *stats_opt;
     const auto karma = stats->karma();
-    const auto latest_comment = stats->latest_comment(),
-      descendant_count = stats->descendant_count(),
+    const auto descendant_count = stats->descendant_count(),
       author = comment->author(),
       created_at = comment->created_at(),
       parent = comment->parent();
@@ -987,15 +979,16 @@ namespace Ludwig {
     }
     db_del(txn, db.dbis[CommentsNew_BoardTimeComment], Cursor(board_id, created_at, id));
     db_del(txn, db.dbis[CommentsTop_BoardKarmaComment], Cursor(board_id, karma_uint(karma), id));
-    db_del(txn, db.dbis[CommentsNewComments_BoardTimeComment], Cursor(board_id, latest_comment, id));
     db_del(txn, db.dbis[CommentsMostComments_BoardCommentsComment], Cursor(board_id, descendant_count, id));
 
+    /*
     delete_range(txn, db.dbis[Vote_PostUser], Cursor(id, 0), Cursor(id, ID_MAX),
       [&](MDB_val& k, MDB_val&) {
         Cursor c(k);
         db_del(txn, db.dbis[Vote_UserPost], Cursor(c.int_field_1(), c.int_field_0()));
       }
     );
+    */
     std::set<uint64_t> children;
     delete_range(txn, db.dbis[ChildrenNew_PostTimeComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX),
       [&children](MDB_val&, MDB_val& v) {
@@ -1030,7 +1023,6 @@ namespace Ludwig {
     const auto author = thread->author(),
       board = thread->board(),
       created_at = thread->created_at(),
-      latest_comment = stats->latest_comment(),
       descendant_count = stats->descendant_count();
 
     spdlog::debug("Deleting top-level post {:x} (board {:x}, author {:x})", id, board, author);
@@ -1061,12 +1053,10 @@ namespace Ludwig {
       fbb.Clear();
     }
 
-    delete_range(txn, db.dbis[Vote_PostUser], Cursor(id, 0), Cursor(id, ID_MAX),
-      [&](MDB_val& k, MDB_val&) {
-        Cursor c(k);
-        db_del(txn, db.dbis[Vote_UserPost], Cursor(c.int_field_1(), c.int_field_0()));
-      }
-    );
+    // TODO: Delete dangling votes?
+    // There used to be a bidirectional User<->Post index for votes,
+    // but that almost doubled the size of the database.
+
     std::set<uint64_t> children;
     delete_range(txn, db.dbis[ChildrenNew_PostTimeComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX),
       [&children](MDB_val&, MDB_val& v) {
@@ -1081,7 +1071,6 @@ namespace Ludwig {
     db_del(txn, db.dbis[ThreadsTop_UserKarmaThread], Cursor(author, karma_uint(karma), id));
     db_del(txn, db.dbis[ThreadsNew_BoardTimeThread], Cursor(board, created_at, id));
     db_del(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(board, karma_uint(karma), id));
-    db_del(txn, db.dbis[ThreadsNewComments_BoardTimeThread], Cursor(board, latest_comment, id));
     db_del(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(board, descendant_count, id));
 
     for (uint64_t child : children) delete_child_comment(child, board);
@@ -1137,8 +1126,7 @@ namespace Ludwig {
           const bool is_active = comment->created_at() >= parent_created_at &&
               comment->created_at() - parent_created_at <= ACTIVE_COMMENT_MAX_AGE,
             is_newer = is_active && comment->created_at() > s->latest_comment();
-          const auto last_latest_comment = s->latest_comment(),
-            last_descendant_count = s->descendant_count();
+          const auto last_descendant_count = s->descendant_count();
           fbb.Clear();
           fbb.Finish(CreatePostStats(fbb,
             is_newer ? comment->created_at() : s->latest_comment(),
@@ -1151,17 +1139,9 @@ namespace Ludwig {
           ));
           db_put(txn, db.dbis[PostStats_Post], parent, fbb);
           if (parent == comment->thread()) {
-            if (is_newer) {
-              db_del(txn, db.dbis[ThreadsNewComments_BoardTimeThread], Cursor(board, last_latest_comment, parent));
-              db_put(txn, db.dbis[ThreadsNewComments_BoardTimeThread], Cursor(board, comment->created_at(), parent), parent);
-            }
             db_del(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(board, last_descendant_count, parent));
             db_put(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(board, last_descendant_count + 1, parent), parent);
           } else {
-            if (is_newer) {
-              db_del(txn, db.dbis[CommentsNewComments_BoardTimeComment], Cursor(board, last_latest_comment, parent));
-              db_put(txn, db.dbis[CommentsNewComments_BoardTimeComment], Cursor(board, comment->created_at(), parent), parent);
-            }
             db_del(txn, db.dbis[CommentsMostComments_BoardCommentsComment], Cursor(board, last_descendant_count, parent));
             db_put(txn, db.dbis[CommentsMostComments_BoardCommentsComment], Cursor(board, last_descendant_count + 1, parent), parent);
           }
@@ -1273,10 +1253,8 @@ namespace Ludwig {
       int8_t vote_byte = (int8_t)vote;
       MDB_val v { sizeof(int8_t), &vote_byte };
       db_put(txn, db.dbis[Vote_UserPost], Cursor(user_id, post_id), v);
-      db_put(txn, db.dbis[Vote_PostUser], Cursor(post_id, user_id), v);
     } else {
       db_del(txn, db.dbis[Vote_UserPost], Cursor(user_id, post_id));
-      db_del(txn, db.dbis[Vote_PostUser], Cursor(post_id, user_id));
     }
     const auto stats_opt = get_post_stats(post_id);
     const auto op_stats_opt = get_user_stats(op_id);

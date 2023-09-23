@@ -8,6 +8,7 @@ table Session {
   user_agent: string;
   created_at: uint64;
   expires_at: uint64;
+  remember: bool = false;
 }
 
 table User {

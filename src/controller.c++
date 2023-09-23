@@ -401,11 +401,39 @@ namespace Ludwig {
     return true;
   }
 
+  auto Controller::validate_or_regenerate_session(
+    ReadTxn& txn,
+    uint64_t session_id,
+    string_view ip,
+    string_view user_agent
+  ) -> optional<LoginResponse> {
+    const auto session_opt = txn.get_session(session_id);
+    if (!session_opt) return {};
+    const auto session = *session_opt;
+    const auto user = session->user();
+    // TODO: Change session lifetime to 1 day
+    // Currently sessions regenerate every 5 minutes for testing purposes
+    if (session->remember() &&  now_s() - session->created_at() >= 60 * 5) {
+      auto txn = db->open_write_txn();
+      auto new_session = txn.create_session(
+        user,
+        ip,
+        user_agent,
+        true,
+        session->expires_at() - session->created_at()
+      );
+      txn.delete_session(session_id);
+      txn.commit();
+      return { { .user_id = user, .session_id = new_session.first, .expiration = new_session.second } };
+    }
+    return { { .user_id = user, .session_id = session_id, .expiration = session->expires_at() } };
+  }
   auto Controller::login(
     string_view username,
     SecretString&& password,
     string_view ip,
-    string_view user_agent
+    string_view user_agent,
+    bool remember
   ) -> LoginResponse {
     uint8_t hash[32];
     auto txn = db->open_write_txn();
@@ -428,7 +456,14 @@ namespace Ludwig {
       spdlog::debug("Tried to login with wrong password for user {}", username);
       throw ControllerError("Invalid username or password", 400);
     }
-    const auto session = txn.create_session(user_id, ip, user_agent);
+    const auto session = txn.create_session(
+      user_id,
+      ip,
+      user_agent,
+      remember,
+      // "Remember me" lasts for a month, temporary sessions last for a day.
+      remember ? 60 * 60 * 25 * 30 : 60 * 60 * 24
+    );
     txn.commit();
     return { .user_id = user_id, .session_id = session.first, .expiration = session.second };
   }
@@ -470,11 +505,12 @@ namespace Ludwig {
     if (!user || !user_stats) throw ControllerError("User not found", 404);
     return { { { id, *user }, *user_stats, }, *local_user };
   }
-  auto Controller::board_detail(ReadTxnBase& txn, uint64_t id) -> BoardDetailResponse {
+  auto Controller::board_detail(ReadTxnBase& txn, uint64_t id, optional<uint64_t> logged_in_user) -> BoardDetailResponse {
     const auto board = txn.get_board(id);
     const auto board_stats = txn.get_board_stats(id);
     if (!board || !board_stats) throw ControllerError("Board not found", 404);
-    return { { id, *board }, *board_stats };
+    const auto subscribed = logged_in_user ? txn.user_is_subscribed(*logged_in_user, id) : false;
+    return { { id, *board }, *board_stats, subscribed };
   }
   auto Controller::list_local_users(ReadTxnBase& txn, optional<uint64_t> from_id) -> ListUsersResponse {
     ListUsersResponse out { {}, 0, !from_id, {} };
@@ -784,19 +820,21 @@ namespace Ludwig {
     hash_password(std::move(password), salt, hash);
     flatbuffers::FlatBufferBuilder fbb;
     {
+      const auto name_s = fbb.CreateString(username);
       UserBuilder b(fbb);
       b.add_created_at(now_s());
-      b.add_name(fbb.CreateString(username));
+      b.add_name(name_s);
       fbb.Finish(b.Finish());
     }
     const auto user_id = txn.create_user(fbb);
     fbb.Clear();
     {
-      LocalUserBuilder b(fbb);
-      b.add_email(fbb.CreateString(email));
+      const auto email_s = fbb.CreateString(email);
       Hash hash_struct(hash);
-      b.add_password_hash(&hash_struct);
       Salt salt_struct(salt);
+      LocalUserBuilder b(fbb);
+      b.add_email(email_s);
+      b.add_password_hash(&hash_struct);
       b.add_password_salt(&salt_struct);
       fbb.Finish(b.Finish());
     }
@@ -829,11 +867,13 @@ namespace Ludwig {
     // TODO: Check if user is allowed to create boards
     flatbuffers::FlatBufferBuilder fbb;
     {
+      const auto display_name_s = display_name ? fbb.CreateString(*display_name) : 0,
+        content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
       BoardBuilder b(fbb);
       b.add_created_at(now_s());
       b.add_name(fbb.CreateString(name));
-      if (display_name) b.add_display_name(fbb.CreateString(*display_name));
-      if (content_warning) b.add_content_warning(fbb.CreateString(*content_warning));
+      if (display_name) b.add_display_name(display_name_s);
+      if (content_warning) b.add_content_warning(content_warning_s);
       b.add_restricted_posting(is_restricted_posting);
       fbb.Finish(b.Finish());
     }
@@ -894,18 +934,23 @@ namespace Ludwig {
       }
       // TODO: Check if user is banned
       flatbuffers::FlatBufferBuilder fbb;
+      const auto title_s = fbb.CreateString(title),
+        submission_s = submission_url ? fbb.CreateString(*submission_url) : 0,
+        content_raw_s = text_content_markdown ? fbb.CreateString(*text_content_markdown) : 0,
+        content_safe_s = text_content_markdown ? fbb.CreateString(escape_html(*text_content_markdown)) : 0,
+        content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
       ThreadBuilder b(fbb);
       b.add_created_at(now_s());
       b.add_author(author);
       b.add_board(board);
-      b.add_title(fbb.CreateString(title));
-      if (submission_url) b.add_content_url(fbb.CreateString(*submission_url));
+      b.add_title(title_s);
+      if (submission_url) b.add_content_url(submission_s);
       if (text_content_markdown) {
         // TODO: Parse Markdown and HTML
-        b.add_content_text_raw(fbb.CreateString(*text_content_markdown));
-        b.add_content_text_safe(fbb.CreateString(escape_html(*text_content_markdown)));
+        b.add_content_text_raw(content_raw_s);
+        b.add_content_text_safe(content_safe_s);
       }
-      if (content_warning) b.add_content_warning(fbb.CreateString(*content_warning));
+      if (content_warning) b.add_content_warning(content_warning_s);
       fbb.Finish(b.Finish());
       thread_id = txn.create_thread(fbb);
       txn.set_vote(author, thread_id, Upvote);
@@ -942,14 +987,17 @@ namespace Ludwig {
       board_id = (*parent_thread)->board();
       // TODO: Check if user is banned
       flatbuffers::FlatBufferBuilder fbb;
+      const auto content_raw_s = fbb.CreateString(text_content_markdown),
+        content_safe_s = fbb.CreateString(escape_html(text_content_markdown)),
+        content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
       CommentBuilder b(fbb);
       b.add_created_at(now_s());
       b.add_author(author);
       b.add_thread(thread_id = parent_comment ? (*parent_comment)->thread() : parent);
       // TODO: Parse Markdown and HTML
-      b.add_content_raw(fbb.CreateString(text_content_markdown));
-      b.add_content_safe(fbb.CreateString(escape_html(text_content_markdown)));
-      if (content_warning) b.add_content_warning(fbb.CreateString(*content_warning));
+      b.add_content_raw(content_raw_s);
+      b.add_content_safe(content_safe_s);
+      if (content_warning) b.add_content_warning(content_warning_s);
       fbb.Finish(b.Finish());
       comment_id = txn.create_comment(fbb);
       txn.set_vote(author, comment_id, Upvote);

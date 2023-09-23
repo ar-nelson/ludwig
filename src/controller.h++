@@ -145,6 +145,7 @@ namespace Ludwig {
 
   struct BoardDetailResponse : BoardListEntry {
     const BoardStats* stats;
+    bool subscribed;
   };
 
   struct LocalBoardDetailResponse : BoardDetailResponse {
@@ -322,17 +323,25 @@ namespace Ludwig {
       return db->open_read_txn();
     }
 
-    inline auto validate_session(ReadTxnBase& txn, uint64_t session_id) -> std::optional<uint64_t> {
-      return txn.validate_session(session_id);
-    }
-
     auto hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void;
 
+    inline auto validate_session(ReadTxnBase& txn, uint64_t session_id) -> std::optional<uint64_t> {
+      auto session = txn.get_session(session_id);
+      if (session) return { (*session)->user() };
+      return {};
+    }
+    auto validate_or_regenerate_session(
+      ReadTxn& txn,
+      uint64_t session_id,
+      std::string_view ip,
+      std::string_view user_agent
+    ) -> std::optional<LoginResponse>;
     auto login(
       std::string_view username,
       SecretString&& password,
-      string_view ip,
-      string_view user_agent
+      std::string_view ip,
+      std::string_view user_agent,
+      bool remember = false
     ) -> LoginResponse;
     inline auto site_detail() -> const SiteDetail* {
       return &cached_site_detail;
@@ -355,7 +364,7 @@ namespace Ludwig {
     ) -> CommentDetailResponse;
     auto user_detail(ReadTxnBase& txn, uint64_t id) -> UserDetailResponse;
     auto local_user_detail(ReadTxnBase& txn, uint64_t id) -> LocalUserDetailResponse;
-    auto board_detail(ReadTxnBase& txn, uint64_t id) -> BoardDetailResponse;
+    auto board_detail(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> logged_in_user) -> BoardDetailResponse;
     auto list_local_users(ReadTxnBase& txn, std::optional<uint64_t> from_id = {}) -> ListUsersResponse;
     auto list_local_boards(ReadTxnBase& txn, std::optional<uint64_t> from_id = {}) -> ListBoardsResponse;
     auto list_board_threads(

@@ -13,7 +13,7 @@ const PASSWORD_HASH = hexDecode(
   ),
 );
 
-const SCALE = 10;
+const SCALE = 100;
 let nextId = 0;
 let ludwigDomain = "localhost:2023";
 
@@ -250,12 +250,6 @@ function genComment(
   };
 }
 
-// Generate instances
-const instances: string[] = [];
-for (let i = 0; i < SCALE; i++) {
-  instances[i] = `${faker.internet.domainWord()}.test`;
-}
-
 enum ModState {
   Visible = 0,
   Flagged = 1,
@@ -361,14 +355,18 @@ interface Comment {
   mod_state?: ModState;
 }
 
-function genAll(scale = 10) {
-  const instances = faker.helpers.multiple(genInstance, { count: scale }),
+function genAll(scale = SCALE) {
+  const instances = faker.helpers.multiple(genInstance, {
+      count: Math.ceil(2 + Math.log10(scale)),
+    }),
     usernames = faker.helpers.uniqueArray(
       faker.internet.domainWord,
       scale * 10,
     ),
-    boardNames = faker.helpers.uniqueArray(faker.word.noun, scale * 3),
-    adminPassword = faker.internet.password({ length: 8 }),
+    boardNames = faker.helpers.uniqueArray(
+      faker.word.noun,
+      Math.ceil(5 + Math.log10(scale)),
+    ),
     localUsers = [
       genLocalUser("admin", true),
       ...usernames.slice(0, scale).map((name) => genLocalUser(name)),
@@ -379,7 +377,10 @@ function genAll(scale = 10) {
         genUser(name, faker.helpers.arrayElement(instances))
       ),
     ],
-    localBoardCount = faker.number.int({ min: 2, max: scale }),
+    localBoardCount = faker.number.int({
+      min: boardNames.length / 2,
+      max: boardNames.length - 1,
+    }),
     localBoards = boardNames.slice(0, localBoardCount).map((name) =>
       genLocalBoard(name, faker.helpers.arrayElement(localUsers).id)
     ),
@@ -478,11 +479,11 @@ function genAll(scale = 10) {
   for (const b of localBoards) {
     console.log(`B ${b.id} ${JSON.stringify(b.localBoard)}`);
   }
-  for (const p of threads) {
-    console.log(`p ${p.id} ${JSON.stringify(p.thread)}`);
+  for (const t of threads) {
+    console.log(`t ${t.id} ${JSON.stringify(t.thread)}`);
   }
-  for (const n of comments) {
-    console.log(`n ${n.id} ${JSON.stringify(n.comment)}`);
+  for (const c of comments) {
+    console.log(`c ${c.id} ${JSON.stringify(c.comment)}`);
   }
   for (
     const post of [
