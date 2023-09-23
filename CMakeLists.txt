@@ -24,6 +24,11 @@ add_compile_options (
   -Wno-zero-as-null-pointer-constant
 )
 
+# Only do static linking. No shared libraries at all.
+set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
 # Detect Android Termux to add -llog if necessary
 if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
   add_link_options (-llog)
@@ -112,15 +117,35 @@ set (LUDWIG_COMMON_SRC
   src/webapp_routes.c++
 )
 
+if (CMAKE_BUILD_TYPE MATCHES Release AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+
+  # A hack for static compilation.
+  #
+  # I don't know why, but clang's libstdc++ references arc4random from libbsd,
+  # and with -static this function isn't available anymore‽
+  #
+  # Linux only, because this function should be available on BSD and Mac.
+
+  set (LUDWIG_COMMON_SRC ${LUDWIG_COMMON_SRC} vendor/libbsd/src/arc4random.c)
+
+endif ()
+
 add_executable(ludwig src/ludwig.c++ ${LUDWIG_COMMON_SRC})
 add_dependencies(ludwig static_generated flatbuffers_generated)
 target_compile_options(ludwig PRIVATE ${COMPILE_OPTIONS})
 target_link_options(ludwig PRIVATE ${LINK_OPTIONS})
-target_link_libraries(ludwig PRIVATE cereal csprng flatbuffers lmdb monocypher spdlog uWS xxHash)
+if (CMAKE_BUILD_TYPE MATCHES Release)
+  # Only build a fully static binary in release mode.
+  # Debug mode needs to dynamically link asan.
+  target_link_libraries(ludwig PRIVATE "-static")
+endif ()
+target_link_libraries(ludwig PRIVATE cereal csprng flatbuffers lmdb monocypher
+  libcurl_static ssl crypto spdlog uWS xxHash)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   file(GLOB_RECURSE TEST_FILES "test/*.c++")
   add_executable(test ${LUDWIG_COMMON_SRC} ${TEST_FILES})
   add_dependencies(test static_generated flatbuffers_generated)
-  target_link_libraries(test PRIVATE cereal csprng flatbuffers lmdb monocypher spdlog uWS xxHash Catch2::Catch2WithMain)
+  target_link_libraries(test PRIVATE cereal csprng flatbuffers lmdb monocypher
+    libcurl_static ssl crypto spdlog uWS xxHash Catch2::Catch2WithMain)
 endif ()

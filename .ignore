@@ -1,10 +1,14 @@
 vendor/asio
+vendor/boringssl
 vendor/catch2
 vendor/cereal
 vendor/csprng
+vendor/curl
 vendor/flatbuffers
+vendor/libbsd
 vendor/lmdb
 vendor/monocypher
 vendor/spdlog
 vendor/uWS
 vendor/xxHash
+vendor/zlib

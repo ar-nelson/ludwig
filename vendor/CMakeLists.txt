@@ -1,4 +1,8 @@
-find_package(ZLIB REQUIRED)
+#set(SKIP_INSTALL_ALL ON CACHE BOOL "" FORCE)
+add_subdirectory(zlib EXCLUDE_FROM_ALL)
+
+add_subdirectory(boringssl EXCLUDE_FROM_ALL)
+include_directories("boringssl/include")
 
 add_library(asio STATIC
   asio/asio.cpp
@@ -12,6 +16,8 @@ add_library(uWS STATIC
   uWS/uSockets/loop.c
   uWS/uSockets/socket.c
   uWS/uSockets/eventing/asio.cpp
+  uWS/uSockets/crypto/openssl.c
+  uWS/uSockets/crypto/sni_tree.cpp
 )
 target_include_directories(uWS
   PUBLIC
@@ -19,12 +25,12 @@ target_include_directories(uWS
   INTERFACE
     uWS/
 )
-target_compile_definitions(uWS PUBLIC LIBUS_USE_ASIO LIBUS_NO_SSL)
+target_compile_definitions(uWS PUBLIC LIBUS_USE_ASIO LIBUS_USE_OPENSSL)
 target_link_libraries(uWS
   PUBLIC
-    asio
+    asio ssl crypto
   INTERFACE
-    ${ZLIB_LIBRARIES}
+    zlibstatic
 )
 
 add_library(lmdb STATIC
@@ -49,12 +55,22 @@ target_include_directories(csprng PUBLIC csprng/source/)
 set(BUILD_DOC OFF CACHE BOOL "" FORCE)
 set(BUILD_SANDBOX OFF CACHE BOOL "" FORCE)
 set(SKIP_PERFORMANCE_COMPARISON ON CACHE BOOL "" FORCE)
-add_subdirectory(cereal)
+add_subdirectory(cereal EXCLUDE_FROM_ALL)
 set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
-add_subdirectory(flatbuffers)
-add_subdirectory(spdlog)
+add_subdirectory(flatbuffers EXCLUDE_FROM_ALL)
+add_subdirectory(spdlog EXCLUDE_FROM_ALL)
+
+# A trick combination of flags to make Curl use "OpenSSL" (actually BoringSSL)
+# but not use find_library, which will fail.
+set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+set(USE_OPENSSL ON CACHE BOOL "" FORCE)
+set(SSL_ENABLED ON CACHE BOOL "" FORCE)
+
+set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+set(HTTP_ONLY ON CACHE BOOL "" FORCE)
+add_subdirectory(curl EXCLUDE_FROM_ALL)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
-  add_subdirectory(catch2)
+  add_subdirectory(catch2 EXCLUDE_FROM_ALL)
 endif ()

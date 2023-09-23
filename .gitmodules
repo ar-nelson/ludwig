@@ -16,3 +16,15 @@
 [submodule "vendor/cereal"]
 	path = vendor/cereal
 	url = git@github.com:ar-nelson/cereal.git
+[submodule "vendor/curl"]
+	path = vendor/curl
+	url = https://github.com/curl/curl.git
+[submodule "vendor/boringssl"]
+	path = vendor/boringssl
+	url = https://boringssl.googlesource.com/boringssl
+[submodule "vendor/zlib"]
+	path = vendor/zlib
+	url = https://github.com/madler/zlib.git
+[submodule "vendor/libbsd"]
+	path = vendor/libbsd
+	url = https://gitlab.freedesktop.org/libbsd/libbsd.git

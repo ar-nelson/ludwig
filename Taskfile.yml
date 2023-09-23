@@ -31,6 +31,8 @@ tasks:
       - src/**/*.fbs
       - test/**/*
       - static/*
+      - vendor/CMakeLists.txt
+      - CMakeLists.txt
     cmds:
       - ninja -C build.debug
     generates:
@@ -46,6 +48,8 @@ tasks:
       - src/**/*.fbs
       - test/**/*
       - static/*
+      - vendor/CMakeLists.txt
+      - CMakeLists.txt
     cmds:
       - ninja -C build.release
     generates:
