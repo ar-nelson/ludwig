@@ -103,3 +103,42 @@ namespace Ludwig {
     return stream.str();
   }
 }
+
+namespace fmt {
+  template <> struct formatter<Ludwig::Escape> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
+      auto it = ctx.begin();
+      if (it != ctx.end()) detail::throw_format_error("invalid format");
+      return it;
+    }
+
+    auto format(Ludwig::Escape e, format_context& ctx) const {
+      size_t start = 0;
+      for (
+        size_t i = e.str.find_first_of(Ludwig::ESCAPED);
+        i != std::string_view::npos;
+        start = i + 1, i = e.str.find_first_of(Ludwig::ESCAPED, start)
+      ) {
+        if (i > start) std::copy(e.str.begin() + start, e.str.begin() + i, ctx.out());
+        switch (e.str[i]) {
+          case '<':
+            format_to(ctx.out(), "&lt;");
+            break;
+          case '>':
+            format_to(ctx.out(), "&gt;");
+            break;
+          case '\'':
+            format_to(ctx.out(), "&apos;");
+            break;
+          case '"':
+            format_to(ctx.out(), "&quot;");
+            break;
+          case '&':
+            format_to(ctx.out(), "&amp;");
+            break;
+        }
+      }
+      return std::copy(e.str.begin() + start, e.str.end(), ctx.out());
+    }
+  };
+}
