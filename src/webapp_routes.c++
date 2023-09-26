@@ -31,6 +31,32 @@ namespace Ludwig {
     User
   };
 
+  enum class SubmenuAction {
+    None,
+    Reply,
+    Edit,
+    Delete,
+    Share,
+    Save,
+    Unsave,
+    Hide,
+    Unhide,
+    Report,
+    MuteUser,
+    UnmuteUser,
+    MuteBoard,
+    UnmuteBoard,
+    ModRestore,
+    ModFlag,
+    ModLock,
+    ModRemove,
+    ModBan,
+    ModPurge,
+    ModPurgeUser
+  };
+
+  static inline auto format_as(SubmenuAction a) { return fmt::underlying(a); };
+
   static inline auto display_name(const User* user) -> string_view {
     if (user->display_name()) return user->display_name()->string_view();
     const auto name = user->name()->string_view();
@@ -43,11 +69,40 @@ namespace Ludwig {
     return name.substr(0, name.find('@'));
   }
 
+  static inline auto mod_state(const ThreadListEntry* thread) -> ModState {
+    return thread->thread->mod_state();
+  }
+
+  static inline auto mod_state(const CommentListEntry* comment) -> ModState {
+    return comment->comment->mod_state();
+  }
+
+  static constexpr auto describe_mod_state(ModState s) -> string_view {
+    switch (s) {
+      case ModState::Flagged: return "Flagged";
+      case ModState::Locked: return "Locked";
+      case ModState::Removed: return "Removed";
+      default: return "";
+    }
+  }
+
+  template <typename T> static constexpr auto post_word() -> std::string_view;
+  template <> constexpr auto post_word<ThreadDetailResponse>() -> std::string_view { return "thread"; }
+  template <> constexpr auto post_word<ThreadListEntry>() -> std::string_view { return "thread"; }
+  template <> constexpr auto post_word<CommentListEntry>() -> std::string_view { return "comment"; }
+
   struct QueryString {
     string_view query;
     inline auto required_hex_id(string_view key) -> uint64_t {
       try {
         return std::stoull(std::string(uWS::getDecodedQueryValue(key, query)), nullptr, 16);
+      } catch (...) {
+        throw ControllerError(fmt::format("Invalid or missing '{}' parameter", key).c_str(), 400);
+      }
+    }
+    inline auto required_int(string_view key) -> int {
+      try {
+        return std::stoi(std::string(uWS::getDecodedQueryValue(key, query)));
       } catch (...) {
         throw ControllerError(fmt::format("Invalid or missing '{}' parameter", key).c_str(), 400);
       }
@@ -174,6 +229,19 @@ namespace Ludwig {
       };
     }
 
+    static inline auto is_htmx(Request& req) noexcept -> bool {
+      return !req.getHeader("hx-request").empty() && req.getHeader("hx-boosted").empty();
+    }
+
+    inline auto write_toast(Response& rsp, string_view content, string_view extra_classes = "") {
+      write_fmt(rsp,
+        R"(<div hx-swap-oob="afterbegin:#toasts">)"
+        R"(<p class="toast{}" aria-live="polite" hx-get="data:text/html," hx-trigger="click, every 30s" hx-swap="outerHTML">{}</p>)"
+        "</div>",
+        extra_classes, Escape{content}
+      );
+    }
+
     inline auto action_page(std::function<void (Self, Request&, Response&, QueryString, uint64_t)> fn, bool require_login = true) {
       return [self = this->shared_from_this(), fn, require_login](Response* rsp, Request* req) {
         std::string buffer = "?";
@@ -195,7 +263,7 @@ namespace Ludwig {
             }
             if (logged_in_user || !require_login) {
               fn(self, *req, *rsp, {string_view(buffer)}, logged_in_user.value_or(0));
-            } else if (req->getHeader("hx-target").empty()) {
+            } else if (!is_htmx(*req)) {
               rsp->writeStatus(http_status(303));
               rsp->writeHeader("Location", "/login");
               rsp->endWithoutBody({}, true);
@@ -216,8 +284,16 @@ namespace Ludwig {
             }
             err = ControllerError("Unhandled internal exception", 500);
           }
-          rsp->cork([rsp, self, &err]() {
-            self->error_page(*rsp, *err);
+          rsp->cork([req, rsp, self, &err]() {
+            if (is_htmx(*req)) {
+              rsp->writeHeader("Content-Type", TYPE_HTML);
+              rsp->writeHeader("HX-Retarget", "#toasts");
+              rsp->writeHeader("HX-Reswap", "afterbegin");
+              self->write_toast(*rsp, err->what(), " toast-error");
+              rsp->end();
+            } else {
+              self->error_page(*rsp, *err);
+            }
           });
         });
         rsp->onAborted([rsp](){
@@ -300,7 +376,8 @@ namespace Ludwig {
         );
       }
       write_fmt(rsp,
-        R"(</head><body><nav class="topbar"><div class="site-name">🎹 {}</div><ul class="quick-boards">)"
+        R"(</head><body><script>document.body.classList.add("has-js")</script>)"
+        R"(<nav class="topbar"><div class="site-name">🎹 {}</div><ul class="quick-boards">)"
         R"(<li><a href="/">Home</a>)"
         R"(<li><a href="/feed/local">Local</a>)"
         R"(<li><a href="/feed/federated">All</a>)"
@@ -319,6 +396,7 @@ namespace Ludwig {
       } else {
         rsp << R"(</ul><ul><li><a href="/login">Login</a><li><a href="/register">Register</a></ul></nav>)";
       }
+      rsp << R"(<div id="toasts"></div>)";
       if (opt.banner_title) {
         rsp << R"(<header id="page-header")";
         if (opt.banner_image) {
@@ -342,22 +420,20 @@ namespace Ludwig {
       ));
     }
 
-    static inline auto hide_cw_posts(const optional<LocalUserDetailResponse>& logged_in_user) -> bool {
-      if (!logged_in_user) return false;
-      return logged_in_user->local_user->hide_cw_posts();
-    }
-
-    static auto write_subscribe_button(
+    inline auto write_subscribe_button(
       Response& rsp,
       uint64_t board_id,
       bool is_unsubscribe
     ) noexcept -> void {
-      const string_view action = is_unsubscribe ? "/do/unsubscribe" : "/do/subscribe";
-      rsp << R"(<form method="post" action=")" << action << R"(" hx-post=")" << action
-        << R"(" hx-swap="outerHTML"><button type="submit" class="big-button">)"
-        << (is_unsubscribe ? "Unsubscribe" : "Subscribe")
-        << R"(</button><input type="hidden" name="board" value=")"
-        << hexstring(board_id) << R"("></form>)";
+      write_fmt(rsp,
+        R"(<form method="post" action="{0}" hx-post="{0}" hx-swap="outerHTML">)"
+        R"(<input type="hidden" name="board" value="{1:x}">)"
+        R"(<button type="submit" class="big-button">{2}</button>)"
+        "</form>",
+        is_unsubscribe ? "/do/unsubscribe" : "/do/subscribe",
+        board_id,
+        is_unsubscribe ? "Unsubscribe" : "Subscribe"
+      );
     }
 
     static constexpr string_view LOGIN_FIELDS =
@@ -370,14 +446,16 @@ namespace Ludwig {
     auto write_sidebar(
       Response& rsp,
       const SiteDetail* site,
-      const optional<LocalUserDetailResponse>& logged_in_user,
+      Controller::Login login,
       const optional<BoardDetailResponse>& board = {}
     ) noexcept -> void {
-      rsp << R"(<aside id="sidebar"><section id="search-section"><h2>Search</h2>)"
+      rsp << R"(<label id="sidebar-toggle-label" for="sidebar-toggle"><svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#menu"></svg> Menu</label>)"
+        R"(<input type="checkbox" name="sidebar-toggle" id="sidebar-toggle" class="a11y">)"
+        R"(<aside id="sidebar"><section id="search-section"><h2>Search</h2>)"
         R"(<form action="/search" id="search-form">)"
         R"(<label for="search"><span class="a11y">Search</span>)"
         R"(<input type="search" name="search" id="search" placeholder="Search"><input type="submit" value="Search"></label>)";
-      const auto hide_cw = hide_cw_posts(logged_in_user);
+      const auto hide_cw = login && login->local_user->hide_cw_posts();
       const auto board_name = Escape{board ? display_name(board->board) : ""};
       if (board) write_fmt(rsp, R"(<input type="hidden" name="board" value="{:x}">)", board->id);
       if (!hide_cw || board) {
@@ -394,7 +472,7 @@ namespace Ludwig {
         rsp << "</fieldset></details>";
       }
       rsp << "</form></section>";
-      if (!logged_in_user) {
+      if (!login) {
         write_fmt(rsp,
           R"(<section id="login-section"><h2>Login</h2><form method="post" action="/login" id="login-form">)"
           R"({}<input type="submit" value="Login" class="big-button"></form>)"
@@ -404,7 +482,7 @@ namespace Ludwig {
       } else if (board) {
         rsp << R"(<section id="actions-section"><h2>Actions</h2>)";
         write_subscribe_button(rsp, board->id, board->subscribed);
-        if (board && Controller::can_create_thread(*board, logged_in_user)) {
+        if (board && Controller::can_create_thread(*board, login)) {
           write_fmt(rsp,
             R"(<a class="big-button" href="/b/{0}/create_thread">Submit a new link</a>)"
             R"(<a class="big-button" href="/b/{0}/create_thread?text=1">Submit a new text post</a>)",
@@ -542,7 +620,7 @@ namespace Ludwig {
       std::string_view sort_name,
       SortFormType type,
       bool can_hide_cws,
-      bool show_posts,
+      bool show_threads,
       bool show_images,
       bool show_cws
     ) noexcept -> void {
@@ -553,38 +631,38 @@ namespace Ludwig {
       if (type != SortFormType::Comments) {
         write_fmt(rsp,
           R"(<label for="type"><span>Show</span><select name="type">)"
-          R"(<option value="posts"{}>Posts</option>)"
-          R"(<option value="comments"{}>Comments</option></select></label>)",
-          show_posts ? " selected" : "", show_posts ? "" : " selected"
+          R"(<option value="threads"{}>Threads)"
+          R"(<option value="comments"{}>Comments</select></label>)",
+          show_threads ? " selected" : "", show_threads ? "" : " selected"
         );
       }
       rsp << R"(<label for="sort"><span>Sort</span><select name="sort">)";
       if (type == SortFormType::Board) {
-        write_fmt(rsp, R"(<option value="Active"{}>Active</option>)", sort_name == "Active" ? " selected" : "");
+        write_fmt(rsp, R"(<option value="Active"{}>Active)", sort_name == "Active" ? " selected" : "");
       }
       if (type != SortFormType::User) {
-        write_fmt(rsp, R"(<option value="Hot"{}>Hot</option>)", sort_name == "Hot" ? " selected" : "");
+        write_fmt(rsp, R"(<option value="Hot"{}>Hot)", sort_name == "Hot" ? " selected" : "");
       }
       write_fmt(rsp,
-        R"(<option value="New"{}>New</option>)"
-        R"(<option value="Old"{}>Old</option>)",
+        R"(<option value="New"{}>New)"
+        R"(<option value="Old"{}>Old)",
         sort_name == "New" ? " selected" : "",
         sort_name == "Old" ? " selected" : ""
       );
       if (type == SortFormType::Board) {
         write_fmt(rsp,
-          R"(<option value="MostComments"{}>Most Comments</option>)"
-          R"(<option value="NewComments"{}>New Comments</option>)"
-          R"(<option value="TopAll"{}>Top All</option>)"
-          R"(<option value="TopYear"{}>Top Year</option>)"
-          R"(<option value="TopSixMonths"{}>Top Six Months</option>)"
-          R"(<option value="TopThreeMonths"{}>Top Three Months</option>)"
-          R"(<option value="TopMonth"{}>Top Month</option>)"
-          R"(<option value="TopWeek"{}>Top Week</option>)"
-          R"(<option value="TopDay"{}>Top Day</option>)"
-          R"(<option value="TopTwelveHour"{}>Top Twelve Hour</option>)"
-          R"(<option value="TopSixHour"{}>Top Six Hour</option>)"
-          R"(<option value="TopHour"{}>Top Hour</option>)",
+          R"(<option value="MostComments"{}>Most Comments)"
+          R"(<option value="NewComments"{}>New Comments)"
+          R"(<option value="TopAll"{}>Top All)"
+          R"(<option value="TopYear"{}>Top Year)"
+          R"(<option value="TopSixMonths"{}>Top Six Months)"
+          R"(<option value="TopThreeMonths"{}>Top Three Months)"
+          R"(<option value="TopMonth"{}>Top Month)"
+          R"(<option value="TopWeek"{}>Top Week)"
+          R"(<option value="TopDay"{}>Top Day)"
+          R"(<option value="TopTwelveHour"{}>Top Twelve Hour)"
+          R"(<option value="TopSixHour"{}>Top Six Hour)"
+          R"(<option value="TopHour"{}>Top Hour)",
           sort_name == "MostComments" ? " selected" : "",
           sort_name == "NewComments" ? " selected" : "",
           sort_name == "TopAll" ? " selected" : "",
@@ -599,13 +677,17 @@ namespace Ludwig {
           sort_name == "TopHour" ? " selected" : ""
         );
       } else {
-        write_fmt(rsp, R"(<option value="Top"{}>Top</option>)", sort_name == "Top" ? " selected" : "");
+        write_fmt(rsp, R"(<option value="Top"{}>Top)", sort_name == "Top" ? " selected" : "");
       }
-      rsp << R"(</select></label><label for="images"><input name="images" type="checkbox" value="1")"
-        << (show_images ? " checked" : "") << R"(> Show images</label>)";
+      write_fmt(rsp,
+        R"(</select></label><label for="images"><input name="images" type="checkbox" value="1"{}> Show images</label>)",
+        show_images ? " checked" : ""
+      );
       if (can_hide_cws) {
-        rsp << R"(<label for="cws"><input name="cws" type="checkbox" value="1")"
-          << (show_cws ? " checked" : "") << R"(> Show posts with Content Warnings</label>)";
+        write_fmt(rsp,
+          R"(<label for="cws"><input name="cws" type="checkbox" value="1"{}> Show posts with Content Warnings</label>)",
+          show_cws ? " checked" : ""
+        );
       }
       rsp << R"(<input type="submit" value="Apply"></form></details>)";
     }
@@ -666,6 +748,136 @@ namespace Ludwig {
       rsp << R"(<div class="spinner">Loading…</div></div>)";
     }
 
+    template <typename T> auto write_controls_submenu(
+      Response& rsp,
+      const T* post,
+      Controller::Login login,
+      bool show_user,
+      bool show_board
+    ) noexcept -> void {
+      if (!login) return;
+      write_fmt(rsp,
+        R"(<form class="controls-submenu" id="controls-submenu-{0:x}" method="post" action="/{1}/{0:x}/action">)"
+        R"(<input type="hidden" name="show_user" value="{2:d}"><input type="hidden" name="show_board" value="{3:d}">)"
+        R"(<label for="action"><span class="a11y">Action</span><svg class="icon"><use href="/static/feather-sprite.svg#chevron-down"></svg>)"
+        R"(<select name="action" autocomplete="off" hx-post="/{1}/{0:x}/action" hx-trigger="change" hx-target="#controls-submenu-{0:x}">)"
+        R"(<option selected hidden value="{4:d}">Actions)",
+        post->id, post_word<T>(), show_user, show_board, SubmenuAction::None
+      );
+      if (Controller::can_reply_to(*post, login)) {
+        write_fmt(rsp, R"(<option value="{:d}">💬 Reply)", SubmenuAction::Reply);
+      }
+      if (Controller::can_edit(*post, login)) {
+        write_fmt(rsp, R"(<option value="{:d}">✏️ Edit)", SubmenuAction::Edit);
+      }
+      if (Controller::can_delete(*post, login)) {
+        write_fmt(rsp, R"(<option value="{:d}">🗑️ Delete)", SubmenuAction::Delete);
+      }
+      write_fmt(rsp,
+        R"(<option value="{:d}">{})"
+        R"(<option value="{:d}">{})",
+        post->saved ? SubmenuAction::Unsave : SubmenuAction::Save, post->saved ? "🚫 Unsave" : "🔖 Save",
+        post->hidden ? SubmenuAction::Unhide : SubmenuAction::Hide, post->hidden ? "🔈 Unhide" : "🔇 Hide"
+      );
+      if (show_user) {
+        write_fmt(rsp, R"(<option value="{:d}">{})",
+          post->user_hidden ? SubmenuAction::UnmuteUser : SubmenuAction::MuteUser,
+          post->user_hidden ? "🔈 Unmute user" : "🔇 Mute user"
+        );
+      }
+      if (show_board) {
+        write_fmt(rsp, R"(<option value="{:d}">{})",
+          post->board_hidden ? SubmenuAction::UnmuteBoard : SubmenuAction::MuteBoard,
+          post->board_hidden ? "🔈 Unhide board" : "🔇 Hide board"
+        );
+      }
+      if (login->local_user->admin()) {
+        SubmenuAction a1, a2, a3;
+        string_view b1, b2, b3;
+        switch (mod_state(post)) {
+          case ModState::Visible:
+            a1 = SubmenuAction::ModFlag;
+            a2 = SubmenuAction::ModLock;
+            a3 = SubmenuAction::ModRemove;
+            b1 = "🚩 Flag";
+            b2 = "🔒 Lock";
+            b3 = "✂️ Remove";
+            break;
+          case ModState::Flagged:
+            a1 = SubmenuAction::ModRestore;
+            a2 = SubmenuAction::ModLock;
+            a3 = SubmenuAction::ModRemove;
+            b1 = "🏳️ Unflag";
+            b2 = "🔒 Lock";
+            b3 = "✂️ Remove";
+            break;
+          case ModState::Locked:
+            a1 = SubmenuAction::ModRestore;
+            a2 = SubmenuAction::ModFlag;
+            a3 = SubmenuAction::ModRemove;
+            b1 = "🔓 Unlock";
+            b2 = "🔓 Unlock (leave flagged)";
+            b3 = "✂️ Remove";
+            break;
+          case ModState::Removed:
+            a1 = SubmenuAction::ModRestore;
+            a2 = SubmenuAction::ModFlag;
+            a3 = SubmenuAction::ModLock;
+            b1 = "♻️ Restore";
+            b2 = "♻️ Restore (leave flagged)";
+            b3 = "♻️ Restore (leave locked)";
+            break;
+        }
+        write_fmt(rsp,
+          R"(<optgroup label="Moderation">)"
+          R"(<option value="{:d}">{})"
+          R"(<option value="{:d}">{})"
+          R"(<option value="{:d}">{})"
+          R"(<option value="{:d}">🔨 Ban user)"
+          R"(<option value="{:d}">☣️ Purge {})"
+          R"(<option value="{:d}">☣️ Purge user)"
+          "</optgroup>",
+          a1, b1, a2, b2, a3, b3,
+          SubmenuAction::ModBan,
+          SubmenuAction::ModPurge, post_word<T>(),
+          SubmenuAction::ModPurgeUser
+        );
+      }
+      rsp << R"(</select></label><button type="submit">Apply</button></form>)";
+    }
+
+    template <typename T> auto write_warnings(Response& rsp, const T* thing, string_view prefix = "") noexcept -> void {
+      if (thing->mod_state() > ModState::Visible) {
+        if (thing->mod_reason()) {
+          write_content_warning(rsp,
+            fmt::format("{} by Moderator", describe_mod_state(thing->mod_state())),
+            true,
+            thing->mod_reason()->string_view(),
+            prefix
+          );
+        } else {
+          write_fmt(rsp,
+            R"(<p class="content-warning"><span class="mod-warning-label">{}{} by Moderator</span></p>)",
+            prefix, describe_mod_state(thing->mod_state())
+          );
+        }
+      }
+      if (thing->content_warning()) {
+        write_content_warning(rsp, "Content Warning", false, thing->content_warning()->string_view(), prefix);
+      }
+    }
+
+    template <typename T> auto write_short_warnings(Response& rsp, const T* thing) noexcept -> void {
+      if (thing->mod_state() > ModState::Visible) {
+        write_fmt(rsp, R"( <abbr class="mod-warning-label" title="{0} by Moderator: {1}">{0}</abbr>)",
+          describe_mod_state(thing->mod_state()), Escape{thing->mod_reason()->string_view()});
+      }
+      if (thing->content_warning()) {
+        write_fmt(rsp, R"( <abbr class="content-warning-label" title="Content Warning: {}">CW</abbr>)",
+          Escape{thing->content_warning()->string_view()});
+      }
+    }
+
     auto write_thread_list(
       Response& rsp,
       const ListThreadsResponse& list,
@@ -683,7 +895,7 @@ namespace Ludwig {
         // TODO: thumbnail
         write_fmt(rsp,
           R"(<li><article class="thread" id="thread-{:x}"><h2 class="thread-title"><a class="thread-title-link" href="{}">{}</a></h2>)"
-          R"(<div class="thumbnail"><svg class="icon"><use href="/static/feather-sprite.svg#{}"></svg></div><div class="thread-info">)",
+          R"(<div class="thumbnail"><svg class="icon"><use href="/static/feather-sprite.svg#{}"></svg></div>)",
           thread->id,
           Escape{
             thread->thread->content_url()
@@ -693,35 +905,30 @@ namespace Ludwig {
           Escape{thread->thread->title()->string_view()},
           thread->thread->content_warning() ? "alert-octagon" : (thread->thread->content_url() ? "link" : "file-text")
         );
-        if (thread->thread->content_warning()) {
-          write_fmt(rsp,
-            R"(<p class="content-warning"><strong class="content-warning-label">Content Warning<span class="a11y">:</span></strong> {}</p>)",
-            Escape{thread->thread->content_warning()->string_view()}
-          );
+        if (thread->thread->content_warning() || thread->thread->mod_state() > ModState::Visible) {
+          rsp << R"(<div class="thread-warnings">)";
+          write_warnings(rsp, thread->thread);
+          rsp << R"(</div>)";
         }
-        rsp << "submitted ";
+        rsp << R"(<div class="thread-info"><span>submitted )";
         write_datetime(rsp, thread->thread->created_at());
         if (show_user) {
-          rsp << " by ";
+          rsp << "</span><span>by ";
           write_user_link(rsp, thread->author);
         }
         if (show_board) {
-          rsp << " to ";
+          rsp << "</span><span>to ";
           write_board_link(rsp, thread->board);
         }
-        rsp << "</div>";
+        rsp << "</span></div>";
         write_vote_buttons(rsp, thread, login);
-        write_fmt(rsp,
-          R"(<div class="controls"><a id="comment-link-{0:x}" href="/thread/{0:x}#comments">{1:d}{2}</a>)"
-          R"(<div class="controls-submenu-wrapper"><button type="button" class="controls-submenu-expand">More</button>)"
-          R"(<form class="controls-submenu" method="post"><input type="hidden" name="post" value="{0:x}">)"
-          R"(<button type="submit" formaction="/do/save">Save</button>)"
-          R"(<button type="submit" formaction="/do/hide">Hide</button>)"
-          R"(<a target="_blank" href="/report_post/{0:x}">Report</a></form></div></div></article>)",
+        write_fmt(rsp, R"(<div class="controls"><a id="comment-link-{0:x}" href="/thread/{0:x}#comments">{1:d}{2}</a>)",
           thread->id,
           thread->stats->descendant_count(),
           thread->stats->descendant_count() == 1 ? " comment" : " comments"
         );
+        write_controls_submenu(rsp, thread, login, show_user, show_board);
+        rsp << "</div></article>";
       }
       if (include_ol) rsp << "</ol>";
       write_pagination(rsp, base_url, list.is_first, list.next);
@@ -739,32 +946,38 @@ namespace Ludwig {
       if (include_ol) rsp << R"(<ol class="comment-list" id="infinite-scroll-list">)";
       for (size_t i = 0; i < list.size; i++) {
         const auto comment = &list.page[i];
-        write_fmt(rsp, R"(<li><article class="comment" id="comment-{:x}"><h2 class="comment-info">)", comment->id);
+        write_fmt(rsp, R"(<li><article class="comment" id="comment-{:x}"><h2 class="comment-info"><span>)", comment->id);
         if (show_user) {
           write_user_link(rsp, comment->author);
-          rsp << " ";
+          rsp << "</span><span>";
         }
         rsp << "commented ";
         write_datetime(rsp, comment->comment->created_at());
         if (show_thread) {
-          write_fmt(rsp, R"( on <a href="/thread/{:x}">{}</a>)",
+          write_fmt(rsp, R"(</span><span>on <a href="/thread/{:x}">{}</a>)",
             comment->comment->thread(), Escape{comment->thread->title()->string_view()});
-          if (comment->thread->content_warning()) {
-            write_fmt(rsp, R"( <abbr class="content-warning-label" title="Content Warning: {}">CW</abbr>)",
-              Escape{comment->thread->content_warning()->string_view()});
+          if (comment->thread->content_warning() || comment->thread->mod_state() > ModState::Visible) {
+            write_short_warnings(rsp, comment->thread);
           }
         }
-        write_fmt(rsp, R"(</h2><div class="comment-content">{}</div>)", comment->comment->content_safe()->string_view());
+        const bool has_warnings = comment->comment->content_warning() || comment->comment->mod_state() > ModState::Visible,
+          thread_warnings = show_thread && (comment->thread->content_warning() || comment->thread->mod_state() > ModState::Visible);
+        if (has_warnings || thread_warnings) {
+          rsp << R"(</span></h2><div class="comment-content"><details class="content-warning-collapse"><summary>Content hidden (click to show))";
+          if (thread_warnings) write_warnings(rsp, comment->thread, "Thread ");
+          if (has_warnings) write_warnings(rsp, comment->comment);
+          write_fmt(rsp, R"(</summary><div>{}</div></details></div>)", comment->comment->content_safe()->string_view());
+        } else {
+          write_fmt(rsp, R"(</span></h2><div class="comment-content">{}</div>)", comment->comment->content_safe()->string_view());
+        }
         write_vote_buttons(rsp, comment, login);
-        write_fmt(rsp,
-          R"(<div class="controls"><a id="comment-link-{0:x}" href="/comment/{0:x}#replies">{1:d}{2}</a>)"
-          R"(<div class="controls-submenu-wrapper"><button type="button" class="controls-submenu-expand">More</button>)"
-          R"(<form class="controls-submenu" method="post"><input type="hidden" name="post" value="{0:x}">)"
-          R"(<button type="submit" formaction="/do/save">Save</button>)"
-          R"(<button type="submit" formaction="/do/hide">Hide</button>)"
-          R"(<a target="_blank" href="/report_post/{0:x}">Report</a></form></div></div></article>)",
-          comment->id, comment->stats->child_count(), comment->stats->child_count() == 1 ? " reply" : " replies"
+        write_fmt(rsp, R"(<div class="controls"><a id="comment-link-{0:x}" href="/comment/{0:x}#replies">{1:d}{2}</a>)",
+          comment->id,
+          comment->stats->descendant_count(),
+          comment->stats->descendant_count() == 1 ? " reply" : " replies"
         );
+        write_controls_submenu(rsp, comment, login, show_user, show_thread);
+        rsp << "</div></article>";
       }
       if (include_ol) rsp << "</ol>";
       write_pagination(rsp, base_url, list.is_first, list.next);
@@ -777,7 +990,8 @@ namespace Ludwig {
       string_view sort_str,
       Controller::Login login,
       bool is_thread,
-      bool include_ol
+      bool include_ol,
+      bool is_alt = false
     ) noexcept -> void {
       // TODO: Include existing query params
       auto range = comments.comments.equal_range(root);
@@ -785,28 +999,21 @@ namespace Ludwig {
         if (is_thread) rsp << R"(<div class="no-comments">No comments</div>)";
         return;
       }
-      if (include_ol) write_fmt(rsp, R"(<ol class="comment-list" id="comments-{:x}">)", root);
+      if (include_ol) write_fmt(rsp, R"(<ol class="comment-list comment-tree" id="comments-{:x}">)", root);
       for (auto iter = range.first; iter != range.second; iter++) {
         const auto comment = &iter->second;
-        write_fmt(rsp, R"(<li><article class="comment-with-comments"><div class="comment" id="{}"><h3 class="comment-info">)", comment->id);
-        write_user_link(rsp, comment->author);
-        rsp << " commented ";
-        write_datetime(rsp, comment->comment->created_at());
-        write_fmt(rsp, R"(</h3><div class="comment-content">{}</div>)", comment->comment->content_safe()->string_view());
-        write_vote_buttons(rsp, comment, login);
-        rsp << R"(<div class="controls">)";
-        if (Controller::can_reply_to(*comment, login)) {
-          write_fmt(rsp, R"(<a href="/comment/{:x}#reply">Reply</a>)", comment->id);
-        }
         write_fmt(rsp,
-          R"(<div class="controls-submenu-wrapper"><button type="button" class="controls-submenu-expand">More</button>)"
-          R"(<form class="controls-submenu" method="post"><input type="hidden" name="post" value="{0:x}">)"
-          R"(<button type="submit" formaction="/do/save">Save</button>)"
-          R"(<button type="submit" formaction="/do/hide">Hide</button>)"
-          R"(<a target="_blank" href="/report_post/{0:x}">Report</a>)"
-          R"(</form></div></div></div>)",
-          comment->id
+          R"(<li><article class="comment-with-comments"><div class="comment{}" id="{}"><h3 class="comment-info"><span>)",
+          is_alt ? " odd-depth" : "", comment->id
         );
+        write_user_link(rsp, comment->author);
+        rsp << "</span><span>commented ";
+        write_datetime(rsp, comment->comment->created_at());
+        write_fmt(rsp, R"(</span></h3><div class="comment-content">{}</div>)", comment->comment->content_safe()->string_view());
+        write_vote_buttons(rsp, comment, login);
+        write_fmt(rsp, R"(<div class="controls"><a href="/comment/{0:x}">Permalink</a>)", comment->id);
+        write_controls_submenu(rsp, comment, login, true, false);
+        rsp << "</div></div>";
         const auto cont = comments.continued.find(comment->id);
         if (cont != comments.continued.end() && cont->second == 0) {
           write_fmt(rsp,
@@ -815,7 +1022,7 @@ namespace Ludwig {
           );
         } else if (comment->stats->child_count()) {
           rsp << R"(<section class="comments" aria-title="Replies">)";
-          write_comment_tree(rsp, comments, comment->id, sort_str, login, false, true);
+          write_comment_tree(rsp, comments, comment->id, sort_str, login, false, true, !is_alt);
           rsp << "</section>";
         }
         rsp << "</article>";
@@ -832,14 +1039,21 @@ namespace Ludwig {
 
     auto write_reply_form(Response& rsp, uint64_t parent) noexcept -> void {
       write_fmt(rsp,
-        R"(<form class="reply-form" method="post" action="/do/reply"><input type="hidden" name="parent" value="{:x}">
-        R:(<label for="text_content"><span>Reply</span>)"
+        R"(<form class="reply-form" method="post" action="/do/reply" id="reply"><input type="hidden" name="parent" value="{:x}">)"
+        R"(<label for="text_content"><span>Reply</span>)"
         R"(<div><textarea name="text_content" placeholder="Write your reply here"></textarea>)"
         R"(<p><small><a href="https://www.markdownguide.org/cheat-sheet/" target="_blank">Markdown</a> formatting is supported.</small></p></div></label>)"
         R"(<label for="content_warning"><span>Content warning (optional)</span><input type="text" name="content_warning" id="content_warning"></label>)"
         R"(<input type="submit" value="Reply">)"
         R"(</form>)",
         parent
+      );
+    }
+
+    auto write_content_warning(Response& rsp, string_view label, bool is_mod, string_view content, string_view prefix = "") noexcept -> void {
+      write_fmt(rsp,
+        R"(<p class="content-warning"><strong class="{}-warning-label">{}{}<span class="a11y">:</span></strong> {}</p>)",
+        is_mod ? "mod" : "content", prefix, label, Escape{content}
       );
     }
 
@@ -866,35 +1080,37 @@ namespace Ludwig {
       // TODO: thread-source (link URL)
       // TODO: thumbnail
       write_fmt(rsp,
-        R"(<div class="thumbnail"><svg class="icon"><use href="/static/feather-sprite.svg#{}"></svg></div><div class="thread-info">)",
+        R"(<div class="thumbnail"><svg class="icon"><use href="/static/feather-sprite.svg#{}"></svg></div>)",
         thread->thread->content_warning() ? "alert-octagon" : (thread->thread->content_url() ? "link" : "file-text")
       );
-      if (thread->thread->content_warning()) {
-        write_fmt(rsp,
-          R"(<p class="content-warning"><strong class="content-warning-label">Content Warning<span class="a11y">:</span></strong> {}</p>)",
-          Escape{thread->thread->content_warning()->string_view()}
-        );
+      const bool has_warnings = thread->thread->content_warning() || thread->thread->mod_state() > ModState::Visible;
+      if (has_warnings && !thread->thread->content_text_safe()) {
+        rsp << R"(<div class="thread-warnings">)";
+        if (thread->thread->content_text_safe()) write_short_warnings(rsp, thread->thread);
+        else write_warnings(rsp, thread->thread);
+        rsp << R"(</div>)";
       }
-      rsp << "submitted ";
+      rsp << R"(<div class="thread-info"><span>submitted )";
       write_datetime(rsp, thread->thread->created_at());
-      rsp << " by ";
+      rsp << "</span><span>by ";
       write_user_link(rsp, thread->author);
-      rsp << " to ";
+      rsp << "</span><span>to ";
       write_board_link(rsp, thread->board);
-      rsp << "</div>";
+      rsp << "</span></div>";
       write_vote_buttons(rsp, thread, login);
-      write_fmt(rsp,
-        R"(<div class="controls"><div class="controls-submenu-wrapper"><button type="button" class="controls-submenu-expand">More</button>)"
-        R"(<form class="controls-submenu" method="post"><input type="hidden" name="post" value="{0:x}">)"
-        R"(<button type="submit" formaction="/do/save">Save</button>)"
-        R"(<button type="submit" formaction="/do/hide">Hide</button>)"
-        R"(<a target="_blank" href="/report_post/{0:x}">Report</a></form></div></div></div>)",
-        thread->id
-      );
+      rsp << R"(<div class="controls"><div></div>)";
+      write_controls_submenu(rsp, thread, login, true, true);
+      rsp << "</div></div>";
       if (thread->thread->content_text_safe()) {
-        write_fmt(rsp, R"(<div class="thread-content">{}</div>)", thread->thread->content_text_safe()->string_view());
+        if (has_warnings) {
+          rsp << R"(<div class="thread-content"><details class="content-warning-collapse"><summary>Content hidden (click to show))";
+          write_warnings(rsp, thread->thread);
+          write_fmt(rsp, R"(</summary><div>{}</div></details></div>)", thread->thread->content_text_safe()->string_view());
+        } else {
+          write_fmt(rsp, R"(<div class="thread-content">{}</div>)", thread->thread->content_text_safe()->string_view());
+        }
       }
-      rsp << R"(<section class="comments"><h2>)" << thread->stats->descendant_count() << R"( comments</h2>)";
+      rsp << R"(<section class="comments" id="comments"><h2>)" << thread->stats->descendant_count() << R"( comments</h2>)";
       if (Controller::can_reply_to(*thread, login)) {
         write_reply_form(rsp, thread->id);
       }
@@ -909,45 +1125,50 @@ namespace Ludwig {
       rsp << "</section></article>";
     }
 
-    static auto write_login_form(Response& rsp, optional<string_view> error = {}) noexcept -> void {
-      rsp << R"(<main><form class="form-page" method="post" action="/login">)";
-      if (error) {
-        rsp << R"(<p class="error-message">⚠️ )" << Escape{*error} << "</p>";
-      }
-      rsp << LOGIN_FIELDS << R"(<input type="submit" value="Login"></form></main>)";
+    inline auto error_banner(optional<string_view> error) noexcept -> std::string {
+      if (!error) return "";
+      return fmt::format(R"(<p class="error-message"><strong>Error:</strong> {}</p>)", Escape{*error});
     }
 
-    static auto write_register_form(Response& rsp, optional<string_view> error = {}) noexcept -> void {
-      rsp << R"(<main><form class="form-page" method="post" action="/do/register">)";
-      if (error) {
-        rsp << R"(<p class="error-message">⚠️ )" << Escape{*error} << "</p>";
-      }
-      rsp << R"(<label for="username" class="a11y"><span>Don't type here unless you're a bot</span>)"
+    inline auto write_login_form(Response& rsp, optional<string_view> error = {}) noexcept -> void {
+      write_fmt(rsp,
+        R"(<main><form class="form-page" method="post" action="/login">{}{})"
+        R"(<input type="submit" value="Login"></form></main>)",
+        error_banner(error), LOGIN_FIELDS
+      );
+    }
+
+    inline auto write_register_form(Response& rsp, optional<string_view> error = {}) noexcept -> void {
+      write_fmt(rsp,
+        R"(<main><form class="form-page" method="post" action="/do/register">{})"
+        R"(<label for="username" class="a11y"><span>Don't type here unless you're a bot</span>)"
         R"(<input type="text" name="username" id="username" tabindex="-1" autocomplete="off"></label>)"
         R"(<label for="actual_username"><span>Username</span><input type="text" name="actual_username" id="actual_username"></label>)"
         R"(<label for="email"><span>Email address</span><input type="email" name="email" id="email"></label>)"
         R"(<label for="password"><span>Password</span><input type="password" name="password" id="password"></label>)"
         R"(<label for="confirm_password"><span>Confirm password</span><input type="password" name="confirm_password" id="confirm_password"></label>)"
         R"(<input type="submit" value="Register">)"
-        R"(</form></main>)";
+        "</form></main>",
+        error_banner(error)
+      );
     }
 
-    static auto write_create_board_form(
+    inline auto write_create_board_form(
       Response& rsp,
       const LocalUserDetailResponse& login,
       optional<string_view> error = {}
     ) noexcept -> void {
-      rsp << R"(<main><form class="form-page" method="post" action="/do/create_board"><h2>Create Board</h2>)";
-      if (error) {
-        rsp << R"(<p class="error-message">⚠️ )" << Escape{*error} << "</p>";
-      }
-      rsp << R"(<label for="name"><span>Name (URL)</span><div>/b/<input type="text" name="name" id="name" autocomplete="off" required></div></label>)"
+      write_fmt(rsp,
+        R"(<main><form class="form-page" method="post" action="/do/create_board"><h2>Create Board</h2>{})"
+        R"(<label for="name"><span>Name (URL)</span><div>/b/<input type="text" name="name" id="name" autocomplete="off" required></div></label>)"
         R"(<label for="display_name"><span>Display name</span><input type="text" name="display_name" id="display_name" autocomplete="off"></label>)"
         R"(<label for="private"><span>Private</span><input type="checkbox" name="private" id="private"></label>)"
         R"(<label for="restricted_posting"><span>Restrict posting to moderators</span><input type="checkbox" name="restricted_posting" id="restricted_posting"></label>)"
         R"(<label for="content_warning"><span>Content warning (optional)</span><input type="text" name="content_warning" id="content_warning" autocomplete="off"></label>)"
         R"(<input type="submit" value="Submit">)"
-        R"(</form></main>)";
+        "</form></main>",
+        error_banner(error)
+      );
     }
 
     auto write_create_thread_form(
@@ -957,12 +1178,11 @@ namespace Ludwig {
       const LocalUserDetailResponse& login,
       optional<string_view> error = {}
     ) noexcept -> void {
-      rsp << R"(<main><form class="form-page" method="post" action="/b/)" << Escape{board.board->name()->string_view()}
-        << R"(/create_thread"><h2>Create Thread</h2>)";
-      if (error) {
-        rsp << R"(<p class="error-message">⚠️ )" << Escape{*error} << "</p>";
-      }
-      rsp << R"(<p class="thread-info">Posting as )";
+      write_fmt(rsp,
+        R"(<main><form class="form-page" method="post" action="/b/{}/create_thread"><h2>Create Thread</h2>{})",
+        R"(<p class="thread-info">Posting as )",
+        Escape{board.board->name()->string_view()}, error_banner(error)
+      );
       write_user_link(rsp, login.user);
       rsp << " to ";
       write_board_link(rsp, board.board);
@@ -985,12 +1205,11 @@ namespace Ludwig {
       const LocalUserDetailResponse& login,
       optional<string_view> error = {}
     ) noexcept -> void {
-      rsp << R"(<main><form class="form-page" method="post" action="/thread/)" << hexstring(thread.id)
-        << R"(/edit"><h2>Edit Thread</h2>)";
-      if (error) {
-        rsp << R"(<p class="error-message">⚠️ )" << Escape{*error} << "</p>";
-      }
-      rsp << R"(<p class="thread-info">Posted by )";
+      write_fmt(rsp,
+        R"(<main><form class="form-page" method="post" action="/thread/{:x}/edit"><h2>Edit Thread</h2>{})",
+        R"(<p class="thread-info">Posting as )",
+        thread.id, error_banner(error)
+      );
       write_user_link(rsp, login.user);
       rsp << " to ";
       write_board_link(rsp, thread.board);
@@ -1005,7 +1224,20 @@ namespace Ludwig {
         R"(</form></main>)";
     }
 
-    static inline auto write_redirect_back(Request& req, Response& rsp) -> void {
+    static inline auto write_redirect_to(Request& req, Response& rsp, string_view location) noexcept -> void {
+      rsp.cork([&]() {
+        if (is_htmx(req)) {
+          rsp.writeStatus(http_status(204));
+          rsp.writeHeader("HX-Redirect", location);
+        } else {
+          rsp.writeStatus(http_status(303));
+          rsp.writeHeader("Location", location);
+        }
+        rsp.endWithoutBody({}, true);
+      });
+    }
+
+    static inline auto write_redirect_back(Request& req, Response& rsp) noexcept -> void {
       const auto referer = req.getHeader("referer");
       rsp.cork([&]() {
         if (referer.empty()) {
@@ -1079,7 +1311,7 @@ namespace Ludwig {
         ListThreadsResponse threads;
         ListCommentsResponse comments;
         std::string_view sort_str;
-        bool show_posts, show_images, show_cws, is_htmx;
+        bool show_posts, show_images, show_cws, htmx;
         page(txn, [&](Request& req, auto& login) {
           const auto name = req.getParameter(0);
           const auto board_id = txn.get_board_id(name);
@@ -1091,7 +1323,7 @@ namespace Ludwig {
           const auto from = Controller::parse_hex_id(std::string(req.getQuery("from")));
           show_images = req.getQuery("images") == "1" || sort_str.empty();
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
-          is_htmx = req.getHeader("hx-target").data() != nullptr;
+          htmx = is_htmx(req);
           site = self->controller->site_detail();
           board = self->controller->board_detail(txn, *board_id, login ? optional(login->id) : nullopt);
           if (show_posts) {
@@ -1107,7 +1339,7 @@ namespace Ludwig {
             show_images ? 1 : 0,
             show_cws ? 1 : 0
           );
-          if (is_htmx) {
+          if (htmx) {
             rsp.writeHeader("Content-Type", TYPE_HTML);
             if (show_posts) self->write_thread_list(rsp, threads, base_url, login, false, true, false, show_images);
             else self->write_comment_list(rsp, comments, base_url, login, false, true, true);
@@ -1163,7 +1395,7 @@ namespace Ludwig {
         ListThreadsResponse threads;
         ListCommentsResponse comments;
         std::string_view sort_str;
-        bool show_posts, show_images, show_cws, is_htmx;
+        bool show_posts, show_images, show_cws, htmx;
         page(txn, [&](Request& req, auto& login) {
           const auto name = req.getParameter(0);
           const auto user_id = txn.get_user_id(name);
@@ -1177,6 +1409,7 @@ namespace Ludwig {
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           site = self->controller->site_detail();
           user = self->controller->user_detail(txn, *user_id);
+          htmx = is_htmx(req);
           if (show_posts) {
             threads = self->controller->list_user_threads(txn, *user_id, sort, login, !show_cws, from);
           } else {
@@ -1190,7 +1423,7 @@ namespace Ludwig {
             show_images ? 1 : 0,
             show_cws ? 1 : 0
           );
-          if (is_htmx) {
+          if (htmx) {
             rsp.writeHeader("Content-Type", TYPE_HTML);
             if (show_posts) self->write_thread_list(rsp, threads, base_url, login, false, true, false, show_images);
             else self->write_comment_list(rsp, comments, base_url, login, false, true, true);
@@ -1264,7 +1497,7 @@ namespace Ludwig {
               .canonical_path = "/login",
               .banner_title = "Login",
             });
-            write_login_form(rsp);
+            self->write_login_form(rsp);
             end_with_html_footer(rsp, page.time_elapsed());
           }
         });
@@ -1284,7 +1517,7 @@ namespace Ludwig {
               .canonical_path = "/register",
               .banner_title = "Register",
             });
-            write_register_form(rsp);
+            self->write_register_form(rsp);
             end_with_html_footer(rsp, page.time_elapsed());
           }
         });
@@ -1327,7 +1560,7 @@ namespace Ludwig {
               .canonical_path = "/login",
               .banner_title = "Login",
             });
-            write_login_form(rsp, {e.what()});
+            self->write_login_form(rsp, {e.what()});
             end_with_html_footer(rsp, 0);
           });
           return;
@@ -1367,7 +1600,7 @@ namespace Ludwig {
               .canonical_path = "/register",
               .banner_title = "Register",
             });
-            write_register_form(rsp, {e.what()});
+            self->write_register_form(rsp, {e.what()});
             end_with_html_footer(rsp, 0);
           });
           return;
@@ -1425,6 +1658,88 @@ namespace Ludwig {
         );
         write_redirect_back(req, rsp);
       }));
+      app.post("/thread/:id/action", action_page([](Self self, auto& req, auto& rsp, auto body, auto logged_in_user) {
+        const auto id = std::stoull(std::string(req.getParameter(0)), nullptr, 16);
+        const auto action = static_cast<SubmenuAction>(body.required_int("action"));
+        switch (action) {
+          case SubmenuAction::Reply:
+            write_redirect_to(req, rsp, fmt::format("/thread/{:x}#reply", id));
+            return;
+          case SubmenuAction::Edit:
+            write_redirect_to(req, rsp, fmt::format("/thread/{:x}/edit", id));
+            return;
+          case SubmenuAction::Delete:
+            throw ControllerError("Delete is not yet implemented", 500);
+          case SubmenuAction::Share:
+            throw ControllerError("Share is not yet implemented", 500);
+          case SubmenuAction::Save:
+            self->controller->save_post(logged_in_user, id, true);
+            break;
+          case SubmenuAction::Unsave:
+            self->controller->save_post(logged_in_user, id, false);
+            break;
+          case SubmenuAction::Hide:
+            self->controller->hide_post(logged_in_user, id, true);
+            break;
+          case SubmenuAction::Unhide:
+            self->controller->hide_post(logged_in_user, id, false);
+            break;
+          case SubmenuAction::Report:
+            throw ControllerError("Report is not yet implemented", 500);
+          case SubmenuAction::MuteUser: {
+            auto txn = self->controller->open_read_txn();
+            const auto thread = txn.get_thread(id);
+            if (!thread) throw ControllerError("Thread does not exist", 404);
+            self->controller->hide_user(logged_in_user, (*thread)->author(), true);
+            break;
+          }
+          case SubmenuAction::UnmuteUser: {
+            auto txn = self->controller->open_read_txn();
+            const auto thread = txn.get_thread(id);
+            if (!thread) throw ControllerError("Thread does not exist", 404);
+            self->controller->hide_user(logged_in_user, (*thread)->author(), false);
+            break;
+          }
+          case SubmenuAction::MuteBoard: {
+            auto txn = self->controller->open_read_txn();
+            const auto thread = txn.get_thread(id);
+            if (!thread) throw ControllerError("Thread does not exist", 404);
+            self->controller->hide_board(logged_in_user, (*thread)->board(), true);
+            break;
+          }
+          case SubmenuAction::UnmuteBoard:{
+            auto txn = self->controller->open_read_txn();
+            const auto thread = txn.get_thread(id);
+            if (!thread) throw ControllerError("Thread does not exist", 404);
+            self->controller->hide_board(logged_in_user, (*thread)->board(), false);
+            break;
+          }
+          case SubmenuAction::ModRestore:
+          case SubmenuAction::ModFlag:
+          case SubmenuAction::ModLock:
+          case SubmenuAction::ModRemove:
+          case SubmenuAction::ModBan:
+          case SubmenuAction::ModPurge:
+          case SubmenuAction::ModPurgeUser:
+            throw ControllerError("Mod actions are not yet implemented", 500);
+          default:
+            throw ControllerError("No action selected", 400);
+        }
+        if (is_htmx(req)) {
+          const auto show_user = body.optional_bool("show_user"),
+            show_board = body.optional_bool("show_board");
+          auto txn = self->controller->open_read_txn();
+          const auto login = self->controller->local_user_detail(txn, logged_in_user);
+          const auto thread = self->controller->get_thread_entry(txn, id, login);
+          rsp.cork([&](){
+            rsp.writeHeader("Content-Type", TYPE_HTML);
+            self->write_controls_submenu(rsp, &thread, login, show_user, show_board);
+            rsp.end();
+          });
+        } else {
+          write_redirect_back(req, rsp);
+        }
+      }));
       app.post("/do/vote", action_page([](Self self, auto& req, auto& rsp, auto body, auto logged_in_user) {
         const auto vote_str = uWS::getDecodedQueryValue("vote", body.query);
         Vote vote;
@@ -1434,9 +1749,7 @@ namespace Ludwig {
         else throw ControllerError("Invalid or missing 'vote' parameter", 400);
         const auto post_id = body.required_hex_id("post");
         self->controller->vote(logged_in_user, post_id, vote);
-        if (req.getHeader("hx-target").data() == nullptr) {
-          write_redirect_back(req, rsp);
-        } else {
+        if (is_htmx(req)) {
           auto txn = self->controller->open_read_txn();
           const auto login = self->controller->local_user_detail(txn, logged_in_user);
           try {
@@ -1454,35 +1767,36 @@ namespace Ludwig {
               rsp.end();
             });
           }
+        } else {
+          write_redirect_back(req, rsp);
         }
       }));
       app.post("/do/subscribe", action_page([](Self self, auto& req, auto& rsp, auto body, auto logged_in_user) {
         const auto board_id = body.required_hex_id("board");
         self->controller->subscribe(logged_in_user, board_id, true);
-        if (req.getHeader("hx-target").data() == nullptr) {
-          write_redirect_back(req, rsp);
-        } else {
+        if (is_htmx(req)) {
           rsp.cork([&]() {
             rsp.writeHeader("Content-Type", TYPE_HTML);
-            write_subscribe_button(rsp, board_id, true);
+            self->write_subscribe_button(rsp, board_id, true);
             rsp.end();
           });
+        } else {
+          write_redirect_back(req, rsp);
         }
       }));
       app.post("/do/unsubscribe", action_page([](Self self, auto& req, auto& rsp, auto body, auto logged_in_user) {
         const auto board_id = body.required_hex_id("board");
         self->controller->subscribe(logged_in_user, board_id, false);
-        if (req.getHeader("hx-target").data() == nullptr) {
-          write_redirect_back(req, rsp);
-        } else {
+        if (is_htmx(req)) {
           rsp.cork([&]() {
             rsp.writeHeader("Content-Type", TYPE_HTML);
-            write_subscribe_button(rsp, board_id, false);
+            self->write_subscribe_button(rsp, board_id, false);
             rsp.end();
           });
+        } else {
+          write_redirect_back(req, rsp);
         }
       }));
-
     }
   };
 

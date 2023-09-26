@@ -180,15 +180,15 @@ TEST_CASE("create users and boards, subscribe and unsubscribe", "[db]") {
     REQUIRE(stats0->subscriber_count() == 3);
     REQUIRE(stats1->subscriber_count() == 2);
     REQUIRE(stats2->subscriber_count() == 1);
-    REQUIRE(txn.user_is_subscribed(user_ids[0], board_ids[0]));
-    REQUIRE(txn.user_is_subscribed(user_ids[1], board_ids[0]));
-    REQUIRE(txn.user_is_subscribed(user_ids[2], board_ids[0]));
-    REQUIRE(txn.user_is_subscribed(user_ids[0], board_ids[1]));
-    REQUIRE(txn.user_is_subscribed(user_ids[1], board_ids[1]));
-    REQUIRE(!txn.user_is_subscribed(user_ids[2], board_ids[1]));
-    REQUIRE(txn.user_is_subscribed(user_ids[0], board_ids[2]));
-    REQUIRE(!txn.user_is_subscribed(user_ids[1], board_ids[2]));
-    REQUIRE(!txn.user_is_subscribed(user_ids[2], board_ids[2]));
+    REQUIRE(txn.is_user_subscribed_to_board(user_ids[0], board_ids[0]));
+    REQUIRE(txn.is_user_subscribed_to_board(user_ids[1], board_ids[0]));
+    REQUIRE(txn.is_user_subscribed_to_board(user_ids[2], board_ids[0]));
+    REQUIRE(txn.is_user_subscribed_to_board(user_ids[0], board_ids[1]));
+    REQUIRE(txn.is_user_subscribed_to_board(user_ids[1], board_ids[1]));
+    REQUIRE(!txn.is_user_subscribed_to_board(user_ids[2], board_ids[1]));
+    REQUIRE(txn.is_user_subscribed_to_board(user_ids[0], board_ids[2]));
+    REQUIRE(!txn.is_user_subscribed_to_board(user_ids[1], board_ids[2]));
+    REQUIRE(!txn.is_user_subscribed_to_board(user_ids[2], board_ids[2]));
   }
   {
     auto txn = db.open_write_txn();
@@ -205,15 +205,15 @@ TEST_CASE("create users and boards, subscribe and unsubscribe", "[db]") {
     REQUIRE(stats0->subscriber_count() == 2);
     REQUIRE(stats1->subscriber_count() == 1);
     REQUIRE(stats2->subscriber_count() == 0);
-    REQUIRE(!txn.user_is_subscribed(user_ids[0], board_ids[0]));
-    REQUIRE(txn.user_is_subscribed(user_ids[1], board_ids[0]));
-    REQUIRE(txn.user_is_subscribed(user_ids[2], board_ids[0]));
-    REQUIRE(!txn.user_is_subscribed(user_ids[0], board_ids[1]));
-    REQUIRE(txn.user_is_subscribed(user_ids[1], board_ids[1]));
-    REQUIRE(!txn.user_is_subscribed(user_ids[2], board_ids[1]));
-    REQUIRE(!txn.user_is_subscribed(user_ids[0], board_ids[2]));
-    REQUIRE(!txn.user_is_subscribed(user_ids[1], board_ids[2]));
-    REQUIRE(!txn.user_is_subscribed(user_ids[2], board_ids[2]));
+    REQUIRE(!txn.is_user_subscribed_to_board(user_ids[0], board_ids[0]));
+    REQUIRE(txn.is_user_subscribed_to_board(user_ids[1], board_ids[0]));
+    REQUIRE(txn.is_user_subscribed_to_board(user_ids[2], board_ids[0]));
+    REQUIRE(!txn.is_user_subscribed_to_board(user_ids[0], board_ids[1]));
+    REQUIRE(txn.is_user_subscribed_to_board(user_ids[1], board_ids[1]));
+    REQUIRE(!txn.is_user_subscribed_to_board(user_ids[2], board_ids[1]));
+    REQUIRE(!txn.is_user_subscribed_to_board(user_ids[0], board_ids[2]));
+    REQUIRE(!txn.is_user_subscribed_to_board(user_ids[1], board_ids[2]));
+    REQUIRE(!txn.is_user_subscribed_to_board(user_ids[2], board_ids[2]));
   }
 }
 

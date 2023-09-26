@@ -75,6 +75,7 @@ namespace Ludwig {
     uint64_t id;
     double rank;
     Vote your_vote;
+    bool saved, hidden, user_hidden, board_hidden;
     const Thread* thread;
     const PostStats* stats;
     const User* author;
@@ -85,6 +86,7 @@ namespace Ludwig {
     uint64_t id;
     double rank;
     Vote your_vote;
+    bool saved, hidden, thread_hidden, user_hidden, board_hidden;
     const Comment* comment;
     const PostStats* stats;
     const User* author;
@@ -305,9 +307,11 @@ namespace Ludwig {
     static auto get_thread_entry(
       ReadTxnBase& txn,
       uint64_t thread_id,
-      Login login,
+      Controller::Login login,
       std::optional<const User*> author = {},
-      std::optional<const Board*> board = {}
+      bool is_author_hidden = false,
+      std::optional<const Board*> board = {},
+      bool is_board_hidden = false
     ) -> ThreadListEntry;
 
     static auto get_comment_entry(
@@ -315,8 +319,11 @@ namespace Ludwig {
       uint64_t comment_id,
       Login login,
       std::optional<const User*> author = {},
+      bool is_author_hidden = false,
       std::optional<const Thread*> thread = {},
-      std::optional<const Board*> board = {}
+      bool is_thread_hidden = false,
+      std::optional<const Board*> board = {},
+      bool is_board_hidden = false
     ) -> CommentListEntry;
 
     inline auto open_read_txn() -> ReadTxn {
@@ -429,6 +436,10 @@ namespace Ludwig {
     ) -> uint64_t;
     auto vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;
     auto subscribe(uint64_t user_id, uint64_t board_id, bool subscribed = true) -> void;
+    auto save_post(uint64_t user_id, uint64_t post_id, bool saved = true) -> void;
+    auto hide_post(uint64_t user_id, uint64_t post_id, bool hidden = true) -> void;
+    auto hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden = true) -> void;
+    auto hide_board(uint64_t user_id, uint64_t board_id, bool hidden = true) -> void;
 
     auto on_event(Event event, uint64_t subject_id, EventCallback&& callback) -> EventSubscription;
 

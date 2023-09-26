@@ -254,8 +254,7 @@ enum ModState {
   Visible = 0,
   Flagged = 1,
   Locked = 2,
-  Hidden = 3,
-  Removed = 4,
+  Removed = 3,
 }
 
 interface User {

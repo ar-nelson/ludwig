@@ -35,7 +35,7 @@ namespace Ludwig {
     Owner_UserComment,
     ThreadsTop_UserKarmaThread,
     CommentsTop_UserKarmaComment,
-    Bookmark_UserPost,
+    Save_UserPost,
     Hide_UserPost,
     Hide_UserUser,
     Hide_UserBoard,
@@ -175,7 +175,7 @@ namespace Ludwig {
     MK_DBI(Owner_UserComment, 0)
     MK_DBI(ThreadsTop_UserKarmaThread, 0)
     MK_DBI(CommentsTop_UserKarmaComment, 0)
-    MK_DBI(Bookmark_UserPost, 0)
+    MK_DBI(Save_UserPost, 0)
     MK_DBI(Hide_UserPost, 0)
     MK_DBI(Hide_UserUser, 0)
     MK_DBI(Hide_UserBoard, 0)
@@ -457,7 +457,7 @@ namespace Ludwig {
       second_key
     );
   }
-  auto ReadTxnBase::user_is_subscribed(uint64_t user_id, uint64_t board_id) -> bool {
+  auto ReadTxnBase::is_user_subscribed_to_board(uint64_t user_id, uint64_t board_id) -> bool {
     MDB_val v;
     return !db_get(txn, db.dbis[Subscription_UserBoard], Cursor(user_id, board_id), v);
   }
@@ -614,6 +614,23 @@ namespace Ludwig {
     MDB_val v;
     if (db_get(txn, db.dbis[Vote_UserPost], Cursor(user_id, post_id), v)) return NoVote;
     return (Vote)val_as<int8_t>(v);
+  }
+
+  auto ReadTxnBase::has_user_saved_post(uint64_t user_id, uint64_t post_id) -> bool {
+    MDB_val v;
+    return !db_get(txn, db.dbis[Save_UserPost], Cursor(user_id, post_id), v);
+  }
+  auto ReadTxnBase::has_user_hidden_post(uint64_t user_id, uint64_t post_id) -> bool {
+    MDB_val v;
+    return !db_get(txn, db.dbis[Hide_UserPost], Cursor(user_id, post_id), v);
+  }
+  auto ReadTxnBase::has_user_hidden_user(uint64_t user_id, uint64_t hidden_user_id) -> bool {
+    MDB_val v;
+    return !db_get(txn, db.dbis[Hide_UserUser], Cursor(user_id, hidden_user_id), v);
+  }
+  auto ReadTxnBase::has_user_hidden_board(uint64_t user_id, uint64_t board_id) -> bool {
+    MDB_val v;
+    return !db_get(txn, db.dbis[Hide_UserBoard], Cursor(user_id, board_id), v);
   }
 
   static inline auto delete_range(
@@ -875,6 +892,30 @@ namespace Ludwig {
       ));
       db_put(txn, db.dbis[BoardStats_Board], board_id, fbb);
     }
+  }
+  auto WriteTxn::set_save(uint64_t user_id, uint64_t post_id, bool saved) -> void {
+    assert_fmt(!!get_local_user(user_id), "set_save: local user {:x} does not exist", user_id);
+    assert_fmt(!!get_post_stats(post_id), "set_save: post {:x} does not exist", post_id);
+    if (saved) db_put(txn, db.dbis[Save_UserPost], Cursor(user_id, post_id), now_s());
+    else db_del(txn, db.dbis[Save_UserPost], Cursor(user_id, post_id));
+  }
+  auto WriteTxn::set_hide_post(uint64_t user_id, uint64_t post_id, bool hidden) -> void {
+    assert_fmt(!!get_local_user(user_id), "set_hide_post: local user {:x} does not exist", user_id);
+    assert_fmt(!!get_post_stats(post_id), "set_hide_post: post {:x} does not exist", post_id);
+    if (hidden) db_put(txn, db.dbis[Hide_UserPost], Cursor(user_id, post_id), now_s());
+    else db_del(txn, db.dbis[Hide_UserPost], Cursor(user_id, post_id));
+  }
+  auto WriteTxn::set_hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden) -> void {
+    assert_fmt(!!get_local_user(user_id), "set_hide_user: local user {:x} does not exist", user_id);
+    assert_fmt(!!get_user(hidden_user_id), "set_hide_user: user {:x} does not exist", hidden_user_id);
+    if (hidden) db_put(txn, db.dbis[Hide_UserUser], Cursor(user_id, hidden_user_id), now_s());
+    else db_del(txn, db.dbis[Hide_UserUser], Cursor(user_id, hidden_user_id));
+  }
+  auto WriteTxn::set_hide_board(uint64_t user_id, uint64_t board_id, bool hidden) -> void {
+    assert_fmt(!!get_local_user(user_id), "set_hide_board: local user {:x} does not exist", user_id);
+    assert_fmt(!!get_board_stats(board_id), "set_hide_board: board {:x} does not exist", board_id);
+    if (hidden) db_put(txn, db.dbis[Hide_UserBoard], Cursor(user_id, board_id), now_s());
+    else db_del(txn, db.dbis[Hide_UserBoard], Cursor(user_id, board_id));
   }
 
   auto WriteTxn::create_thread(FlatBufferBuilder& builder) -> uint64_t {

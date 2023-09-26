@@ -72,7 +72,9 @@ namespace Ludwig {
     uint64_t thread_id,
     Controller::Login login,
     optional<const User*> author,
-    optional<const Board*> board
+    bool is_author_hidden,
+    optional<const Board*> board,
+    bool is_board_hidden
   ) -> ThreadListEntry {
     const auto thread = txn.get_thread(thread_id);
     const auto stats = txn.get_post_stats(thread_id);
@@ -80,7 +82,11 @@ namespace Ludwig {
       spdlog::error("Entry references nonexistent thread {:x} (database is inconsistent!)", thread_id);
       throw ControllerError("Database error", 500);
     }
-    if (!author) author = txn.get_user((*thread)->author());
+    if (!author) {
+      const auto id = (*thread)->author();
+      author = txn.get_user(id);
+      is_author_hidden = login && txn.has_user_hidden_user(login->id, id);
+    }
     if (!author) {
       spdlog::error(
         "Entry thread {:x} references nonexistent author {:x} (database is inconsistent!)",
@@ -88,7 +94,11 @@ namespace Ludwig {
       );
       throw ControllerError("Database error", 500);
     }
-    if (!board) board = txn.get_board((*thread)->board());
+    if (!board) {
+      const auto id = (*thread)->board();
+      board = txn.get_board(id);
+      is_board_hidden = login && txn.has_user_hidden_board(login->id, id);
+    }
     if (!board) {
       spdlog::error(
         "Entry thread {:x} references nonexistent board {:x} (database is inconsistent!)",
@@ -101,6 +111,10 @@ namespace Ludwig {
     return {
       .id = thread_id,
       .your_vote = vote,
+      .saved = login && txn.has_user_saved_post(login->id, thread_id),
+      .hidden = login && txn.has_user_hidden_post(login->id, thread_id),
+      .user_hidden = is_author_hidden,
+      .board_hidden = is_board_hidden,
       .thread = *thread,
       .stats = *stats,
       .author = *author,
@@ -112,8 +126,11 @@ namespace Ludwig {
     uint64_t comment_id,
     Controller::Login login,
     optional<const User*> author,
+    bool is_author_hidden,
     optional<const Thread*> thread,
-    optional<const Board*> board
+    bool is_thread_hidden,
+    optional<const Board*> board,
+    bool is_board_hidden
   ) -> CommentListEntry {
       const auto comment = txn.get_comment(comment_id);
       const auto stats = txn.get_post_stats(comment_id);
@@ -121,7 +138,11 @@ namespace Ludwig {
         spdlog::error("Entry references nonexistent comment {:x} (database is inconsistent!)", comment_id);
         throw ControllerError("Database error", 500);
       }
-      if (!author) author = txn.get_user((*comment)->author());
+      if (!author) {
+        const auto id = (*comment)->author();
+        author = txn.get_user(id);
+        is_author_hidden = login && txn.has_user_hidden_user(login->id, id);
+      }
       if (!author) {
         spdlog::error(
           "Entry comment {:x} references nonexistent author {:x} (database is inconsistent!)",
@@ -129,7 +150,11 @@ namespace Ludwig {
         );
         throw ControllerError("Database error", 500);
       }
-      if (!thread) thread = txn.get_thread((*comment)->thread());
+      if (!thread) {
+        const auto id = (*comment)->thread();
+        thread = txn.get_thread(id);
+        is_thread_hidden = login && txn.has_user_hidden_post(login->id, id);
+      }
       if (!thread) {
         spdlog::error(
           "Entry comment {:x} references nonexistent thread {:x} (database is inconsistent!)",
@@ -137,7 +162,11 @@ namespace Ludwig {
         );
         throw ControllerError("Database error", 500);
       }
-      if (!board) board = txn.get_board((*thread)->board());
+      if (!board) {
+        const auto id = (*thread)->board();
+        board = txn.get_board(id);
+        is_board_hidden = login && txn.has_user_hidden_board(login->id, id);
+      }
       if (!board) {
         spdlog::error(
           "Entry comment {:x} references nonexistent board {:x} (database is inconsistent!)",
@@ -150,6 +179,11 @@ namespace Ludwig {
       return {
         .id = comment_id,
         .your_vote = vote,
+        .saved = login && txn.has_user_saved_post(login->id, comment_id),
+        .hidden = login && txn.has_user_hidden_post(login->id, comment_id),
+        .thread_hidden = is_thread_hidden,
+        .user_hidden = is_author_hidden,
+        .board_hidden = is_board_hidden,
         .comment = *comment,
         .stats = *stats,
         .author = *author,
@@ -223,7 +257,9 @@ namespace Ludwig {
     Controller::Login login,
     bool skip_cw,
     optional<const Thread*> thread = {},
+    bool is_thread_hidden = false,
     optional<const Board*> board = {},
+    bool is_board_hidden = false,
     optional<uint64_t> from_id = {},
     size_t max_comments = ITEMS_PER_PAGE * 4,
     size_t max_depth = 5
@@ -242,7 +278,7 @@ namespace Ludwig {
           txn.list_comments_of_post_top(parent),
           login,
           skip_cw,
-          [&](uint64_t id) { return Controller::get_comment_entry(txn, id, login, {}, thread, board); },
+          [&](uint64_t id) { return Controller::get_comment_entry(txn, id, login, {}, false, thread, is_thread_hidden, board, is_board_hidden); },
           [&](auto& e) { return e.comment->created_at(); },
           comment_rank_cmp,
           from_id,
@@ -255,7 +291,7 @@ namespace Ludwig {
           }
           const auto id = entry.id, children = entry.stats->child_count();
           tree.emplace(parent, entry);
-          if (children) comment_tree(txn, tree, id, sort, login, skip_cw, thread, board, {}, max_comments, max_depth - 1);
+          if (children) comment_tree(txn, tree, id, sort, login, skip_cw, thread, is_thread_hidden, board, is_board_hidden, {}, max_comments, max_depth - 1);
         }
         if (ranked.next) tree.mark_continued(parent, *ranked.next);
         return;
@@ -275,11 +311,11 @@ namespace Ludwig {
         tree.mark_continued(parent, id);
         return;
       }
-      auto entry = Controller::get_comment_entry(txn, id, login, {}, thread, board);
+      auto entry = Controller::get_comment_entry(txn, id, login, {}, false, thread, is_thread_hidden, board, is_board_hidden);
       if (!Controller::should_show(entry, login, skip_cw)) continue;
       const auto children = entry.stats->child_count();
       tree.emplace(parent, entry);
-      if (children) comment_tree(txn, tree, id, sort, login, skip_cw, thread, board, {}, max_comments, max_depth - 1);
+      if (children) comment_tree(txn, tree, id, sort, login, skip_cw, thread, is_thread_hidden, board, is_board_hidden, {}, max_comments, max_depth - 1);
     }
     if (!iter->is_done()) tree.mark_continued(parent, iter->get_cursor()->int_field_2());
   }
@@ -476,7 +512,7 @@ namespace Ludwig {
     optional<uint64_t> from_id
   ) -> ThreadDetailResponse {
     ThreadDetailResponse rsp { get_thread_entry(txn, id, login), {} };
-    comment_tree(txn, rsp.comments, id, sort, login, skip_cw, rsp.thread, rsp.board, from_id);
+    comment_tree(txn, rsp.comments, id, sort, login, skip_cw, rsp.thread, rsp.hidden, rsp.board, rsp.board_hidden, from_id);
     return rsp;
   }
   auto Controller::comment_detail(
@@ -488,7 +524,7 @@ namespace Ludwig {
     optional<uint64_t> from_id
   ) -> CommentDetailResponse {
     CommentDetailResponse rsp { get_comment_entry(txn, id, login), {} };
-    comment_tree(txn, rsp.comments, id, sort, login, skip_cw, rsp.thread, rsp.board, from_id);
+    comment_tree(txn, rsp.comments, id, sort, login, skip_cw, rsp.thread, rsp.thread_hidden, rsp.board, rsp.board_hidden, from_id);
     return rsp;
   }
   auto Controller::user_detail(ReadTxnBase& txn, uint64_t id) -> UserDetailResponse {
@@ -509,7 +545,7 @@ namespace Ludwig {
     const auto board = txn.get_board(id);
     const auto board_stats = txn.get_board_stats(id);
     if (!board || !board_stats) throw ControllerError("Board not found", 404);
-    const auto subscribed = logged_in_user ? txn.user_is_subscribed(*logged_in_user, id) : false;
+    const auto subscribed = logged_in_user ? txn.is_user_subscribed_to_board(*logged_in_user, id) : false;
     return { { id, *board }, *board_stats, subscribed };
   }
   auto Controller::list_local_users(ReadTxnBase& txn, optional<uint64_t> from_id) -> ListUsersResponse {
@@ -555,11 +591,12 @@ namespace Ludwig {
     if (!board) {
       throw ControllerError("Board does not exist", 404);
     }
+    const bool board_hidden = login && txn.has_user_hidden_board(login->id, board_id);
     switch (sort) {
       case SortType::New: {
         auto iter = txn.list_threads_of_board_new(board_id, next_cursor_thread_new(txn, board_id, from_id));
         for (uint64_t thread_id : iter) {
-          out.page[out.size] = get_thread_entry(txn, thread_id, login, {}, board);
+          out.page[out.size] = get_thread_entry(txn, thread_id, login, {}, false, board, board_hidden);
           if (skip_cw && out.page[out.size].thread->content_warning()) continue;
           if (++out.size >= ITEMS_PER_PAGE) break;
         }
@@ -614,7 +651,7 @@ namespace Ludwig {
           if (thread && ((*thread)->created_at() < earliest || (skip_cw && (*thread)->content_warning()))) {
             continue;
           }
-          out.page[out.size] = get_thread_entry(txn, thread_id, login, {}, board);
+          out.page[out.size] = get_thread_entry(txn, thread_id, login, {}, false, board, board_hidden);
           if (++out.size >= ITEMS_PER_PAGE) break;
         }
         if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_2() };
@@ -627,7 +664,7 @@ namespace Ludwig {
           txn.list_threads_of_board_top(board_id),
           login,
           skip_cw,
-          [&](uint64_t id) { return get_thread_entry(txn, id, login, {}, board); },
+          [&](uint64_t id) { return get_thread_entry(txn, id, login, {}, false, board, board_hidden); },
           [&](auto& e) { return e.thread->created_at(); },
           thread_rank_cmp,
           from_id
@@ -657,11 +694,12 @@ namespace Ludwig {
     if (!board) {
       throw ControllerError("Board does not exist", 404);
     }
+    const bool board_hidden = login && txn.has_user_hidden_board(login->id, board_id);
     switch (sort) {
       case SortType::New: {
         auto iter = txn.list_comments_of_board_new(board_id, next_cursor_comment_new(txn, board_id, from_id));
         for (uint64_t comment_id : iter) {
-          out.page[out.size] = get_comment_entry(txn, comment_id, login, {}, {}, board);
+          out.page[out.size] = get_comment_entry(txn, comment_id, login, {}, false, {}, false, board, board_hidden);
           if (skip_cw && out.page[out.size].thread->content_warning()) continue;
           if (++out.size >= ITEMS_PER_PAGE) break;
         }
@@ -714,7 +752,7 @@ namespace Ludwig {
         for (uint64_t comment_id : iter) {
           const auto comment = txn.get_comment(comment_id);
           if (comment && (*comment)->created_at() < earliest) continue;
-          out.page[out.size] = get_comment_entry(txn, comment_id, login, {}, {}, board);
+          out.page[out.size] = get_comment_entry(txn, comment_id, login, {}, false, {}, false, board, board_hidden);
           if (!should_show(out.page[out.size], login, skip_cw)) continue;
           if (++out.size >= ITEMS_PER_PAGE) break;
         }
@@ -728,7 +766,7 @@ namespace Ludwig {
           txn.list_comments_of_board_top(board_id),
           login,
           skip_cw,
-          [&](uint64_t id) { return get_comment_entry(txn, id, login, {}, {}, board); },
+          [&](uint64_t id) { return get_comment_entry(txn, id, login, {}, false, {}, false, board, board_hidden); },
           [&](auto& e) { return e.comment->created_at(); },
           comment_rank_cmp,
           from_id
@@ -1040,6 +1078,47 @@ namespace Ludwig {
 
     dispatch_event(Event::UserStatsUpdate, user_id);
     dispatch_event(Event::BoardStatsUpdate, board_id);
+  }
+  auto Controller::save_post(uint64_t user_id, uint64_t post_id, bool saved) -> void {
+    auto txn = db->open_write_txn();
+    if (!txn.get_local_user(user_id)) {
+      throw ControllerError("User does not exist", 400);
+    }
+    if (!txn.get_post_stats(post_id)) {
+      throw ControllerError("Post does not exist", 400);
+    }
+    txn.set_save(user_id, post_id, saved);
+    txn.commit();
+  }
+  auto Controller::hide_post(uint64_t user_id, uint64_t post_id, bool hidden) -> void {
+    auto txn = db->open_write_txn();
+    if (!txn.get_local_user(user_id)) {
+      throw ControllerError("User does not exist", 400);
+    }
+    if (!txn.get_post_stats(post_id)) {
+      throw ControllerError("Post does not exist", 400);
+    }
+    txn.set_hide_post(user_id, post_id, hidden);
+    txn.commit();
+  }
+  auto Controller::hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden) -> void {
+    auto txn = db->open_write_txn();
+    if (!txn.get_local_user(user_id) || !txn.get_user(hidden_user_id)) {
+      throw ControllerError("User does not exist", 400);
+    }
+    txn.set_hide_user(user_id, hidden_user_id, hidden);
+    txn.commit();
+  }
+  auto Controller::hide_board(uint64_t user_id, uint64_t board_id, bool hidden) -> void {
+    auto txn = db->open_write_txn();
+    if (!txn.get_local_user(user_id)) {
+      throw ControllerError("User does not exist", 400);
+    }
+    if (!txn.get_post_stats(board_id)) {
+      throw ControllerError("Board does not exist", 400);
+    }
+    txn.set_hide_post(user_id, board_id, hidden);
+    txn.commit();
   }
 
   auto Controller::dispatch_event(Event event, uint64_t subject_id) -> void {

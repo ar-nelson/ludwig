@@ -109,7 +109,7 @@ namespace Ludwig {
     auto list_users(OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_local_users(OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_subscribers(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto user_is_subscribed(uint64_t user_id, uint64_t board_id) -> bool;
+    auto is_user_subscribed_to_board(uint64_t user_id, uint64_t board_id) -> bool;
 
     auto get_board_id(std::string_view name) -> std::optional<uint64_t>;
     auto get_board(uint64_t id) -> std::optional<const Board*>;
@@ -140,6 +140,12 @@ namespace Ludwig {
     //auto list_upvoted_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     //auto list_downvoted_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     //auto list_saved_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+
+    auto has_user_saved_post(uint64_t user_id, uint64_t post_id) -> bool;
+    auto has_user_hidden_post(uint64_t user_id, uint64_t post_id) -> bool;
+    auto has_user_hidden_user(uint64_t user_id, uint64_t hidden_user_id) -> bool;
+    auto has_user_hidden_board(uint64_t user_id, uint64_t board_id) -> bool;
+
     // TODO: Feeds, DMs, Invites, Blocks, Admins/Mods, Mod Actions
 
     friend class ReadTxn;
@@ -212,6 +218,10 @@ namespace Ludwig {
     auto delete_comment(uint64_t id) -> uint64_t;
 
     auto set_vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;
+    auto set_save(uint64_t user_id, uint64_t post_id, bool saved) -> void;
+    auto set_hide_post(uint64_t user_id, uint64_t post_id, bool hidden) -> void;
+    auto set_hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden) -> void;
+    auto set_hide_board(uint64_t user_id, uint64_t board_id, bool hidden) -> void;
 
     inline auto commit() -> void {
       auto err = mdb_txn_commit(txn);
