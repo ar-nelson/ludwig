@@ -3,7 +3,7 @@ cmake_minimum_required (VERSION 3.4.1)
 project (ludwig VERSION 0.1 LANGUAGES C CXX)
 
 set (CMAKE_C_STANDARD 11)
-set (CMAKE_CXX_STANDARD 20)
+set (CMAKE_CXX_STANDARD 23)
 set (CMAKE_VERBOSE_MAKEFILE ON)
 
 # Export metadata for clangd, even in a nix-shell.
@@ -19,9 +19,12 @@ set (CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
 
 add_compile_options (
   -fcolor-diagnostics
+  -ferror-limit=0
   -DASIO_SEPARATE_COMPILATION
   -DLIBUS_USE_ASIO
   -Wno-zero-as-null-pointer-constant
+  -Wno-gnu-anonymous-struct
+  -Wno-nested-anon-types
 )
 
 # Only do static linking. No shared libraries at all.
@@ -115,6 +118,7 @@ set (LUDWIG_COMMON_SRC
   src/db.c++
   src/controller.c++
   src/webapp_routes.c++
+  src/asio_http_client.c++
 )
 
 if (CMAKE_BUILD_TYPE MATCHES Release AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -140,12 +144,12 @@ if (CMAKE_BUILD_TYPE MATCHES Release)
   target_link_libraries(ludwig PRIVATE "-static")
 endif ()
 target_link_libraries(ludwig PRIVATE cereal csprng flatbuffers lmdb monocypher
-  libcurl_static ssl crypto spdlog uWS xxHash)
+  ssl crypto spdlog uWS xxHash)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   file(GLOB_RECURSE TEST_FILES "test/*.c++")
   add_executable(test ${LUDWIG_COMMON_SRC} ${TEST_FILES})
   add_dependencies(test static_generated flatbuffers_generated)
   target_link_libraries(test PRIVATE cereal csprng flatbuffers lmdb monocypher
-    libcurl_static ssl crypto spdlog uWS xxHash Catch2::Catch2WithMain)
+    ssl crypto spdlog uWS xxHash Catch2::Catch2WithMain)
 endif ()

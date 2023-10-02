@@ -60,10 +60,17 @@ table LocalUser {
   expand_cw_images: bool = false;
   show_read_posts: bool = true;
   show_karma: bool = true;
+  javascript_enabled: bool = true;
   interface_language: string;
   theme: string;
-  default_listing_type: ubyte = 0;
   default_sort_type: ubyte = 0;
+  default_comment_sort_type: ubyte = 0;
+}
+
+table Application {
+  text: string (required);
+  ip: string;
+  user_agent: string;
 }
 
 table Board {
@@ -80,9 +87,11 @@ table Board {
   banner_url: string;
   content_warning: string;
   restricted_posting: bool = false;
+  approve_subscribe: bool = false;
   can_upvote: bool = true;
   can_downvote: bool = true;
-  invite_only: bool = false;
+  default_sort_type: ubyte = 0;
+  default_comment_sort_type: ubyte = 0;
   mod_state: ModState = Visible;
   mod_reason: string;
 }
@@ -101,6 +110,8 @@ table LocalBoard {
   owner: uint64;
   federated: bool = true;
   private: bool = false;
+  invite_required: bool = false;
+  invite_mod_only: bool = false;
 }
 
 table Thread {
@@ -193,22 +204,10 @@ table Report {
   content: string;
 }
 
-enum InviteRole : ubyte {
-  JoinInstance,
-  JoinBoard,
-  AdminInstance,
-  ModInstance,
-  ModBoard
-}
-
 table Invite {
-  role: InviteRole;
   created_at: uint64;
-  from: uint64 = null;
-  to_existing_user: uint64 = null;
-  to_email: string;
-  to_external_user: string;
-  board: uint64 = null;
-  accepted: bool = false;
+  expires_at: uint64;
+  from: uint64;
   accepted_at: uint64 = null;
+  to: uint64 = null;
 }

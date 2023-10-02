@@ -16,8 +16,7 @@ TEST_CASE("hash password", "[controller]") {
 
   TempFile file;
   auto db = std::make_shared<DB>(file.name);
-  auto io = std::make_shared<asio::io_context>();
-  auto controller = std::make_shared<Controller>(db, io);
+  auto controller = std::make_shared<Controller>(db);
   uint8_t hash[32];
   controller->hash_password({ std::string(password) }, reinterpret_cast<const uint8_t*>(salt.data()), hash);
   std::ostringstream actual_hash;

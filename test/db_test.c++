@@ -45,8 +45,8 @@ TEST_CASE("create and get user", "[db]") {
     auto txn = db.open_read_txn();
     auto user = txn.get_user(id);
     REQUIRE(!!user);
-    REQUIRE((*user)->name()->string_view() == "testuser"sv);
-    REQUIRE((*user)->display_name()->string_view() == "Test User"sv);
+    REQUIRE(user->get().name()->string_view() == "testuser"sv);
+    REQUIRE(user->get().display_name()->string_view() == "Test User"sv);
   }
 }
 
@@ -137,20 +137,20 @@ TEST_CASE("create and list users", "[db]") {
     REQUIRE(!iter.is_done());
     auto user = txn.get_user(*iter);
     REQUIRE(!!user);
-    REQUIRE((*user)->name()->string_view() == "user1"sv);
-    REQUIRE((*user)->display_name()->string_view() == "User 1"sv);
+    REQUIRE(user->get().name()->string_view() == "user1"sv);
+    REQUIRE(user->get().display_name()->string_view() == "User 1"sv);
     ++iter;
     REQUIRE(!iter.is_done());
     user = txn.get_user(*iter);
     REQUIRE(!!user);
-    REQUIRE((*user)->name()->string_view() == "user2"sv);
-    REQUIRE((*user)->display_name()->string_view() == "User 2"sv);
+    REQUIRE(user->get().name()->string_view() == "user2"sv);
+    REQUIRE(user->get().display_name()->string_view() == "User 2"sv);
     ++iter;
     REQUIRE(!iter.is_done());
     user = txn.get_user(*iter);
     REQUIRE(!!user);
-    REQUIRE((*user)->name()->string_view() == "user3"sv);
-    REQUIRE((*user)->display_name()->string_view() == "User 3"sv);
+    REQUIRE(user->get().name()->string_view() == "user3"sv);
+    REQUIRE(user->get().display_name()->string_view() == "User 3"sv);
     ++iter;
     REQUIRE(iter.is_done());
   }
@@ -174,12 +174,12 @@ TEST_CASE("create users and boards, subscribe and unsubscribe", "[db]") {
   }
   {
     auto txn = db.open_read_txn();
-    auto stats0 = *txn.get_board_stats(board_ids[0]),
-         stats1 = *txn.get_board_stats(board_ids[1]),
-         stats2 = *txn.get_board_stats(board_ids[2]);
-    REQUIRE(stats0->subscriber_count() == 3);
-    REQUIRE(stats1->subscriber_count() == 2);
-    REQUIRE(stats2->subscriber_count() == 1);
+    auto &stats0 = txn.get_board_stats(board_ids[0])->get(),
+         &stats1 = txn.get_board_stats(board_ids[1])->get(),
+         &stats2 = txn.get_board_stats(board_ids[2])->get();
+    REQUIRE(stats0.subscriber_count() == 3);
+    REQUIRE(stats1.subscriber_count() == 2);
+    REQUIRE(stats2.subscriber_count() == 1);
     REQUIRE(txn.is_user_subscribed_to_board(user_ids[0], board_ids[0]));
     REQUIRE(txn.is_user_subscribed_to_board(user_ids[1], board_ids[0]));
     REQUIRE(txn.is_user_subscribed_to_board(user_ids[2], board_ids[0]));
@@ -199,12 +199,12 @@ TEST_CASE("create users and boards, subscribe and unsubscribe", "[db]") {
   }
   {
     auto txn = db.open_read_txn();
-    auto stats0 = *txn.get_board_stats(board_ids[0]),
-         stats1 = *txn.get_board_stats(board_ids[1]),
-         stats2 = *txn.get_board_stats(board_ids[2]);
-    REQUIRE(stats0->subscriber_count() == 2);
-    REQUIRE(stats1->subscriber_count() == 1);
-    REQUIRE(stats2->subscriber_count() == 0);
+    auto &stats0 = txn.get_board_stats(board_ids[0])->get(),
+         &stats1 = txn.get_board_stats(board_ids[1])->get(),
+         &stats2 = txn.get_board_stats(board_ids[2])->get();
+    REQUIRE(stats0.subscriber_count() == 2);
+    REQUIRE(stats1.subscriber_count() == 1);
+    REQUIRE(stats2.subscriber_count() == 0);
     REQUIRE(!txn.is_user_subscribed_to_board(user_ids[0], board_ids[0]));
     REQUIRE(txn.is_user_subscribed_to_board(user_ids[1], board_ids[0]));
     REQUIRE(txn.is_user_subscribed_to_board(user_ids[2], board_ids[0]));
@@ -257,12 +257,12 @@ TEST_CASE("create and list posts", "[db]") {
   }
   {
     auto txn = db.open_read_txn();
-    REQUIRE((*txn.get_user_stats(user_ids[0]))->thread_count() == 6);
-    REQUIRE((*txn.get_user_stats(user_ids[1]))->thread_count() == 4);
-    REQUIRE((*txn.get_user_stats(user_ids[2]))->thread_count() == 2);
-    REQUIRE((*txn.get_board_stats(board_ids[0]))->thread_count() == 6);
-    REQUIRE((*txn.get_board_stats(board_ids[1]))->thread_count() == 3);
-    REQUIRE((*txn.get_board_stats(board_ids[2]))->thread_count() == 3);
+    REQUIRE(txn.get_user_stats(user_ids[0])->get().thread_count() == 6);
+    REQUIRE(txn.get_user_stats(user_ids[1])->get().thread_count() == 4);
+    REQUIRE(txn.get_user_stats(user_ids[2])->get().thread_count() == 2);
+    REQUIRE(txn.get_board_stats(board_ids[0])->get().thread_count() == 6);
+    REQUIRE(txn.get_board_stats(board_ids[1])->get().thread_count() == 3);
+    REQUIRE(txn.get_board_stats(board_ids[2])->get().thread_count() == 3);
     size_t i = 0;
     for (uint64_t id : txn.list_threads_of_user_new(user_ids[0])) {
       REQUIRE(i < 6);
@@ -377,7 +377,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       auto author = users[random_int(gen, RND_SIZE / 10)],
         parent_ix = random_int(gen, RND_SIZE + i),
         parent = parent_ix >= RND_SIZE ? comments[parent_ix - RND_SIZE] : threads[parent_ix],
-        thread = parent_ix >= RND_SIZE ? (*txn.get_comment(parent))->thread() : parent;
+        thread = parent_ix >= RND_SIZE ? txn.get_comment(parent)->get().thread() : parent;
       FlatBufferBuilder fbb;
       fbb.Finish(CreateCommentDirect(fbb,
         author,
@@ -446,39 +446,39 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       uint64_t board = boards[board_ix];
       int64_t last_karma = std::numeric_limits<int64_t>::max();
       for (auto thread_id : txn.list_threads_of_board_top(board)) {
-        auto stats = *txn.get_post_stats(thread_id);
-        REQUIRE(stats->karma() <= last_karma);
-        REQUIRE(stats->karma() == (int64_t)stats->upvotes() - (int64_t)stats->downvotes());
-        last_karma = stats->karma();
+        auto& stats = txn.get_post_stats(thread_id)->get();
+        REQUIRE(stats.karma() <= last_karma);
+        REQUIRE(stats.karma() == (int64_t)stats.upvotes() - (int64_t)stats.downvotes());
+        last_karma = stats.karma();
         top_threads++;
       }
       uint64_t last_timestamp = std::numeric_limits<uint64_t>::max();
       for (auto thread_id : txn.list_threads_of_board_new(board)) {
-        auto thread = *txn.get_thread(thread_id);
-        REQUIRE(thread->created_at() <= last_timestamp);
-        last_timestamp = thread->created_at();
+        auto& thread = txn.get_thread(thread_id)->get();
+        REQUIRE(thread.created_at() <= last_timestamp);
+        last_timestamp = thread.created_at();
         new_threads++;
       }
       last_karma = std::numeric_limits<int64_t>::max();
       for (auto comment_id : txn.list_comments_of_board_top(board)) {
-        auto stats = *txn.get_post_stats(comment_id);
-        REQUIRE(stats->karma() <= last_karma);
-        REQUIRE(stats->karma() == (int64_t)stats->upvotes() - (int64_t)stats->downvotes());
-        last_karma = stats->karma();
+        auto& stats = txn.get_post_stats(comment_id)->get();
+        REQUIRE(stats.karma() <= last_karma);
+        REQUIRE(stats.karma() == (int64_t)stats.upvotes() - (int64_t)stats.downvotes());
+        last_karma = stats.karma();
         top_comments++;
       }
       last_timestamp = std::numeric_limits<uint64_t>::max();
       for (auto comment_id : txn.list_comments_of_board_new(board)) {
-        auto comment = *txn.get_comment(comment_id);
-        REQUIRE(comment->created_at() <= last_timestamp);
-        last_timestamp = comment->created_at();
+        auto& comment = txn.get_comment(comment_id)->get();
+        REQUIRE(comment.created_at() <= last_timestamp);
+        last_timestamp = comment.created_at();
         new_comments++;
       }
-      auto stats = *txn.get_board_stats(board);
-      REQUIRE(stats->thread_count() == top_threads);
-      REQUIRE(stats->thread_count() == new_threads);
-      REQUIRE(stats->comment_count() == top_comments);
-      REQUIRE(stats->comment_count() == new_comments);
+      auto& stats = txn.get_board_stats(board)->get();
+      REQUIRE(stats.thread_count() == top_threads);
+      REQUIRE(stats.thread_count() == new_threads);
+      REQUIRE(stats.comment_count() == top_comments);
+      REQUIRE(stats.comment_count() == new_comments);
       total_threads += new_threads;
       total_comments += new_comments;
     }
@@ -504,51 +504,51 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       for (auto thread_id : txn.list_threads_of_board_top(board)) {
         auto stats_opt = txn.get_post_stats(thread_id);
         REQUIRE(!!stats_opt);
-        auto stats = *stats_opt;
-        REQUIRE(stats->karma() <= last_karma);
-        REQUIRE(stats->karma() == (int64_t)stats->upvotes() - (int64_t)stats->downvotes());
+        auto& stats = stats_opt->get();
+        REQUIRE(stats.karma() <= last_karma);
+        REQUIRE(stats.karma() == (int64_t)stats.upvotes() - (int64_t)stats.downvotes());
         REQUIRE(!del_threads.contains(thread_id));
-        last_karma = stats->karma();
+        last_karma = stats.karma();
         top_threads++;
       }
       uint64_t last_timestamp = std::numeric_limits<uint64_t>::max();
       for (auto thread_id : txn.list_threads_of_board_new(board)) {
         auto thread_opt = txn.get_thread(thread_id);
         REQUIRE(!!thread_opt);
-        auto thread = *thread_opt;
-        REQUIRE(thread->created_at() <= last_timestamp);
+        auto& thread = thread_opt->get();
+        REQUIRE(thread.created_at() <= last_timestamp);
         REQUIRE(!del_threads.contains(thread_id));
-        last_timestamp = thread->created_at();
+        last_timestamp = thread.created_at();
         new_threads++;
       }
       last_karma = std::numeric_limits<int64_t>::max();
       for (auto comment_id : txn.list_comments_of_board_top(board)) {
         auto stats_opt = txn.get_post_stats(comment_id);
         REQUIRE(!!stats_opt);
-        auto stats = *stats_opt;
-        REQUIRE(stats->karma() <= last_karma);
-        REQUIRE(stats->karma() == (int64_t)stats->upvotes() - (int64_t)stats->downvotes());
+        auto& stats = stats_opt->get();
+        REQUIRE(stats.karma() <= last_karma);
+        REQUIRE(stats.karma() == (int64_t)stats.upvotes() - (int64_t)stats.downvotes());
         REQUIRE(!del_comments.contains(comment_id));
-        last_karma = stats->karma();
+        last_karma = stats.karma();
         top_comments++;
       }
       last_timestamp = std::numeric_limits<uint64_t>::max();
       for (auto comment_id : txn.list_comments_of_board_new(board)) {
         auto comment_opt = txn.get_comment(comment_id);
         REQUIRE(!!comment_opt);
-        auto comment = *comment_opt;
-        REQUIRE(comment->created_at() <= last_timestamp);
+        auto& comment = comment_opt->get();
+        REQUIRE(comment.created_at() <= last_timestamp);
         REQUIRE(!del_comments.contains(comment_id));
-        REQUIRE(!del_comments.contains(comment->parent()));
-        REQUIRE(!del_threads.contains(comment->thread()));
-        last_timestamp = comment->created_at();
+        REQUIRE(!del_comments.contains(comment.parent()));
+        REQUIRE(!del_threads.contains(comment.thread()));
+        last_timestamp = comment.created_at();
         new_comments++;
       }
-      auto stats = *txn.get_board_stats(board);
-      REQUIRE(stats->thread_count() == top_threads);
-      REQUIRE(stats->thread_count() == new_threads);
-      REQUIRE(stats->comment_count() == top_comments);
-      REQUIRE(stats->comment_count() == new_comments);
+      auto& stats = txn.get_board_stats(board)->get();
+      REQUIRE(stats.thread_count() == top_threads);
+      REQUIRE(stats.thread_count() == new_threads);
+      REQUIRE(stats.comment_count() == top_comments);
+      REQUIRE(stats.comment_count() == new_comments);
       total_threads += new_threads;
     }
     REQUIRE(total_threads == RND_SIZE- (RND_SIZE / 20));

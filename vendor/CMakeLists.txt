@@ -1,4 +1,3 @@
-#set(SKIP_INSTALL_ALL ON CACHE BOOL "" FORCE)
 add_subdirectory(zlib EXCLUDE_FROM_ALL)
 
 add_subdirectory(boringssl EXCLUDE_FROM_ALL)
@@ -6,7 +5,9 @@ include_directories("boringssl/include")
 
 add_library(asio STATIC
   asio/asio.cpp
+  asio/asio_ssl.cpp
 )
+target_link_libraries(asio PUBLIC ssl crypto)
 target_include_directories(asio PUBLIC asio/)
 target_compile_definitions(asio PUBLIC ASIO_SEPARATE_COMPILATION)
 
@@ -28,7 +29,7 @@ target_include_directories(uWS
 target_compile_definitions(uWS PUBLIC LIBUS_USE_ASIO LIBUS_USE_OPENSSL)
 target_link_libraries(uWS
   PUBLIC
-    asio ssl crypto
+    asio
   INTERFACE
     zlibstatic
 )
@@ -60,16 +61,6 @@ set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(flatbuffers EXCLUDE_FROM_ALL)
 add_subdirectory(spdlog EXCLUDE_FROM_ALL)
-
-# A trick combination of flags to make Curl use "OpenSSL" (actually BoringSSL)
-# but not use find_library, which will fail.
-set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
-set(USE_OPENSSL ON CACHE BOOL "" FORCE)
-set(SSL_ENABLED ON CACHE BOOL "" FORCE)
-
-set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
-set(HTTP_ONLY ON CACHE BOOL "" FORCE)
-add_subdirectory(curl EXCLUDE_FROM_ALL)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   add_subdirectory(catch2 EXCLUDE_FROM_ALL)

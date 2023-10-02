@@ -63,8 +63,7 @@ int main(int argc, char** argv) {
   }
 
   auto db = std::make_shared<Ludwig::DB>(dbfile, map_size);
-  auto io = std::make_shared<asio::io_context>();
-  auto controller = std::make_shared<Ludwig::Controller>(db, io);
+  auto controller = std::make_shared<Ludwig::Controller>(db);
 
   struct sigaction sigint_handler { .sa_flags = 0 }, sigterm_handler { .sa_flags = 0 };
   sigint_handler.sa_handler = signal_handler;

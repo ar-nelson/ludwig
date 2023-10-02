@@ -1,9 +1,8 @@
 #pragma once
-#include <bitset>
 #include <map>
-#include <shared_mutex>
-#include <asio.hpp>
+#include <regex>
 #include <monocypher.h>
+#include <static_vector.hpp>
 #include "generated/datatypes_generated.h"
 #include "db.h++"
 
@@ -59,65 +58,78 @@ namespace Ludwig {
   struct SiteDetail {
     std::string name, domain, description;
     std::optional<std::string> icon_url, banner_url;
+    uint64_t max_post_length;
+    bool javascript_enabled, board_creation_admin_only,
+         registration_enabled, registration_application_required,
+         registration_invite_required, invite_admin_only;
   };
 
   struct UserListEntry {
     uint64_t id;
-    const User* user;
+    std::reference_wrapper<const User> _user;
+
+    inline auto user() const -> const User& { return _user; }
   };
 
   struct BoardListEntry {
     uint64_t id;
-    const Board* board;
+    std::reference_wrapper<const Board> _board;
+
+    inline auto board() const -> const Board& { return _board; }
   };
 
   struct ThreadListEntry {
+  private:
+    static flatbuffers::FlatBufferBuilder null_user, null_board;
+  public:
     uint64_t id;
     double rank;
     Vote your_vote;
     bool saved, hidden, user_hidden, board_hidden;
-    const Thread* thread;
-    const PostStats* stats;
-    const User* author;
-    const Board* board;
+    std::reference_wrapper<const Thread> _thread;
+    std::reference_wrapper<const PostStats> _stats;
+    OptRef<User> _author;
+    OptRef<Board> _board;
+
+    inline auto thread() const -> const Thread& { return _thread; }
+    inline auto stats() const -> const PostStats& { return _stats; }
+    inline auto author() const -> const User& {
+      return _author ? _author->get() : *flatbuffers::GetRoot<User>(null_user.GetBufferPointer());
+    }
+    inline auto board() const -> const Board& {
+      return _board ? _board->get() : *flatbuffers::GetRoot<Board>(null_board.GetBufferPointer());
+    }
   };
 
   struct CommentListEntry {
+  private:
+    static flatbuffers::FlatBufferBuilder null_user, null_thread, null_board;
+  public:
     uint64_t id;
     double rank;
     Vote your_vote;
     bool saved, hidden, thread_hidden, user_hidden, board_hidden;
-    const Comment* comment;
-    const PostStats* stats;
-    const User* author;
-    const Thread* thread;
-    const Board* board;
+    std::reference_wrapper<const Comment> _comment;
+    std::reference_wrapper<const PostStats> _stats;
+    OptRef<User> _author;
+    OptRef<Thread> _thread;
+    OptRef<Board> _board;
+
+    inline auto comment() const -> const Comment& { return _comment; }
+    inline auto stats() const -> const PostStats& { return _stats; }
+    inline auto author() const -> const User& {
+      return _author ? _author->get() : *flatbuffers::GetRoot<User>(null_user.GetBufferPointer());
+    }
+    inline auto thread() const -> const Thread& {
+      return _thread ? _thread->get() : *flatbuffers::GetRoot<Thread>(null_thread.GetBufferPointer());
+    }
+    inline auto board() const -> const Board& {
+      return _board ? _board->get() : *flatbuffers::GetRoot<Board>(null_board.GetBufferPointer());
+    }
   };
 
-  struct ListUsersResponse {
-    std::array<UserListEntry, ITEMS_PER_PAGE> page;
-    size_t size;
-    bool is_first;
-    std::optional<uint64_t> next;
-  };
-
-  struct ListBoardsResponse {
-    std::array<BoardListEntry, ITEMS_PER_PAGE> page;
-    size_t size;
-    bool is_first;
-    std::optional<uint64_t> next;
-  };
-
-  struct ListThreadsResponse {
-    std::array<ThreadListEntry, ITEMS_PER_PAGE> page;
-    size_t size;
-    bool is_first;
-    std::optional<uint64_t> next;
-  };
-
-  struct ListCommentsResponse {
-    std::array<CommentListEntry, ITEMS_PER_PAGE> page;
-    size_t size;
+  template <typename T> struct PageOf {
+    stlpb::static_vector<T, ITEMS_PER_PAGE> entries;
     bool is_first;
     std::optional<uint64_t> next;
   };
@@ -126,7 +138,7 @@ namespace Ludwig {
     std::unordered_map<uint64_t, uint64_t> continued;
     std::multimap<uint64_t, CommentListEntry> comments;
 
-    inline auto size() -> size_t {
+    inline auto size() const -> size_t {
       return comments.size();
     }
     inline auto emplace(uint64_t parent, CommentListEntry e) -> void {
@@ -138,20 +150,28 @@ namespace Ludwig {
   };
 
   struct UserDetailResponse : UserListEntry {
-    const UserStats* stats;
+    std::reference_wrapper<const UserStats> _stats;
+
+    inline auto stats() const -> const UserStats& { return _stats; }
   };
 
   struct LocalUserDetailResponse : UserDetailResponse {
-    const LocalUser* local_user;
+    std::reference_wrapper<const LocalUser> _local_user;
+
+    inline auto local_user() const -> const LocalUser& { return _local_user; }
   };
 
   struct BoardDetailResponse : BoardListEntry {
-    const BoardStats* stats;
+    std::reference_wrapper<const BoardStats> _stats;
     bool subscribed;
+
+    inline auto stats() const -> const BoardStats& { return _stats; }
   };
 
   struct LocalBoardDetailResponse : BoardDetailResponse {
-    const LocalBoard* local_board;
+    std::reference_wrapper<const LocalBoard> _local_board;
+
+    inline auto local_board() const -> const LocalBoard& { return _local_board; }
   };
 
   struct ThreadDetailResponse : ThreadListEntry {
@@ -160,6 +180,37 @@ namespace Ludwig {
 
   struct CommentDetailResponse : CommentListEntry {
     CommentTree comments;
+  };
+
+  struct SiteUpdate {
+    std::optional<std::string_view> name, description;
+    std::optional<std::optional<std::string_view>> icon_url, banner_url;
+    std::optional<uint64_t> max_post_length;
+    std::optional<bool> javascript_enabled, board_creation_admin_only,
+         registration_enabled, registration_application_required,
+         registration_invite_required, invite_admin_only;
+  };
+
+  struct LocalUserUpdate {
+    std::optional<std::string_view> email;
+    std::optional<std::optional<std::string_view>> display_name, bio, avatar_url, banner_url;
+    std::optional<bool> open_links_in_new_tab, show_avatars, show_bot_accounts,
+      show_karma, hide_cw_posts, expand_cw_images, expand_cw_posts, javascript_enabled;
+  };
+
+  struct LocalBoardUpdate {
+    std::optional<std::optional<std::string_view>> display_name, description, icon_url, banner_url;
+    std::optional<bool> is_private, restricted_posting, approve_subscribe, can_upvote, can_downvote;
+  };
+
+  struct ThreadUpdate {
+    std::optional<std::string_view> title;
+    std::optional<std::optional<std::string_view>> text_content, content_warning;
+  };
+
+  struct CommentUpdate {
+    std::optional<std::string_view> text_content;
+    std::optional<std::optional<std::string_view>> content_warning;
   };
 
   class ControllerError : public std::runtime_error {
@@ -174,8 +225,6 @@ namespace Ludwig {
         return _http_error;
       }
   };
-
-  class Controller;
 
   enum class Event : uint8_t {
     SiteUpdate,
@@ -196,54 +245,29 @@ namespace Ludwig {
     MaxEvent
   };
 
-  typedef std::function<auto (Event, uint64_t) -> void> EventCallback;
-
-  struct EventListener {
-    uint64_t id, subject_id;
-    Event event;
-    EventCallback callback;
-
-    EventListener(
-      uint64_t id,
-      Event event,
-      uint64_t subject_id,
-      EventCallback&& callback
-    ) : id(id), subject_id(subject_id), event(event), callback(std::move(callback)) {}
-
-    void operator()() {
-      callback(event, subject_id);
+  static inline auto invite_code_to_id(std::string_view invite_code) -> uint64_t {
+    static const std::regex invite_code_regex(R"(([0-9A-F]{5})-([0-9A-F]{3})-([0-9A-F]{3})-([0-9A-F]{5}))");
+    std::match_results<string_view::const_iterator> match;
+    if (std::regex_match(invite_code.begin(), invite_code.end(), match, invite_code_regex)) {
+      return std::stoull(match[1].str() + match[2].str() + match[3].str() + match[4].str());
     }
-  };
+    throw ControllerError("Invalid invite code", 400);
+  }
 
-  class EventSubscription {
-  private:
-    std::weak_ptr<Controller> controller;
-    uint64_t id;
-    std::pair<Event, uint64_t> key;
-  public:
-    EventSubscription(
-      std::shared_ptr<Controller> controller,
-      uint64_t id,
-      Event event,
-      uint64_t subject_id
-    ) : controller(controller), id(id), key(event, subject_id) {}
-    ~EventSubscription();
-  };
+  static inline auto invite_id_to_code(uint64_t id) -> std::string {
+    const auto s = fmt::format("{:016X}", id);
+    const std::string_view v = s;
+    return fmt::format("{}-{}-{}-{}", v.substr(0, 5), v.substr(5, 3), v.substr(8, 3), v.substr(11, 5));
+  }
 
-  class Controller : std::enable_shared_from_this<Controller> {
+  class Controller : public std::enable_shared_from_this<Controller> {
   private:
     std::shared_ptr<DB> db;
     SiteDetail cached_site_detail;
 
-    std::shared_ptr<asio::io_context> io;
-    asio::executor_work_guard<decltype(io->get_executor())> work;
-    std::shared_mutex listener_lock;
-    uint64_t next_event_id = 0;
-    std::multimap<std::pair<Event, uint64_t>, EventListener> event_listeners;
-
-    auto dispatch_event(Event event, uint64_t subject_id = 0) -> void;
+    virtual auto dispatch_event(Event, uint64_t = 0) -> void {}
   public:
-    Controller(std::shared_ptr<DB> db, std::shared_ptr<asio::io_context> io);
+    Controller(std::shared_ptr<DB> db);
 
     static auto parse_sort_type(std::string_view str) -> SortType {
       if (str.empty() || str == "Hot") return SortType::Hot;
@@ -303,14 +327,16 @@ namespace Ludwig {
     static auto can_upvote(const CommentListEntry& comment, Login login) -> bool;
     static auto can_downvote(const ThreadListEntry& thread, Login login) -> bool;
     static auto can_downvote(const CommentListEntry& comment, Login login) -> bool;
+    static auto can_change_board_settings(const LocalBoardDetailResponse& board, Login login) -> bool;
+    static auto can_change_site_settings(Login login) -> bool;
 
     static auto get_thread_entry(
       ReadTxnBase& txn,
       uint64_t thread_id,
       Controller::Login login,
-      std::optional<const User*> author = {},
+      OptRef<User> author = {},
       bool is_author_hidden = false,
-      std::optional<const Board*> board = {},
+      OptRef<Board> board = {},
       bool is_board_hidden = false
     ) -> ThreadListEntry;
 
@@ -318,11 +344,11 @@ namespace Ludwig {
       ReadTxnBase& txn,
       uint64_t comment_id,
       Login login,
-      std::optional<const User*> author = {},
+      OptRef<User> author = {},
       bool is_author_hidden = false,
-      std::optional<const Thread*> thread = {},
+      OptRef<Thread> thread = {},
       bool is_thread_hidden = false,
-      std::optional<const Board*> board = {},
+      OptRef<Board> board = {},
       bool is_board_hidden = false
     ) -> CommentListEntry;
 
@@ -334,7 +360,7 @@ namespace Ludwig {
 
     inline auto validate_session(ReadTxnBase& txn, uint64_t session_id) -> std::optional<uint64_t> {
       auto session = txn.get_session(session_id);
-      if (session) return { (*session)->user() };
+      if (session) return { session->get().user() };
       return {};
     }
     auto validate_or_regenerate_session(
@@ -372,8 +398,9 @@ namespace Ludwig {
     auto user_detail(ReadTxnBase& txn, uint64_t id) -> UserDetailResponse;
     auto local_user_detail(ReadTxnBase& txn, uint64_t id) -> LocalUserDetailResponse;
     auto board_detail(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> logged_in_user) -> BoardDetailResponse;
-    auto list_local_users(ReadTxnBase& txn, std::optional<uint64_t> from_id = {}) -> ListUsersResponse;
-    auto list_local_boards(ReadTxnBase& txn, std::optional<uint64_t> from_id = {}) -> ListBoardsResponse;
+    auto local_board_detail(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> logged_in_user) -> LocalBoardDetailResponse;
+    auto list_local_users(ReadTxnBase& txn, std::optional<uint64_t> from_id = {}) -> PageOf<UserListEntry>;
+    auto list_local_boards(ReadTxnBase& txn, std::optional<uint64_t> from_id = {}) -> PageOf<BoardListEntry>;
     auto list_board_threads(
       ReadTxnBase& txn,
       uint64_t board_id,
@@ -381,7 +408,7 @@ namespace Ludwig {
       Login login = {},
       bool skip_cw = false,
       std::optional<uint64_t> from_id = {}
-    ) -> ListThreadsResponse;
+    ) -> PageOf<ThreadListEntry>;
     auto list_board_comments(
       ReadTxnBase& txn,
       uint64_t board_id,
@@ -389,7 +416,7 @@ namespace Ludwig {
       Login login = {},
       bool skip_cw = false,
       std::optional<uint64_t> from_id = {}
-    ) -> ListCommentsResponse;
+    ) -> PageOf<CommentListEntry>;
     auto list_user_threads(
       ReadTxnBase& txn,
       uint64_t user_id,
@@ -397,7 +424,7 @@ namespace Ludwig {
       Login login = {},
       bool skip_cw = false,
       std::optional<uint64_t> from_id = {}
-    ) -> ListThreadsResponse;
+    ) -> PageOf<ThreadListEntry>;
     auto list_user_comments(
       ReadTxnBase& txn,
       uint64_t user_id,
@@ -405,12 +432,25 @@ namespace Ludwig {
       Login login = {},
       bool skip_cw = false,
       std::optional<uint64_t> from_id = {}
-    ) -> ListCommentsResponse;
-    auto create_local_user(
+    ) -> PageOf<CommentListEntry>;
+    auto register_local_user(
       std::string_view username,
       std::string_view email,
-      SecretString&& password
+      SecretString&& password,
+      std::string_view ip,
+      std::string_view user_agent,
+      std::optional<uint64_t> invite = {},
+      std::optional<std::string_view> application_text = {}
+    ) -> std::pair<uint64_t, bool>;
+    auto create_local_user(
+      std::string_view username,
+      std::optional<std::string_view> email,
+      SecretString&& password,
+      bool is_bot,
+      std::optional<uint64_t> invite = {}
     ) -> uint64_t;
+    auto update_local_user(uint64_t id, LocalUserUpdate update) -> void;
+    auto approve_local_user_application(uint64_t user_id) -> void;
     auto create_local_board(
       uint64_t owner,
       std::string_view name,
@@ -420,6 +460,7 @@ namespace Ludwig {
       bool is_restricted_posting = false,
       bool is_local_only = false
     ) -> uint64_t;
+    auto update_local_board(uint64_t id, LocalBoardUpdate update) -> void;
     auto create_local_thread(
       uint64_t author,
       uint64_t board,
@@ -428,12 +469,14 @@ namespace Ludwig {
       std::optional<std::string_view> text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
+    auto update_thread(uint64_t id, ThreadUpdate update) -> void;
     auto create_local_comment(
       uint64_t author,
       uint64_t parent,
       std::string_view text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
+    auto update_comment(uint64_t id, CommentUpdate update) -> void;
     auto vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;
     auto subscribe(uint64_t user_id, uint64_t board_id, bool subscribed = true) -> void;
     auto save_post(uint64_t user_id, uint64_t post_id, bool saved = true) -> void;
@@ -441,8 +484,6 @@ namespace Ludwig {
     auto hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden = true) -> void;
     auto hide_board(uint64_t user_id, uint64_t board_id, bool hidden = true) -> void;
 
-    auto on_event(Event event, uint64_t subject_id, EventCallback&& callback) -> EventSubscription;
-
-    friend class EventSubscription;
+    auto create_site_invite(uint64_t inviter_user_id) -> uint64_t;
   };
 }

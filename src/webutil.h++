@@ -5,6 +5,7 @@
 #include <sstream>
 #include <spdlog/fmt/fmt.h>
 #include <uWebSockets/App.h>
+#include <flatbuffers/string.h>
 
 namespace Ludwig {
   static constexpr std::string_view ESCAPED = "<>'\"&",
@@ -50,6 +51,8 @@ namespace Ludwig {
 
   struct Escape {
     std::string_view str;
+    Escape(std::string_view str) : str(str) {}
+    Escape(const flatbuffers::String* fbs) : str(fbs ? fbs->string_view() : "") {}
   };
 
   template <bool SSL> static inline auto operator<<(uWS::HttpResponse<SSL>& lhs, const std::string_view rhs) -> uWS::HttpResponse<SSL>& {
@@ -67,6 +70,7 @@ namespace Ludwig {
     return lhs;
   }
 
+  /*
   template <typename T> static inline auto operator<<(T& lhs, Escape rhs) -> T& {
     size_t start = 0;
     for (
@@ -96,12 +100,7 @@ namespace Ludwig {
     if (start < rhs.str.length()) lhs << rhs.str.substr(start);
     return lhs;
   }
-
-  static inline auto escape_html(std::string_view str) -> std::string {
-    std::ostringstream stream;
-    stream << Escape{str};
-    return stream.str();
-  }
+  */
 }
 
 namespace fmt {
@@ -141,4 +140,10 @@ namespace fmt {
       return std::copy(e.str.begin() + start, e.str.end(), ctx.out());
     }
   };
+}
+
+namespace Ludwig {
+  static inline auto escape_html(std::string_view str) -> std::string {
+    return fmt::format("{}", Escape(str));
+  }
 }
