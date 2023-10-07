@@ -1,18 +1,17 @@
+#include "services/db.h++"
+#include "models/db.fbs.h"
 #include <random>
 #include <regex>
 #include <span>
 #include <vector>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <spdlog/spdlog.h>
 #include <duthomhas/csprng.hpp>
 #include <flatbuffers/idl.h>
-#include "generated/datatypes.fbs.h"
-#include "db.h++"
 
-using std::min, std::nullopt, std::regex, std::regex_match, std::runtime_error,
-      std::optional, std::stoull, std::string, std::string_view,
-      flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot;
+using std::function, std::min, std::nullopt, std::regex, std::regex_match,
+    std::runtime_error, std::optional, std::stoull, std::string,
+    std::string_view, flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot;
 
 #define assert_fmt(CONDITION, ...) if (!(CONDITION)) { spdlog::critical(__VA_ARGS__); throw runtime_error("Assertion failed: " #CONDITION); }
 
@@ -154,7 +153,7 @@ namespace Ludwig {
     return std::binary_search(sp.begin(), sp.end(), v);
   }
 
-  static inline auto db_set_disambiguate_hash(MDB_txn* txn, MDB_dbi dbi, Cursor k, std::function<bool (uint64_t)> matches) -> optional<uint64_t> {
+  static inline auto db_set_disambiguate_hash(MDB_txn* txn, MDB_dbi dbi, Cursor k, function<bool (uint64_t)> matches) -> optional<uint64_t> {
     MDB_val val;
     if (db_get(txn, dbi, k, val)) return false;
     assert(val.mv_size % sizeof(uint64_t) == 0);
@@ -344,14 +343,6 @@ namespace Ludwig {
             string(filename) + " already exists and would be overwritten.");
       }
     }
-
-    flatbuffers::Parser parser;
-    parser.Parse(
-      string(string_view(reinterpret_cast<char*>(datatypes_fbs), datatypes_fbs_len)).c_str(),
-      nullptr,
-      "datatypes.fbs"
-    );
-
     {
       MDB_txn* txn = nullptr;
       if (int err = init_env(filename, &txn) || mdb_txn_commit(txn)) {
@@ -361,6 +352,13 @@ namespace Ludwig {
         throw DBError("Failed to open database", err);
       }
     }
+
+    flatbuffers::Parser parser;
+    parser.Parse(
+      std::string(reinterpret_cast<const char*>(db_fbs), db_fbs_len).c_str(),
+      nullptr,
+      "db.fbs"
+    );
 
     DeferDelete on_error{ env, filename };
     auto txn = open_write_txn();
@@ -379,14 +377,14 @@ namespace Ludwig {
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw runtime_error("Failed to parse User JSON: " + match[3].str());
             }
-            txn.set_user(std::stoull(match[2]), parser.builder_);
+            txn.set_user(stoull(match[2]), parser.builder_);
             break;
           case 'U':
             parser.SetRootType("LocalUser");
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw runtime_error("Failed to parse LocalUser JSON: " + match[3].str());
             }
-            txn.set_local_user(std::stoull(match[2]), parser.builder_);
+            txn.set_local_user(stoull(match[2]), parser.builder_);
             break;
           case 'b':
             if (seed == 0) {
@@ -396,37 +394,37 @@ namespace Ludwig {
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw runtime_error("Failed to parse Board JSON: " + match[3].str());
             }
-            txn.set_board(std::stoull(match[2]), parser.builder_);
+            txn.set_board(stoull(match[2]), parser.builder_);
             break;
           case 'B':
             parser.SetRootType("LocalBoard");
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw runtime_error("Failed to parse LocalBoard JSON: " + match[3].str());
             }
-            txn.set_local_board(std::stoull(match[2]), parser.builder_);
+            txn.set_local_board(stoull(match[2]), parser.builder_);
             break;
           case 't':
             parser.SetRootType("Thread");
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw runtime_error("Failed to parse Thread JSON: " + match[3].str());
             }
-            txn.set_thread(std::stoull(match[2]), parser.builder_);
+            txn.set_thread(stoull(match[2]), parser.builder_);
             break;
           case 'c':
             parser.SetRootType("Comment");
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw runtime_error("Failed to parse Comment JSON: " + match[3].str());
             }
-            txn.set_comment(std::stoull(match[2]), parser.builder_);
+            txn.set_comment(stoull(match[2]), parser.builder_);
             break;
         }
       } else if (regex_match(line, match, setting_line)) {
         if (match[1].str() == "hash_seed") {
-          const auto bin_str = cereal::base64::decode(match[2]);
+          const auto bin_str = Base64::decode(match[2]);
           assert(bin_str.length() == 8);
           seed = *reinterpret_cast<const uint64_t*>(bin_str.data());
         }
-        txn.set_setting(match[1].str(), cereal::base64::decode(match[2]));
+        txn.set_setting(match[1].str(), Base64::decode(match[2]));
       } else if (regex_match(line, match, vote_line)) {
         txn.set_vote(stoull(match[1]), stoull(match[2]), static_cast<Vote>(std::stoi(match[3])));
       } else if (regex_match(line, match, subscription_line)) {
@@ -689,7 +687,7 @@ namespace Ludwig {
 
   auto ReadTxnBase::get_vote_of_user_for_post(uint64_t user_id, uint64_t post_id) -> Vote {
     MDB_val v;
-    if (db_get(txn, db.dbis[Vote_UserPost], Cursor(user_id, post_id), v)) return NoVote;
+    if (db_get(txn, db.dbis[Vote_UserPost], Cursor(user_id, post_id), v)) return Vote::NoVote;
     return (Vote)val_as<int8_t>(v);
   }
 
@@ -742,7 +740,7 @@ namespace Ludwig {
     MDB_dbi dbi,
     Cursor from,
     Cursor to,
-    const std::function<void(MDB_val& k, MDB_val& v)>& fn = [](MDB_val&, MDB_val&){}
+    const function<void(MDB_val& k, MDB_val& v)>& fn = [](MDB_val&, MDB_val&){}
   ) -> void {
     MDBCursor cur(txn, dbi);
     MDB_val k = from.val(), v;
@@ -1382,15 +1380,15 @@ namespace Ludwig {
   }
 
   auto WriteTxn::set_vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void {
-    const auto existing = get_vote_of_user_for_post(user_id, post_id);
-    const int64_t diff = vote - existing;
+    const auto existing = static_cast<int64_t>(get_vote_of_user_for_post(user_id, post_id));
+    const int64_t diff = static_cast<int64_t>(vote) - existing;
     if (!diff) return;
     const auto thread_opt = get_thread(post_id);
     const auto comment_opt = thread_opt ? nullopt : get_comment(post_id);
     assert(thread_opt || comment_opt);
     const auto op_id = thread_opt ? thread_opt->get().author() : comment_opt->get().author();
     spdlog::debug("Setting vote from user {:x} on post {:x} to {}", user_id, post_id, (int8_t)vote);
-    if (vote) {
+    if (vote != Vote::NoVote) {
       int8_t vote_byte = (int8_t)vote;
       MDB_val v { sizeof(int8_t), &vote_byte };
       db_put(txn, db.dbis[Vote_UserPost], Cursor(user_id, post_id), v);
@@ -1407,8 +1405,8 @@ namespace Ludwig {
         s.latest_comment_necro(),
         s.descendant_count(),
         s.child_count(),
-        vote > 0 ? s.upvotes() + 1 : (existing > 0 ? min(s.upvotes(), s.upvotes() - 1) : s.upvotes()),
-        vote < 0 ? s.downvotes() + 1 : (existing < 0 ? min(s.downvotes(), s.downvotes() - 1) : s.downvotes()),
+        vote > Vote::NoVote ? s.upvotes() + 1 : (existing > 0 ? min(s.upvotes(), s.upvotes() - 1) : s.upvotes()),
+        vote < Vote::NoVote ? s.downvotes() + 1 : (existing < 0 ? min(s.downvotes(), s.downvotes() - 1) : s.downvotes()),
         new_karma
       ));
       db_put(txn, db.dbis[PostStats_Post], post_id, fbb);

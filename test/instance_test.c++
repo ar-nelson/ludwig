@@ -1,9 +1,10 @@
+#include "util.h++"
+#include "services/db.h++"
+#include "controllers/instance.h++"
 #include <catch2/catch_test_macros.hpp>
 #include <spdlog/spdlog.h>
 #include <sstream>
 #include <iomanip>
-#include "util.h++"
-#include "../src/controller.h++"
 
 using namespace Ludwig;
 
@@ -16,7 +17,7 @@ TEST_CASE("hash password", "[controller]") {
 
   TempFile file;
   auto db = std::make_shared<DB>(file.name);
-  auto controller = std::make_shared<Controller>(db);
+  auto controller = std::make_shared<InstanceController>(db);
   uint8_t hash[32];
   controller->hash_password({ std::string(password) }, reinterpret_cast<const uint8_t*>(salt.data()), hash);
   std::ostringstream actual_hash;

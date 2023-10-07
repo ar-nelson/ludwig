@@ -13,9 +13,6 @@
 [submodule "vendor/csprng"]
 	path = vendor/csprng
 	url = https://github.com/Duthomhas/CSPRNG.git
-[submodule "vendor/cereal"]
-	path = vendor/cereal
-	url = git@github.com:ar-nelson/cereal.git
 [submodule "vendor/boringssl"]
 	path = vendor/boringssl
 	url = https://boringssl.googlesource.com/boringssl
@@ -34,3 +31,6 @@
 [submodule "vendor/libpng"]
 	path = vendor/libpng
 	url = https://github.com/glennrp/libpng.git
+[submodule "vendor/simdjson"]
+	path = vendor/simdjson
+	url = https://github.com/simdjson/simdjson.git

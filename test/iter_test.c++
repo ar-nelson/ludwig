@@ -1,6 +1,6 @@
-#include <catch2/catch_test_macros.hpp>
 #include "util.h++"
-#include "../src/iter.h++"
+#include "util/iter.h++"
+#include <catch2/catch_test_macros.hpp>
 
 using namespace Ludwig;
 

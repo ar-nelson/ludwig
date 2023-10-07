@@ -1,6 +1,6 @@
+#include "util/jwt.h++"
+#include "util/base64.h++"
 #include <catch2/catch_test_macros.hpp>
-#include "../src/jwt.h++"
-#include "../src/base64.h++"
 
 static const std::string SECRET_BASE64 = "67GWYhThscMwBm3jItLAxy6vY4fg49K5eYLYAHexxpW0Z3FOOBz_MQ3MfXiJPXmmztAok4iC3jDGkpSbQyDL9Q",
   BYTES32_BASE64 = "2kVD14ALWWbYccEdphAtnGlZslzeBz2FIE9Z1LGqAyQ",

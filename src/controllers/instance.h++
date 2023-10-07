@@ -1,11 +1,11 @@
 #pragma once
+#include "models/db.h++"
+#include "services/db.h++"
+#include "services/http_client.h++"
 #include <map>
 #include <regex>
 #include <monocypher.h>
 #include <static_vector.hpp>
-#include "generated/datatypes_generated.h"
-#include "db.h++"
-#include "http_client.h++"
 
 namespace Ludwig {
   constexpr size_t ITEMS_PER_PAGE = 20;
@@ -261,7 +261,7 @@ namespace Ludwig {
     return fmt::format("{}-{}-{}-{}", v.substr(0, 5), v.substr(5, 3), v.substr(8, 3), v.substr(11, 5));
   }
 
-  class Controller : public std::enable_shared_from_this<Controller> {
+  class InstanceController : public std::enable_shared_from_this<InstanceController> {
   private:
     std::shared_ptr<DB> db;
     //std::shared_ptr<HttpClient> http_client;
@@ -270,7 +270,7 @@ namespace Ludwig {
     auto fetch_link_preview(uint64_t thread_id, std::string_view url) -> void;
     virtual auto dispatch_event(Event, uint64_t = 0) -> void {}
   public:
-    Controller(std::shared_ptr<DB> db /*, std::shared_ptr<HttpClient> http_client*/);
+    InstanceController(std::shared_ptr<DB> db /*, std::shared_ptr<HttpClient> http_client*/);
 
     static auto parse_sort_type(std::string_view str) -> SortType {
       if (str.empty() || str == "Hot") return SortType::Hot;
@@ -336,7 +336,7 @@ namespace Ludwig {
     static auto get_thread_entry(
       ReadTxnBase& txn,
       uint64_t thread_id,
-      Controller::Login login,
+      InstanceController::Login login,
       OptRef<User> author = {},
       bool is_author_hidden = false,
       OptRef<Board> board = {},

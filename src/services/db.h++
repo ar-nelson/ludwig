@@ -1,8 +1,8 @@
 #pragma once
+#include "util/iter.h++"
+#include "util/jwt.h++"
+#include "models/db.h++"
 #include <atomic>
-#include "iter.h++"
-#include "jwt.h++"
-#include "generated/datatypes_generated.h"
 
 namespace Ludwig {
   static inline auto karma_uint(int64_t karma) -> uint64_t {

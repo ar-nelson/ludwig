@@ -1,5 +1,5 @@
+#include "util/thumbnailer.h++"
 #include <catch2/catch_test_macros.hpp>
-#include "../src/thumbnailer.h++"
 #include <fstream>
 #include <filesystem>
 #include <iterator>

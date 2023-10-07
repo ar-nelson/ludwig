@@ -26,11 +26,9 @@ tasks:
     deps:
       - cmake-debug
     sources:
-      - src/**/*.c++
-      - src/**/*.h++
-      - src/**/*.fbs
-      - test/**/*
-      - static/*
+      - src/**/*
+      - test/*.c++
+      - test/*.h++
       - vendor/CMakeLists.txt
       - CMakeLists.txt
     cmds:
@@ -43,11 +41,9 @@ tasks:
     deps:
       - cmake-release
     sources:
-      - src/**/*.c++
-      - src/**/*.h++
-      - src/**/*.fbs
-      - test/**/*
-      - static/*
+      - src/**/*
+      - test/*.c++
+      - test/*.h++
       - vendor/CMakeLists.txt
       - CMakeLists.txt
     cmds:
@@ -74,7 +70,7 @@ tasks:
     sources:
       - extras/static-sample-server.ts
       - extras/sample.html
-      - static/*
+      - src/static/*
     cmds:
       - deno run --allow-read --allow-net ./extras/static-sample-server.ts
   clean:

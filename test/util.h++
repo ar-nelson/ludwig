@@ -1,6 +1,6 @@
+#include "util/common.h++"
 #include <lmdb.h>
 #include <memory>
-#include <string>
 
 using namespace std::literals::string_view_literals;
 

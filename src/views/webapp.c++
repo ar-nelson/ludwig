@@ -1,13 +1,12 @@
-#include "webapp_routes.h++"
-#include <chrono>
+#include "views/webapp.h++"
+#include "util/web.h++"
+#include "static/default-theme.css.h"
+#include "static/htmx.min.js.h"
+#include "static/feather-sprite.svg.h"
 #include <iterator>
 #include <regex>
 #include <spdlog/fmt/chrono.h>
 #include "xxhash.h"
-#include "generated/default-theme.css.h"
-#include "generated/htmx.min.js.h"
-#include "generated/feather-sprite.svg.h"
-#include "webutil.h++"
 
 using std::current_exception, std::exception, std::function, std::match_results,
       std::nullopt, std::optional, std::regex, std::regex_search,
@@ -136,10 +135,10 @@ namespace Ludwig {
   };
 
   template <bool SSL> struct Webapp : public std::enable_shared_from_this<Webapp<SSL>> {
-    shared_ptr<Controller> controller;
+    shared_ptr<InstanceController> controller;
     string buf;
 
-    Webapp(shared_ptr<Controller> controller) : controller(controller) {}
+    Webapp(shared_ptr<InstanceController> controller) : controller(controller) {}
 
     using Self = shared_ptr<Webapp<SSL>>;
     using App = uWS::TemplatedApp<SSL>;
@@ -175,8 +174,8 @@ namespace Ludwig {
 
       inline auto operator()(
         ReadTxn& txn,
-        function<void (Request&, Controller::Login)> before,
-        function<void (Response&, Controller::Login)> after
+        function<void (Request&, InstanceController::Login)> before,
+        function<void (Response&, InstanceController::Login)> after
       ) -> void {
         optional<uint64_t> old_session;
         optional<LoginResponse> new_session;
@@ -406,7 +405,7 @@ namespace Ludwig {
           Escape(logged_in_user->user().name()),
           Escape{display_name(logged_in_user->user())},
           logged_in_user->stats().thread_karma() + logged_in_user->stats().comment_karma(),
-          Controller::can_change_site_settings(logged_in_user) ? R"(<li><a href="/site_admin">Site admin</a>)" : ""
+          InstanceController::can_change_site_settings(logged_in_user) ? R"(<li><a href="/site_admin">Site admin</a>)" : ""
         );
       } else {
         rsp << R"(</ul><ul><li><a href="/login">Login</a><li><a href="/register">Register</a></ul></nav>)";
@@ -467,7 +466,7 @@ namespace Ludwig {
     auto write_sidebar(
       Response& rsp,
       const SiteDetail* site,
-      Controller::Login login,
+      InstanceController::Login login,
       const optional<BoardDetailResponse>& board = {}
     ) noexcept -> void {
       rsp << R"(<label id="sidebar-toggle-label" for="sidebar-toggle"><svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#menu"></svg> Menu</label>)"
@@ -503,7 +502,7 @@ namespace Ludwig {
       } else if (board) {
         rsp << R"(<section id="actions-section"><h2>Actions</h2>)";
         write_subscribe_button(rsp, board->id, board->subscribed);
-        if (Controller::can_create_thread(*board, login)) {
+        if (InstanceController::can_create_thread(*board, login)) {
           write_fmt(rsp,
             R"(<a class="big-button" href="/b/{0}/create_thread">Submit a new link</a>)"
             R"(<a class="big-button" href="/b/{0}/create_thread?text=1">Submit a new text post</a>)",
@@ -727,10 +726,10 @@ namespace Ludwig {
     template <typename T> auto write_vote_buttons(
       Response& rsp,
       const T& entry,
-      Controller::Login login
+      InstanceController::Login login
     ) noexcept -> void {
-      const auto can_upvote = Controller::can_upvote(entry, login),
-        can_downvote = Controller::can_downvote(entry, login);
+      const auto can_upvote = InstanceController::can_upvote(entry, login),
+        can_downvote = InstanceController::can_downvote(entry, login);
       if (can_upvote || can_downvote) {
         write_fmt(rsp,
           R"(<form class="vote-buttons" id="votes-{0:x}" method="post" action="/do/vote" hx-post="/do/vote" hx-swap="outerHTML">)"
@@ -741,8 +740,8 @@ namespace Ludwig {
           "</form>",
           entry.id, suffixed_short_number(entry.stats().karma()),
           can_upvote ? "" : "disabled ", can_downvote ? "" : "disabled ",
-          entry.your_vote > 0 ? R"(class="voted" value="0")" : R"(value="1")",
-          entry.your_vote < 0 ? R"(class="voted" value="0")" : R"(value="-1")"
+          entry.your_vote > Vote::NoVote ? R"(class="voted" value="0")" : R"(value="1")",
+          entry.your_vote < Vote::NoVote ? R"(class="voted" value="0")" : R"(value="-1")"
         );
       } else {
         write_fmt(rsp,
@@ -784,7 +783,7 @@ namespace Ludwig {
     template <typename T> auto write_controls_submenu(
       Response& rsp,
       const T& post,
-      Controller::Login login,
+      InstanceController::Login login,
       bool show_user,
       bool show_board
     ) noexcept -> void {
@@ -797,13 +796,13 @@ namespace Ludwig {
         R"(<option selected hidden value="{4:d}">Actions)",
         post.id, post_word<T>(), show_user, show_board, SubmenuAction::None
       );
-      if (Controller::can_reply_to(post, login)) {
+      if (InstanceController::can_reply_to(post, login)) {
         write_fmt(rsp, R"(<option value="{:d}">💬 Reply)", SubmenuAction::Reply);
       }
-      if (Controller::can_edit(post, login)) {
+      if (InstanceController::can_edit(post, login)) {
         write_fmt(rsp, R"(<option value="{:d}">✏️ Edit)", SubmenuAction::Edit);
       }
-      if (Controller::can_delete(post, login)) {
+      if (InstanceController::can_delete(post, login)) {
         write_fmt(rsp, R"(<option value="{:d}">🗑️ Delete)", SubmenuAction::Delete);
       }
       write_fmt(rsp,
@@ -915,7 +914,7 @@ namespace Ludwig {
       Response& rsp,
       const PageOf<ThreadListEntry>& list,
       string_view base_url,
-      Controller::Login login,
+      InstanceController::Login login,
       bool include_ol,
       bool show_user,
       bool show_board,
@@ -970,7 +969,7 @@ namespace Ludwig {
       Response& rsp,
       const PageOf<CommentListEntry>& list,
       string_view base_url,
-      Controller::Login login,
+      InstanceController::Login login,
       bool include_ol,
       bool show_user,
       bool show_thread
@@ -1019,7 +1018,7 @@ namespace Ludwig {
       const CommentTree& comments,
       uint64_t root,
       string_view sort_str,
-      Controller::Login login,
+      InstanceController::Login login,
       bool is_thread,
       bool include_ol,
       bool is_alt = false
@@ -1089,7 +1088,7 @@ namespace Ludwig {
     auto write_thread_view(
       Response& rsp,
       const ThreadDetailResponse& thread,
-      Controller::Login login,
+      InstanceController::Login login,
       string_view sort_str = "Hot",
       bool show_cws = false,
       bool show_images = false
@@ -1140,7 +1139,7 @@ namespace Ludwig {
         }
       }
       write_fmt(rsp, R"(<section class="comments" id="comments"><h2>{:d} comments</h2>)", thread.stats().descendant_count());
-      if (Controller::can_reply_to(thread, login)) {
+      if (InstanceController::can_reply_to(thread, login)) {
         write_reply_form(rsp, thread.id);
       }
       if (thread.stats().descendant_count()) {
@@ -1170,7 +1169,7 @@ namespace Ludwig {
     auto write_comment_view(
       Response& rsp,
       const CommentDetailResponse& comment,
-      Controller::Login login,
+      InstanceController::Login login,
       string_view sort_str = "Hot",
       bool show_cws = false,
       bool show_images = false
@@ -1188,7 +1187,7 @@ namespace Ludwig {
       write_controls_submenu(rsp, comment, login, true, false);
       rsp << "</div></div>";
       rsp << R"(<section class="comments" id="comments"><h2>)" << comment.stats().descendant_count() << R"( replies</h2>)";
-      if (Controller::can_reply_to(comment, login)) {
+      if (InstanceController::can_reply_to(comment, login)) {
         write_reply_form(rsp, comment.id);
       }
       if (comment.stats().descendant_count()) {
@@ -1508,8 +1507,8 @@ namespace Ludwig {
           // TODO: Get sort and filter settings from user
           show_posts = req.getQuery("type") != "comments";
           sort_str = req.getQuery("sort");
-          const auto sort = Controller::parse_sort_type(sort_str);
-          const auto from = Controller::parse_hex_id(string(req.getQuery("from")));
+          const auto sort = InstanceController::parse_sort_type(sort_str);
+          const auto from = InstanceController::parse_hex_id(string(req.getQuery("from")));
           show_images = req.getQuery("images") == "1" || sort_str.empty();
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           htmx = is_htmx(req);
@@ -1592,8 +1591,8 @@ namespace Ludwig {
           // TODO: Get sort and filter settings from user
           show_posts = req.getQuery("type") != "comments";
           sort_str = req.getQuery("sort");
-          const auto sort = Controller::parse_user_post_sort_type(sort_str);
-          const auto from = Controller::parse_hex_id(string(req.getQuery("from")));
+          const auto sort = InstanceController::parse_user_post_sort_type(sort_str);
+          const auto from = InstanceController::parse_hex_id(string(req.getQuery("from")));
           show_images = req.getQuery("images") == "1" || sort_str.empty();
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           site = self->controller->site_detail();
@@ -1644,12 +1643,12 @@ namespace Ludwig {
         string_view sort_str;
         bool show_images, show_cws;
         page(txn, [&](Request& req, auto& login) {
-          const auto id = Controller::parse_hex_id(string(req.getParameter(0)));
+          const auto id = InstanceController::parse_hex_id(string(req.getParameter(0)));
           if (!id) throw ControllerError("Invalid hexadecimal post ID", 404);
           // TODO: Get sort and filter settings from user
           sort_str = req.getQuery("sort");
-          const auto sort = Controller::parse_comment_sort_type(sort_str);
-          const auto from = Controller::parse_hex_id(string(req.getQuery("from")));
+          const auto sort = InstanceController::parse_comment_sort_type(sort_str);
+          const auto from = InstanceController::parse_hex_id(string(req.getQuery("from")));
           show_images = req.getQuery("images") == "1" || sort_str.empty();
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           site = self->controller->site_detail();
@@ -1676,11 +1675,11 @@ namespace Ludwig {
         const SiteDetail* site;
         optional<ThreadListEntry> thread;
         page(txn, [&](auto& req, auto& login) {
-          const auto id = Controller::parse_hex_id(string(req.getParameter(0)));
+          const auto id = InstanceController::parse_hex_id(string(req.getParameter(0)));
           if (!id) throw ControllerError("Invalid hexadecimal post ID", 404);
           site = self->controller->site_detail();
           thread = self->controller->get_thread_entry(txn, *id, login);
-          if (!Controller::can_edit(*thread, login)) throw ControllerError("Cannot edit this post", 403);
+          if (!InstanceController::can_edit(*thread, login)) throw ControllerError("Cannot edit this post", 403);
         }, [&](auto& rsp, auto& login) {
           self->write_html_header(rsp, site, login, {
             .canonical_path = fmt::format("/thread/{:x}/edit", thread->id),
@@ -1700,12 +1699,12 @@ namespace Ludwig {
         string_view sort_str;
         bool show_images, show_cws;
         page(txn, [&](Request& req, auto& login) {
-          const auto id = Controller::parse_hex_id(string(req.getParameter(0)));
+          const auto id = InstanceController::parse_hex_id(string(req.getParameter(0)));
           if (!id) throw ControllerError("Invalid hexadecimal post ID", 404);
           // TODO: Get sort and filter settings from user
           sort_str = req.getQuery("sort");
-          const auto sort = Controller::parse_comment_sort_type(sort_str);
-          const auto from = Controller::parse_hex_id(string(req.getQuery("from")));
+          const auto sort = InstanceController::parse_comment_sort_type(sort_str);
+          const auto from = InstanceController::parse_hex_id(string(req.getQuery("from")));
           show_images = req.getQuery("images") == "1" || sort_str.empty();
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           site = self->controller->site_detail();
@@ -1817,7 +1816,7 @@ namespace Ludwig {
         const SiteDetail* site;
         page(txn, [&](auto&, auto& login) {
           site = self->controller->site_detail();
-          if (!Controller::can_change_site_settings(login)) {
+          if (!InstanceController::can_change_site_settings(login)) {
             throw ControllerError("Admin login required to view this page", 403);
           }
         }, [&](auto& rsp, auto& login) {
@@ -2056,9 +2055,9 @@ namespace Ludwig {
       app.post("/do/vote", action_page([](Self self, auto& req, auto& rsp, auto body, auto logged_in_user) {
         const auto vote_str = uWS::getDecodedQueryValue("vote", body.query);
         Vote vote;
-        if (vote_str == "1") vote = Upvote;
-        else if (vote_str == "-1") vote = Downvote;
-        else if (vote_str == "0") vote = NoVote;
+        if (vote_str == "1") vote = Vote::Upvote;
+        else if (vote_str == "-1") vote = Vote::Downvote;
+        else if (vote_str == "0") vote = Vote::NoVote;
         else throw ControllerError("Invalid or missing 'vote' parameter", 400);
         const auto post_id = body.required_hex_id("post");
         self->controller->vote(logged_in_user, post_id, vote);
@@ -2066,14 +2065,14 @@ namespace Ludwig {
           auto txn = self->controller->open_read_txn();
           const auto login = self->controller->local_user_detail(txn, logged_in_user);
           try {
-            const auto thread = Controller::get_thread_entry(txn, post_id, login);
+            const auto thread = InstanceController::get_thread_entry(txn, post_id, login);
             rsp.cork([&]() {
               rsp.writeHeader("Content-Type", TYPE_HTML);
               self->write_vote_buttons(rsp, thread, login);
               rsp.end();
             });
           } catch (ControllerError) {
-            const auto comment = Controller::get_comment_entry(txn, post_id, login);
+            const auto comment = InstanceController::get_comment_entry(txn, post_id, login);
             rsp.cork([&]() {
               rsp.writeHeader("Content-Type", TYPE_HTML);
               self->write_vote_buttons(rsp, comment, login);
@@ -2115,7 +2114,7 @@ namespace Ludwig {
 
   template <bool SSL> auto webapp_routes(
     uWS::TemplatedApp<SSL>& app,
-    shared_ptr<Controller> controller
+    shared_ptr<InstanceController> controller
   ) -> void {
     auto router = std::make_shared<Webapp<SSL>>(controller);
     router->register_routes(app);
@@ -2123,11 +2122,11 @@ namespace Ludwig {
 
   template auto webapp_routes<true>(
     uWS::TemplatedApp<true>& app,
-    shared_ptr<Controller> controller
+    shared_ptr<InstanceController> controller
   ) -> void;
 
   template auto webapp_routes<false>(
     uWS::TemplatedApp<false>& app,
-    shared_ptr<Controller> controller
+    shared_ptr<InstanceController> controller
   ) -> void;
 }

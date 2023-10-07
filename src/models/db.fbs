@@ -1,5 +1,7 @@
 namespace Ludwig;
 
+enum Vote : byte { Upvote = 1, NoVote = 0, Downvote = -1 }
+
 enum ModState : ubyte { Visible, Flagged, Locked, Removed }
 
 table Session {
@@ -39,6 +41,7 @@ table UserStats {
 struct Hash {
   bytes: [ubyte:32];
 }
+
 struct Salt {
   bytes: [ubyte:16];
 }

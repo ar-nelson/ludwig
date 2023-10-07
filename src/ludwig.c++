@@ -1,10 +1,13 @@
+#include "util/common.h++"
+#include "services/db.h++"
+#include "services/asio_http_client.h++"
+#include "controllers/instance.h++"
+#include "views/webapp.h++"
 #include <uWebSockets/App.h>
+#include <asio.hpp>
 #include <optparse.h>
 #include <fstream>
 #include <csignal>
-#include "db.h++"
-#include "controller.h++"
-#include "webapp_routes.h++"
 
 static us_listen_socket_t* global_socket = nullptr;
 
@@ -62,8 +65,12 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  auto io = std::make_shared<asio::io_context>();
+  auto ssl = std::make_shared<asio::ssl::context>(asio::ssl::context::sslv23);
+  ssl->set_default_verify_paths();
+  auto http_client = std::make_shared<Ludwig::AsioHttpClient>(io, ssl);
   auto db = std::make_shared<Ludwig::DB>(dbfile, map_size);
-  auto controller = std::make_shared<Ludwig::Controller>(db);
+  auto controller = std::make_shared<Ludwig::InstanceController>(db);
 
   struct sigaction sigint_handler { .sa_flags = 0 }, sigterm_handler { .sa_flags = 0 };
   sigint_handler.sa_handler = signal_handler;

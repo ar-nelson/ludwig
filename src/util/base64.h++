@@ -74,7 +74,7 @@ namespace Base64 {
   template<FixedString string> auto constexpr encode_const() {
     size_t constexpr string_size = string.size(),
       result_size_no_padding = (string_size * 4 + 2) / 3,
-      result_size = (result_size_no_padding + 3) & (-4),
+      result_size = (result_size_no_padding + 3) & (size_t)(-4),
       padding_size = result_size - result_size_no_padding;
     FixedString<(string_size + 2) / 3 * 3> constexpr string_with_padding = string;
     FixedString<result_size> result;

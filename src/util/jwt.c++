@@ -1,16 +1,29 @@
 #include "jwt.h++"
+#include "models/protocols_parser.h++"
+#include "models/protocols.h++"
+#include <flatbuffers/minireflect.h>
+#include <regex>
 #include <monocypher-ed25519.h>
 
 using std::optional, std::string, std::string_view;
 
 namespace Ludwig {
-  auto make_jwt(const JwtPayload& payload, const uint8_t secret[JWT_SECRET_SIZE]) -> string {
-    std::ostringstream payload_os;
+  auto make_jwt(Jwt payload, const uint8_t secret[JWT_SECRET_SIZE]) -> string {
+    string json;
     {
-      cereal::JSONOutputArchive ar(payload_os);
-      payload.save(ar);
+      flatbuffers::FlatBufferBuilder fbb;
+      JwtPayloadBuilder b(fbb);
+      b.add_sub(payload.sub);
+      b.add_iat(payload.iat);
+      b.add_exp(payload.exp);
+      fbb.Finish(b.Finish());
+      flatbuffers::ToStringVisitor visitor("", true, "", false);
+      flatbuffers::IterateFlatBuffer(fbb.GetBufferPointer(), JwtPayloadTypeTable(), &visitor);
+      json = visitor.s;
+      // remove spaces, since Flatbuffers inserts them for some reason
+      json.erase(remove(json.begin(), json.end(), ' '), json.end());
     }
-    auto buf = fmt::format("{}.{}", JWT_HEADER, Base64::encode(payload_os.str(), false));
+    auto buf = fmt::format("{}.{}", JWT_HEADER, Base64::encode(json, false));
     uint8_t sig[64];
     crypto_sha512_hmac(
       sig, secret, JWT_SECRET_SIZE,
@@ -20,30 +33,33 @@ namespace Ludwig {
     return buf;
   }
 
-  auto make_jwt(uint64_t user_id, uint64_t duration_seconds, const uint8_t secret[JWT_SECRET_SIZE]) -> string {
+  auto make_jwt(uint64_t session_id, uint64_t duration_seconds, const uint8_t secret[JWT_SECRET_SIZE]) -> string {
     const auto iat = now_s();
     return make_jwt({
-      .sub = user_id,
+      .sub = session_id,
       .iat = iat,
       .exp = iat + duration_seconds
     }, secret);
   }
 
-  static inline auto parse_jwt_payload(const string_view& payload_b64) -> optional<JwtPayload> {
-    JwtPayload payload;
-    const auto payload_str = Base64::decode(payload_b64);
-    try {
-      std::istringstream payload_is(payload_str);
-      cereal::JSONInputArchive archive(payload_is);
-      payload.load(archive);
-    } catch (...) {
-      spdlog::warn("Cannot parse JWT payload {}", payload_str);
+  static inline auto parse_jwt_payload(const string_view& payload_b64) -> optional<Jwt> {
+    auto& parser = get_protocols_parser();
+    parser.SetRootType("JwtPayload");
+    if (!parser.ParseJson(Base64::decode(payload_b64).c_str())) {
+      spdlog::warn("Failed to parse JWT payload");
       return {};
     }
-    return { payload };
+    auto* payload = flatbuffers::GetRoot<JwtPayload>(parser.builder_.GetBufferPointer());
+    Jwt jwt{
+      .sub = payload->sub(),
+      .iat = payload->iat(),
+      .exp = payload->exp()
+    };
+    parser.builder_.Clear();
+    return jwt;
   }
 
-  auto parse_jwt(string_view jwt, const uint8_t secret[JWT_SECRET_SIZE]) -> optional<JwtPayload> {
+  auto parse_jwt(string_view jwt, const uint8_t secret[JWT_SECRET_SIZE]) -> optional<Jwt> {
     const auto len = jwt.length(), header_len = JWT_HEADER.size();
     // Avoid DOS from impossibly huge strings
     if (len > 2048) {
@@ -82,7 +98,7 @@ namespace Ludwig {
       if (spdlog::get_level() <= spdlog::level::warn) {
         const auto payload = parse_jwt_payload(payload_b64);
         if (payload) {
-          spdlog::warn("JWT for user {:x} failed signature validation", payload->sub);
+          spdlog::warn("JWT failed signature validation");
         }
       }
       return {};
@@ -90,15 +106,12 @@ namespace Ludwig {
 
     // Extract the payload
     const auto payload = parse_jwt_payload(payload_b64);
-    if (!payload) return payload;
+    if (!payload) return {};
 
     // Check the date
     const auto now = now_s();
     if (now >= payload->exp) {
-      spdlog::debug(
-        "JWT for user {:x} is expired ({} seconds past expiration)",
-        payload->sub, now - payload->exp
-      );
+      spdlog::debug("JWT is expired ({} seconds past expiration)", now - payload->exp);
       return {};
     }
 

@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h++"
+#include "util/common.h++"
 #include <regex>
 
 namespace Ludwig {
@@ -81,6 +81,7 @@ namespace Ludwig {
   protected:
     virtual auto fetch(HttpClientRequest&& req, HttpResponseCallback callback) -> void = 0;
   public:
+    virtual inline ~HttpClient() {};
     inline auto get(std::string_view url) -> HttpClientRequest {
       return HttpClientRequest(*this, url, "GET");
     }

@@ -1,15 +1,13 @@
-#include <catch2/catch_test_macros.hpp>
-#include <chrono>
-#include <spdlog/spdlog.h>
-#include <static_block.hpp>
 #include "util.h++"
-#include "../src/asio_http_client.h++"
+#include "services/asio_http_client.h++"
+#include <catch2/catch_test_macros.hpp>
+#include <static_block.hpp>
 
 using namespace std::literals;
 
-static_block {
-  spdlog::set_level(spdlog::level::debug);
-}
+//static_block {
+//  spdlog::set_level(spdlog::level::debug);
+//}
 
 using namespace Ludwig;
 

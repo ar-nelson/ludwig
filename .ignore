@@ -11,6 +11,7 @@ vendor/libpng
 vendor/libwebp
 vendor/lmdb
 vendor/monocypher
+vendor/simdjson
 vendor/spdlog
 vendor/uWS
 vendor/xxHash

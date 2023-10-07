@@ -53,10 +53,9 @@ add_library(csprng STATIC
   csprng/source/csprng.cpp)
 target_include_directories(csprng PUBLIC csprng/source/)
 
-set(BUILD_DOC OFF CACHE BOOL "" FORCE)
-set(BUILD_SANDBOX OFF CACHE BOOL "" FORCE)
-set(SKIP_PERFORMANCE_COMPARISON ON CACHE BOOL "" FORCE)
-add_subdirectory(cereal cereal)
+
+option(SIMDJSON_BUILD_STATIC_LIB "Build simdjson_static library along with simdjson" ON)
+add_subdirectory(simdjson simdjson)
 set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(flatbuffers flatbuffers)

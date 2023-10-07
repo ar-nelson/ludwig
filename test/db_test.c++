@@ -1,9 +1,8 @@
+#include "util.h++"
+#include "services/db.h++"
 #include <catch2/catch_test_macros.hpp>
-#include <spdlog/spdlog.h>
 #include <algorithm>
 #include <random>
-#include "util.h++"
-#include "../src/db.h++"
 
 using namespace Ludwig;
 using namespace flatbuffers;
@@ -394,14 +393,14 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         switch (random_int(gen, 5)) {
           case 0: {
             auto txn = db.open_write_txn();
-            txn.set_vote(user, threads[ii], Downvote);
+            txn.set_vote(user, threads[ii], Vote::Downvote);
             txn.commit();
             break;
           }
           case 3:
           case 4: {
             auto txn = db.open_write_txn();
-            txn.set_vote(user, threads[ii], Upvote);
+            txn.set_vote(user, threads[ii], Vote::Upvote);
             txn.commit();
             break;
           }
@@ -413,14 +412,14 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         switch (random_int(gen, 5)) {
           case 0: {
             auto txn = db.open_write_txn();
-            txn.set_vote(user, comments[ii], Downvote);
+            txn.set_vote(user, comments[ii], Vote::Downvote);
             txn.commit();
             break;
           }
           case 3:
           case 4: {
             auto txn = db.open_write_txn();
-            txn.set_vote(user, comments[ii], Upvote);
+            txn.set_vote(user, comments[ii], Vote::Upvote);
             txn.commit();
             break;
           }

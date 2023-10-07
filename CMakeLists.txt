@@ -30,14 +30,14 @@ endif ()
 # Generate static files
 set(static_depends)
 find_program(resource_compiler xxd)
-file(GLOB_RECURSE static_files "static/*")
+file(GLOB_RECURSE static_files "${PROJECT_SOURCE_DIR}/src/static/*")
 foreach (static_path IN ITEMS ${static_files})
   cmake_path(GET static_path FILENAME static_basename)
   string(REGEX REPLACE "[./-]" "_" static_symbol ${static_basename})
-  set(static_outname "${PROJECT_SOURCE_DIR}/src/generated/${static_basename}.h")
+  set(static_outname "${PROJECT_BINARY_DIR}/generated/static/${static_basename}.h")
   add_custom_command(
     COMMAND ${resource_compiler} -i -n ${static_symbol} ${static_path} ${static_outname}
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/src/static"
     DEPENDS ${static_path}
     OUTPUT ${static_outname}
     VERBATIM
@@ -60,31 +60,39 @@ add_compile_options (
 
 # Generate flatbuffers headers
 # This must be a custom command to add the right command-line flags
-add_custom_command(
-  COMMAND ${PROJECT_BINARY_DIR}/flatc
-    -o src/generated/
-    -I src/
-    --cpp-std c++17
-    --gen-json-emit --strict-json
-    --gen-mutable
-    --reflect-types --reflect-names
-    -c src/datatypes.fbs
-  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-  DEPENDS src/datatypes.fbs ${PROJECT_BINARY_DIR}/flatc
-  OUTPUT src/generated/datatypes_generated.h
-  VERBATIM
-)
-add_custom_command(
-  COMMAND ${resource_compiler} -i -n datatypes_fbs src/datatypes.fbs src/generated/datatypes.fbs.h
-  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-  DEPENDS src/datatypes.fbs
-  OUTPUT src/generated/datatypes.fbs.h
-  VERBATIM
-)
-add_custom_target(flatbuffers_generated DEPENDS
-  src/generated/datatypes_generated.h
-  src/generated/datatypes.fbs.h
-)
+set(fbs_depends)
+file(GLOB_RECURSE fbs_files "${PROJECT_SOURCE_DIR}/src/models/*.fbs")
+foreach (fbs_path IN ITEMS ${fbs_files})
+  cmake_path(GET fbs_path FILENAME fbs_basename)
+  string(REGEX REPLACE "[./-]" "_" fbs_symbol ${fbs_basename})
+  get_filename_component(fbs_prefix ${fbs_basename} NAME_WE)
+  set(fbs_gen_outname "${PROJECT_BINARY_DIR}/generated/models/${fbs_prefix}.h++")
+  set(fbs_src_outname "${PROJECT_BINARY_DIR}/generated/models/${fbs_basename}.h")
+  add_custom_command(
+    COMMAND "${PROJECT_BINARY_DIR}/flatc"
+      -o "${PROJECT_BINARY_DIR}/generated/models/"
+      -I "${PROJECT_SOURCE_DIR}/src/models/"
+      --cpp-std c++17
+      --gen-json-emit --strict-json
+      --gen-mutable
+      --reflect-types --reflect-names
+      --filename-suffix "" --filename-ext "h++"
+      -c "${fbs_path}"
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    DEPENDS "${fbs_path}" "${PROJECT_BINARY_DIR}/flatc"
+    OUTPUT "${fbs_gen_outname}"
+    VERBATIM
+  )
+  add_custom_command(
+    COMMAND ${resource_compiler} -i -n ${fbs_symbol} ${fbs_path} ${fbs_src_outname}
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/src/models"
+    DEPENDS ${fbs_path}
+    OUTPUT ${fbs_src_outname}
+    VERBATIM
+  )
+  list(APPEND fbs_depends ${fbs_gen_outname} ${fbs_src_outname})
+endforeach ()
+add_custom_target(flatbuffers_generated DEPENDS ${fbs_depends})
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   set (BUILDTYPE_COMPILE_OPTIONS
@@ -112,13 +120,14 @@ set (COMPILE_OPTIONS
 )
 
 set (LUDWIG_COMMON_SRC
-  src/base64.c++
-  src/jwt.c++
-  src/db.c++
-  src/controller.c++
-  src/webapp_routes.c++
-  src/asio_http_client.c++
-  src/thumbnailer.c++
+  src/util/base64.c++
+  src/util/thumbnailer.c++
+  src/util/jwt.c++
+  src/services/db.c++
+  src/services/asio_http_client.c++
+  src/models/protocols_parser.c++
+  src/controllers/instance.c++
+  src/views/webapp.c++
 )
 
 if (CMAKE_BUILD_TYPE MATCHES Release AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -134,22 +143,40 @@ if (CMAKE_BUILD_TYPE MATCHES Release AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
 endif ()
 
+set (LUDWIG_LIBS
+  crypto
+  csprng
+  flatbuffers
+  giflib
+  imagedec
+  lmdb
+  monocypher
+  png_static
+  simdjson_static
+  spdlog
+  ssl
+  turbojpeg-static
+  uWS
+  webp
+  xxHash
+)
+
 add_executable(ludwig src/ludwig.c++ ${LUDWIG_COMMON_SRC})
 add_dependencies(ludwig static_generated flatbuffers_generated)
 target_compile_options(ludwig PRIVATE ${COMPILE_OPTIONS})
 target_link_options(ludwig PRIVATE ${LINK_OPTIONS})
+target_include_directories(ludwig PUBLIC src/ "${PROJECT_BINARY_DIR}/generated/")
 if (CMAKE_BUILD_TYPE MATCHES Release)
   # Only build a fully static binary in release mode.
   # Debug mode needs to dynamically link asan.
   target_link_libraries(ludwig PRIVATE "-static")
 endif ()
-target_link_libraries(ludwig PRIVATE cereal csprng flatbuffers lmdb monocypher
-  ssl crypto spdlog uWS xxHash webp giflib turbojpeg-static png_static imagedec)
+target_link_libraries(ludwig PRIVATE ${LUDWIG_LIBS})
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   file(GLOB_RECURSE TEST_FILES "test/*.c++")
   add_executable(test ${LUDWIG_COMMON_SRC} ${TEST_FILES})
   add_dependencies(test static_generated flatbuffers_generated)
-  target_link_libraries(test PRIVATE cereal csprng flatbuffers lmdb monocypher
-    ssl crypto spdlog uWS xxHash webp giflib turbojpeg-static png_static imagedec Catch2::Catch2WithMain)
+  target_link_libraries(test PRIVATE ${LUDWIG_LIBS} Catch2::Catch2WithMain)
+  target_include_directories(test PRIVATE src/ "${PROJECT_BINARY_DIR}/generated/")
 endif ()

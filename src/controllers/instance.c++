@@ -1,10 +1,9 @@
+#include "instance.h++"
+#include "util/web.h++"
 #include <mutex>
 #include <regex>
 #include <monocypher.h>
-#include <spdlog/spdlog.h>
 #include <duthomhas/csprng.hpp>
-#include "controller.h++"
-#include "webutil.h++"
 
 using std::function, std::nullopt, std::regex, std::regex_match, std::optional,
       std::shared_ptr, std::string, std::string_view, flatbuffers::FlatBufferBuilder;
@@ -115,10 +114,10 @@ namespace Ludwig {
     if (!stats) return Cursor(prefix, 0, 0);
     return Cursor(prefix, stats->get().descendant_count(), (*from_id) - 1);
   }
-  auto Controller::get_thread_entry(
+  auto InstanceController::get_thread_entry(
     ReadTxnBase& txn,
     uint64_t thread_id,
-    Controller::Login login,
+    InstanceController::Login login,
     OptRef<User> author,
     bool is_author_hidden,
     OptRef<Board> board,
@@ -145,7 +144,7 @@ namespace Ludwig {
       is_board_hidden = (login && txn.has_user_hidden_board(login->id, id)) ||
         (local_board && local_board->get().private_() && (!login || !txn.is_user_subscribed_to_board(login->id, id)));
     }
-    const Vote vote = login ? txn.get_vote_of_user_for_post(login->id, thread_id) : NoVote;
+    const Vote vote = login ? txn.get_vote_of_user_for_post(login->id, thread_id) : Vote::NoVote;
     return {
       .id = thread_id,
       .your_vote = vote,
@@ -159,10 +158,10 @@ namespace Ludwig {
       ._board = board
     };
   }
-  auto Controller::get_comment_entry(
+  auto InstanceController::get_comment_entry(
     ReadTxnBase& txn,
     uint64_t comment_id,
-    Controller::Login login,
+    InstanceController::Login login,
     OptRef<User> author,
     bool is_author_hidden,
     OptRef<Thread> thread,
@@ -196,7 +195,7 @@ namespace Ludwig {
       is_board_hidden = (login && txn.has_user_hidden_board(login->id, id)) ||
         (local_board && local_board->get().private_() && (!login || !txn.is_user_subscribed_to_board(login->id, id)));
     }
-    const Vote vote = login ? txn.get_vote_of_user_for_post(login->id, comment_id) : NoVote;
+    const Vote vote = login ? txn.get_vote_of_user_for_post(login->id, comment_id) : Vote::NoVote;
     return {
       .id = comment_id,
       .your_vote = vote,
@@ -221,7 +220,7 @@ namespace Ludwig {
     ReadTxnBase& txn,
     DBIter<uint64_t> iter_by_new,
     DBIter<uint64_t> iter_by_top,
-    Controller::Login login,
+    InstanceController::Login login,
     bool skip_cw,
     function<T (uint64_t)> get_entry,
     function<uint64_t (T&)> get_timestamp,
@@ -245,7 +244,7 @@ namespace Ludwig {
     for (auto id : iter_by_new) {
       try {
         auto entry = get_entry(id);
-        if (!Controller::should_show(entry, login, skip_cw)) continue;
+        if (!InstanceController::should_show(entry, login, skip_cw)) continue;
         const auto timestamp = get_timestamp(entry);
         const auto denominator = rank_denominator(timestamp < now ? now - timestamp : 0);
         entry.rank = rank_numerator(entry.stats().karma()) / denominator;
@@ -275,7 +274,7 @@ namespace Ludwig {
     CommentTree& tree,
     uint64_t parent,
     CommentSortType sort,
-    Controller::Login login,
+    InstanceController::Login login,
     bool skip_cw,
     OptRef<Thread> thread = {},
     bool is_thread_hidden = false,
@@ -299,7 +298,7 @@ namespace Ludwig {
           txn.list_comments_of_post_top(parent),
           login,
           skip_cw,
-          [&](uint64_t id) { return Controller::get_comment_entry(txn, id, login, {}, false, thread, is_thread_hidden, board, is_board_hidden); },
+          [&](uint64_t id) { return InstanceController::get_comment_entry(txn, id, login, {}, false, thread, is_thread_hidden, board, is_board_hidden); },
           [&](auto& e) { return e.comment().created_at(); },
           comment_rank_cmp,
           from_id,
@@ -332,8 +331,8 @@ namespace Ludwig {
         tree.mark_continued(parent, id);
         return;
       }
-      auto entry = Controller::get_comment_entry(txn, id, login, {}, false, thread, is_thread_hidden, board, is_board_hidden);
-      if (!Controller::should_show(entry, login, skip_cw)) continue;
+      auto entry = InstanceController::get_comment_entry(txn, id, login, {}, false, thread, is_thread_hidden, board, is_board_hidden);
+      if (!InstanceController::should_show(entry, login, skip_cw)) continue;
       const auto children = entry.stats().child_count();
       tree.emplace(parent, entry);
       if (children) comment_tree(txn, tree, id, sort, login, skip_cw, thread, is_thread_hidden, board, is_board_hidden, {}, max_comments, max_depth - 1);
@@ -350,14 +349,14 @@ namespace Ludwig {
     return *stats;
   }
 
-  Controller::Controller(shared_ptr<DB> db) : db(db) {
+  InstanceController::InstanceController(shared_ptr<DB> db) : db(db) {
     auto txn = db->open_read_txn();
     cached_site_detail.domain = string(txn.get_setting_str(SettingsKey::domain));
     cached_site_detail.name = string(txn.get_setting_str(SettingsKey::name));
     cached_site_detail.description = string(txn.get_setting_str(SettingsKey::description));
   }
 
-  auto Controller::hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) const -> void {
+  auto InstanceController::hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) const -> void {
     // Lock the password hashing step with a mutex,
     // because the Argon2i context is shared
     static std::mutex mutex;
@@ -373,7 +372,7 @@ namespace Ludwig {
     );
   }
 
-  auto Controller::should_show(const ThreadListEntry& thread, Login login, bool hide_cw) -> bool {
+  auto InstanceController::should_show(const ThreadListEntry& thread, Login login, bool hide_cw) -> bool {
     if (thread.thread().mod_state() >= ModState::Removed) {
       if (!login || (login->id != thread.thread().author() && !login->local_user().admin())) return false;
     }
@@ -383,7 +382,7 @@ namespace Ludwig {
     // TODO: Check if hidden
     return true;
   }
-  auto Controller::should_show(const CommentListEntry& comment, Login login, bool hide_cw) -> bool {
+  auto InstanceController::should_show(const CommentListEntry& comment, Login login, bool hide_cw) -> bool {
     if (comment.comment().mod_state() >= ModState::Removed) {
       if (!login || (login->id != comment.comment().author() && !login->local_user().admin())) return false;
     }
@@ -398,69 +397,69 @@ namespace Ludwig {
     // TODO: Check if hidden
     return true;
   }
-  auto Controller::should_show(const BoardListEntry& board, Login login, bool hide_cw) -> bool {
+  auto InstanceController::should_show(const BoardListEntry& board, Login login, bool hide_cw) -> bool {
     if (board.board().content_warning()) {
       if (hide_cw || (login && login->local_user().hide_cw_posts())) return false;
     }
     // TODO: Check if hidden
     return true;
   }
-  auto Controller::can_create_thread(const BoardListEntry& board, Login login) -> bool {
+  auto InstanceController::can_create_thread(const BoardListEntry& board, Login login) -> bool {
     if (!login) return false;
     return !board.board().restricted_posting() ||login->local_user().admin();
   }
-  auto Controller::can_reply_to(const ThreadListEntry& thread, Login login) -> bool {
+  auto InstanceController::can_reply_to(const ThreadListEntry& thread, Login login) -> bool {
     if (!login) return false;
     if (login->local_user().admin()) return true;
     return thread.thread().mod_state() < ModState::Locked;
   }
-  auto Controller::can_reply_to(const CommentListEntry& comment, Login login) -> bool {
+  auto InstanceController::can_reply_to(const CommentListEntry& comment, Login login) -> bool {
     if (!login) return false;
     if (login->local_user().admin()) return true;
     return comment.comment().mod_state() < ModState::Locked &&
       comment.thread().mod_state() < ModState::Locked;
   }
-  auto Controller::can_edit(const ThreadListEntry& thread, Login login) -> bool {
+  auto InstanceController::can_edit(const ThreadListEntry& thread, Login login) -> bool {
     if (!login || thread.thread().instance()) return false;
     return login->id == thread.thread().author() || login->local_user().admin();
   }
-  auto Controller::can_edit(const CommentListEntry& comment, Login login) -> bool {
+  auto InstanceController::can_edit(const CommentListEntry& comment, Login login) -> bool {
     if (!login || comment.comment().instance()) return false;
     return login->id == comment.comment().author() || login->local_user().admin();
   }
-  auto Controller::can_delete(const ThreadListEntry& thread, Login login) -> bool {
+  auto InstanceController::can_delete(const ThreadListEntry& thread, Login login) -> bool {
     if (!login || thread.thread().instance()) return false;
     return login->id == thread.thread().author() || login->local_user().admin();
   }
-  auto Controller::can_delete(const CommentListEntry& comment, Login login) -> bool {
+  auto InstanceController::can_delete(const CommentListEntry& comment, Login login) -> bool {
     if (!login || comment.comment().instance()) return false;
     return login->id == comment.comment().author() || login->local_user().admin();
   }
-  auto Controller::can_upvote(const ThreadListEntry& thread, Login login) -> bool {
+  auto InstanceController::can_upvote(const ThreadListEntry& thread, Login login) -> bool {
     return login && thread.thread().mod_state() < ModState::Locked &&
       thread.board().can_upvote();
   }
-  auto Controller::can_upvote(const CommentListEntry& comment, Login login) -> bool {
+  auto InstanceController::can_upvote(const CommentListEntry& comment, Login login) -> bool {
     return login && comment.comment().mod_state() < ModState::Locked &&
       comment.thread().mod_state() < ModState::Locked && comment.board().can_upvote();
   }
-  auto Controller::can_downvote(const ThreadListEntry& thread, Login login) -> bool {
+  auto InstanceController::can_downvote(const ThreadListEntry& thread, Login login) -> bool {
     return login && thread.thread().mod_state() < ModState::Locked &&
       thread.board().can_downvote();
   }
-  auto Controller::can_downvote(const CommentListEntry& comment, Login login) -> bool {
+  auto InstanceController::can_downvote(const CommentListEntry& comment, Login login) -> bool {
     return login && comment.comment().mod_state() < ModState::Locked &&
       comment.thread().mod_state() < ModState::Locked &&
       comment.board().can_downvote();
   }
-  auto Controller::can_change_board_settings(const LocalBoardDetailResponse& board, Login login) -> bool {
+  auto InstanceController::can_change_board_settings(const LocalBoardDetailResponse& board, Login login) -> bool {
     return login && (login->local_user().admin() || login->id == board.local_board().owner());
   }
-  auto Controller::can_change_site_settings(Login login) -> bool {
+  auto InstanceController::can_change_site_settings(Login login) -> bool {
     return login && login->local_user().admin();
   }
 
-  auto Controller::validate_or_regenerate_session(
+  auto InstanceController::validate_or_regenerate_session(
     ReadTxn& txn,
     uint64_t session_id,
     string_view ip,
@@ -487,7 +486,7 @@ namespace Ludwig {
     }
     return { { .user_id = user, .session_id = session_id, .expiration = session.expires_at() } };
   }
-  auto Controller::login(
+  auto InstanceController::login(
     string_view username_or_email,
     SecretString&& password,
     string_view ip,
@@ -528,7 +527,7 @@ namespace Ludwig {
     txn.commit();
     return { .user_id = user_id, .session_id = session.first, .expiration = session.second };
   }
-  auto Controller::thread_detail(
+  auto InstanceController::thread_detail(
     ReadTxnBase& txn,
     uint64_t id,
     CommentSortType sort,
@@ -540,7 +539,7 @@ namespace Ludwig {
     comment_tree(txn, rsp.comments, id, sort, login, skip_cw, rsp.thread(), rsp.hidden, rsp.board(), rsp.board_hidden, from_id);
     return rsp;
   }
-  auto Controller::comment_detail(
+  auto InstanceController::comment_detail(
     ReadTxnBase& txn,
     uint64_t id,
     CommentSortType sort,
@@ -552,13 +551,13 @@ namespace Ludwig {
     comment_tree(txn, rsp.comments, id, sort, login, skip_cw, rsp.thread(), rsp.thread_hidden, rsp.board(), rsp.board_hidden, from_id);
     return rsp;
   }
-  auto Controller::user_detail(ReadTxnBase& txn, uint64_t id) -> UserDetailResponse {
+  auto InstanceController::user_detail(ReadTxnBase& txn, uint64_t id) -> UserDetailResponse {
     auto user = txn.get_user(id);
     auto user_stats = txn.get_user_stats(id);
     if (!user || !user_stats) throw ControllerError("User not found", 404);
     return { { id, *user, }, *user_stats };
   }
-  auto Controller::local_user_detail(ReadTxnBase& txn, uint64_t id) -> LocalUserDetailResponse {
+  auto InstanceController::local_user_detail(ReadTxnBase& txn, uint64_t id) -> LocalUserDetailResponse {
     const auto user = txn.get_user(id);
     const auto user_stats = txn.get_user_stats(id);
     if (!user || !user_stats) throw ControllerError("User not found", 404);
@@ -566,14 +565,14 @@ namespace Ludwig {
     if (!local_user) throw ControllerError("Local user not found", 404);
     return { { { id, *user }, *user_stats, }, *local_user };
   }
-  auto Controller::board_detail(ReadTxnBase& txn, uint64_t id, optional<uint64_t> logged_in_user) -> BoardDetailResponse {
+  auto InstanceController::board_detail(ReadTxnBase& txn, uint64_t id, optional<uint64_t> logged_in_user) -> BoardDetailResponse {
     const auto board = txn.get_board(id);
     const auto board_stats = txn.get_board_stats(id);
     if (!board || !board_stats) throw ControllerError("Board not found", 404);
     const auto subscribed = logged_in_user ? txn.is_user_subscribed_to_board(*logged_in_user, id) : false;
     return { { id, *board }, *board_stats, subscribed };
   }
-  auto Controller::local_board_detail(ReadTxnBase& txn, uint64_t id, optional<uint64_t> logged_in_user) -> LocalBoardDetailResponse {
+  auto InstanceController::local_board_detail(ReadTxnBase& txn, uint64_t id, optional<uint64_t> logged_in_user) -> LocalBoardDetailResponse {
     const auto board = txn.get_board(id);
     const auto board_stats = txn.get_board_stats(id);
     if (!board || !board_stats) throw ControllerError("Board not found", 404);
@@ -582,7 +581,7 @@ namespace Ludwig {
     const auto subscribed = logged_in_user ? txn.is_user_subscribed_to_board(*logged_in_user, id) : false;
     return { { { id, *board }, *board_stats, subscribed }, *local_board };
   }
-  auto Controller::list_local_users(ReadTxnBase& txn, optional<uint64_t> from_id) -> PageOf<UserListEntry> {
+  auto InstanceController::list_local_users(ReadTxnBase& txn, optional<uint64_t> from_id) -> PageOf<UserListEntry> {
     PageOf<UserListEntry> out { {}, !from_id, {} };
     auto iter = txn.list_local_users(from_id ? optional(Cursor(*from_id)) : nullopt);
     for (auto id : iter) {
@@ -597,7 +596,7 @@ namespace Ludwig {
     if (!iter.is_done()) out.next = { iter.get_cursor()->int_field_0() };
     return out;
   }
-  auto Controller::list_local_boards(ReadTxnBase& txn, optional<uint64_t> from_id) -> PageOf<BoardListEntry> {
+  auto InstanceController::list_local_boards(ReadTxnBase& txn, optional<uint64_t> from_id) -> PageOf<BoardListEntry> {
     PageOf<BoardListEntry> out { {}, !from_id, {} };
     auto iter = txn.list_local_boards(from_id ? optional(Cursor(*from_id)) : nullopt);
     for (auto id : iter) {
@@ -626,7 +625,7 @@ namespace Ludwig {
       default: return 0;
     }
   }
-  auto Controller::list_board_threads(
+  auto InstanceController::list_board_threads(
     ReadTxnBase& txn,
     uint64_t board_id,
     SortType sort,
@@ -697,7 +696,7 @@ namespace Ludwig {
     }
     return out;
   }
-  auto Controller::list_board_comments(
+  auto InstanceController::list_board_comments(
     ReadTxnBase& txn,
     uint64_t board_id,
     SortType sort,
@@ -768,7 +767,7 @@ namespace Ludwig {
     }
     return out;
   }
-  auto Controller::list_user_threads(
+  auto InstanceController::list_user_threads(
     ReadTxnBase& txn,
     uint64_t user_id,
     UserPostSortType sort,
@@ -796,7 +795,7 @@ namespace Ludwig {
     };
     return out;
   }
-  auto Controller::list_user_comments(
+  auto InstanceController::list_user_comments(
     ReadTxnBase& txn,
     uint64_t user_id,
     UserPostSortType sort,
@@ -821,7 +820,7 @@ namespace Ludwig {
     return out;
   }
   static auto create_local_user_internal(
-    const Controller* controller,
+    const InstanceController* controller,
     WriteTxn& txn,
     string_view username,
     optional<string_view> email,
@@ -871,8 +870,9 @@ namespace Ludwig {
       fbb.Finish(b.Finish());
     }
     txn.set_local_user(user_id, fbb);
+    return user_id;
   }
-  auto Controller::register_local_user(
+  auto InstanceController::register_local_user(
     string_view username,
     string_view email,
     SecretString&& password,
@@ -938,7 +938,7 @@ namespace Ludwig {
     txn.commit();
     return { user_id, site->registration_application_required };
   }
-  auto Controller::create_local_user(
+  auto InstanceController::create_local_user(
     string_view username,
     optional<string_view> email,
     SecretString&& password,
@@ -952,7 +952,7 @@ namespace Ludwig {
     txn.commit();
     return user_id;
   }
-  auto Controller::create_local_board(
+  auto InstanceController::create_local_board(
     uint64_t owner,
     string_view name,
     optional<string_view> display_name,
@@ -1000,7 +1000,7 @@ namespace Ludwig {
     txn.commit();
     return board_id;
   }
-  auto Controller::create_local_thread(
+  auto InstanceController::create_local_thread(
     uint64_t author,
     uint64_t board,
     string_view title,
@@ -1063,14 +1063,14 @@ namespace Ludwig {
       if (content_warning) b.add_content_warning(content_warning_s);
       fbb.Finish(b.Finish());
       thread_id = txn.create_thread(fbb);
-      txn.set_vote(author, thread_id, Upvote);
+      txn.set_vote(author, thread_id, Vote::Upvote);
       txn.commit();
     }
     dispatch_event(Event::UserStatsUpdate, author);
     dispatch_event(Event::BoardStatsUpdate, board);
     return thread_id;
   }
-  auto Controller::create_local_comment(
+  auto InstanceController::create_local_comment(
     uint64_t author,
     uint64_t parent,
     string_view text_content_markdown,
@@ -1110,7 +1110,7 @@ namespace Ludwig {
       if (content_warning) b.add_content_warning(content_warning_s);
       fbb.Finish(b.Finish());
       comment_id = txn.create_comment(fbb);
-      txn.set_vote(author, comment_id, Upvote);
+      txn.set_vote(author, comment_id, Vote::Upvote);
       txn.commit();
     }
     dispatch_event(Event::UserStatsUpdate, author);
@@ -1119,7 +1119,7 @@ namespace Ludwig {
     if (parent != thread_id) dispatch_event(Event::CommentStatsUpdate, parent);
     return comment_id;
   }
-  auto Controller::vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void {
+  auto InstanceController::vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void {
     auto txn = db->open_write_txn();
     if (!txn.get_user(user_id)) {
       throw ControllerError("User does not exist", 400);
@@ -1137,7 +1137,7 @@ namespace Ludwig {
     if (thread) dispatch_event(Event::PageStatsUpdate, post_id);
     if (comment) dispatch_event(Event::CommentStatsUpdate, post_id);
   }
-  auto Controller::subscribe(uint64_t user_id, uint64_t board_id, bool subscribed) -> void {
+  auto InstanceController::subscribe(uint64_t user_id, uint64_t board_id, bool subscribed) -> void {
     auto txn = db->open_write_txn();
     if (!txn.get_user(user_id)) {
       throw ControllerError("User does not exist", 400);
@@ -1151,7 +1151,7 @@ namespace Ludwig {
     dispatch_event(Event::UserStatsUpdate, user_id);
     dispatch_event(Event::BoardStatsUpdate, board_id);
   }
-  auto Controller::save_post(uint64_t user_id, uint64_t post_id, bool saved) -> void {
+  auto InstanceController::save_post(uint64_t user_id, uint64_t post_id, bool saved) -> void {
     auto txn = db->open_write_txn();
     if (!txn.get_local_user(user_id)) {
       throw ControllerError("User does not exist", 400);
@@ -1162,7 +1162,7 @@ namespace Ludwig {
     txn.set_save(user_id, post_id, saved);
     txn.commit();
   }
-  auto Controller::hide_post(uint64_t user_id, uint64_t post_id, bool hidden) -> void {
+  auto InstanceController::hide_post(uint64_t user_id, uint64_t post_id, bool hidden) -> void {
     auto txn = db->open_write_txn();
     if (!txn.get_local_user(user_id)) {
       throw ControllerError("User does not exist", 400);
@@ -1173,7 +1173,7 @@ namespace Ludwig {
     txn.set_hide_post(user_id, post_id, hidden);
     txn.commit();
   }
-  auto Controller::hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden) -> void {
+  auto InstanceController::hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden) -> void {
     auto txn = db->open_write_txn();
     if (!txn.get_local_user(user_id) || !txn.get_user(hidden_user_id)) {
       throw ControllerError("User does not exist", 400);
@@ -1181,7 +1181,7 @@ namespace Ludwig {
     txn.set_hide_user(user_id, hidden_user_id, hidden);
     txn.commit();
   }
-  auto Controller::hide_board(uint64_t user_id, uint64_t board_id, bool hidden) -> void {
+  auto InstanceController::hide_board(uint64_t user_id, uint64_t board_id, bool hidden) -> void {
     auto txn = db->open_write_txn();
     if (!txn.get_local_user(user_id)) {
       throw ControllerError("User does not exist", 400);

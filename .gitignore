@@ -2,7 +2,6 @@ build
 build.*/
 .cache/
 .task/
-/src/generated/
 /test/images/thumbnail_*
 *.mdb
 *.mdb-lock
