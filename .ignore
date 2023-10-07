@@ -3,9 +3,12 @@ vendor/boringssl
 vendor/catch2
 vendor/cereal
 vendor/csprng
-vendor/curl
 vendor/flatbuffers
+vendor/giflib
 vendor/libbsd
+vendor/libjpeg-turbo
+vendor/libpng
+vendor/libwebp
 vendor/lmdb
 vendor/monocypher
 vendor/spdlog

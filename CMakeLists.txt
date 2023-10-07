@@ -17,16 +17,6 @@ set (CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
 set (CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
 set (CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
 
-add_compile_options (
-  -fcolor-diagnostics
-  -ferror-limit=0
-  -DASIO_SEPARATE_COMPILATION
-  -DLIBUS_USE_ASIO
-  -Wno-zero-as-null-pointer-constant
-  -Wno-gnu-anonymous-struct
-  -Wno-nested-anon-types
-)
-
 # Only do static linking. No shared libraries at all.
 set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
 set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
@@ -56,8 +46,17 @@ foreach (static_path IN ITEMS ${static_files})
 endforeach ()
 add_custom_target(static_generated DEPENDS ${static_depends})
 
-add_subdirectory(vendor)
+add_subdirectory(vendor EXCLUDE_FROM_ALL SYSTEM)
 include_directories(vendor/singleheader/)
+
+add_compile_options (
+  -fcolor-diagnostics
+  -ferror-limit=0
+  -DASIO_SEPARATE_COMPILATION
+  -DLIBUS_USE_ASIO
+  -Wno-gnu-anonymous-struct
+  -Wno-nested-anon-types
+)
 
 # Generate flatbuffers headers
 # This must be a custom command to add the right command-line flags
@@ -119,6 +118,7 @@ set (LUDWIG_COMMON_SRC
   src/controller.c++
   src/webapp_routes.c++
   src/asio_http_client.c++
+  src/thumbnailer.c++
 )
 
 if (CMAKE_BUILD_TYPE MATCHES Release AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -144,12 +144,12 @@ if (CMAKE_BUILD_TYPE MATCHES Release)
   target_link_libraries(ludwig PRIVATE "-static")
 endif ()
 target_link_libraries(ludwig PRIVATE cereal csprng flatbuffers lmdb monocypher
-  ssl crypto spdlog uWS xxHash)
+  ssl crypto spdlog uWS xxHash webp giflib turbojpeg-static png_static imagedec)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   file(GLOB_RECURSE TEST_FILES "test/*.c++")
   add_executable(test ${LUDWIG_COMMON_SRC} ${TEST_FILES})
   add_dependencies(test static_generated flatbuffers_generated)
   target_link_libraries(test PRIVATE cereal csprng flatbuffers lmdb monocypher
-    ssl crypto spdlog uWS xxHash Catch2::Catch2WithMain)
+    ssl crypto spdlog uWS xxHash webp giflib turbojpeg-static png_static imagedec Catch2::Catch2WithMain)
 endif ()

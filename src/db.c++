@@ -10,16 +10,18 @@
 #include "generated/datatypes.fbs.h"
 #include "db.h++"
 
-using std::optional, std::string_view, flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot;
+using std::min, std::nullopt, std::regex, std::regex_match, std::runtime_error,
+      std::optional, std::stoull, std::string, std::string_view,
+      flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot;
 
-#define assert_fmt(CONDITION, ...) if (!(CONDITION)) { spdlog::critical(__VA_ARGS__); throw std::runtime_error("Assertion failed: " #CONDITION); }
+#define assert_fmt(CONDITION, ...) if (!(CONDITION)) { spdlog::critical(__VA_ARGS__); throw runtime_error("Assertion failed: " #CONDITION); }
 
 namespace Ludwig {
-  static const std::regex
-    json_line(R"(^([uUbBtcdarm]) (\d+) (\{[^\n]+\})$)", std::regex::ECMAScript),
-    setting_line(R"(^S (\w+) ([0-9a-zA-Z+/]+=*)$)", std::regex::ECMAScript),
-    vote_line(R"(^v (\d+) (\d+) (1|-1)$)", std::regex::ECMAScript),
-    subscription_line(R"(^s (\d+) (\d+) (\d+)$)", std::regex::ECMAScript);
+  static const regex
+    json_line(R"(^([uUbBtcdarm]) (\d+) (\{[^\n]+\})$)", regex::ECMAScript),
+    setting_line(R"(^S (\w+) ([0-9a-zA-Z+/]+=*)$)", regex::ECMAScript),
+    vote_line(R"(^v (\d+) (\d+) (1|-1)$)", regex::ECMAScript),
+    subscription_line(R"(^s (\d+) (\d+) (\d+)$)", regex::ECMAScript);
 
   static constexpr uint64_t ACTIVE_COMMENT_MAX_AGE = 86400 * 2; // 2 days
 
@@ -338,14 +340,14 @@ namespace Ludwig {
     {
       struct stat stat_buf;
       if (stat(filename, &stat_buf) == 0) {
-        throw std::runtime_error("Cannot import database dump: database file " +
-            std::string(filename) + " already exists and would be overwritten.");
+        throw runtime_error("Cannot import database dump: database file " +
+            string(filename) + " already exists and would be overwritten.");
       }
     }
 
     flatbuffers::Parser parser;
     parser.Parse(
-      std::string(std::string_view(reinterpret_cast<char*>(datatypes_fbs), datatypes_fbs_len)).c_str(),
+      string(string_view(reinterpret_cast<char*>(datatypes_fbs), datatypes_fbs_len)).c_str(),
       nullptr,
       "datatypes.fbs"
     );
@@ -362,12 +364,12 @@ namespace Ludwig {
 
     DeferDelete on_error{ env, filename };
     auto txn = open_write_txn();
-    std::string line;
+    string line;
     seed = 0;
     while (std::getline(dump_stream, line)) {
       if (line.empty()) continue;
       std::smatch match;
-      if (std::regex_match(line, match, json_line)) {
+      if (regex_match(line, match, json_line)) {
         switch (match[1].str()[0]) {
           case 'u':
             if (seed == 0) {
@@ -375,14 +377,14 @@ namespace Ludwig {
             }
             parser.SetRootType("User");
             if (!parser.ParseJson(match[3].str().c_str())) {
-              throw std::runtime_error("Failed to parse User JSON: " + match[3].str());
+              throw runtime_error("Failed to parse User JSON: " + match[3].str());
             }
             txn.set_user(std::stoull(match[2]), parser.builder_);
             break;
           case 'U':
             parser.SetRootType("LocalUser");
             if (!parser.ParseJson(match[3].str().c_str())) {
-              throw std::runtime_error("Failed to parse LocalUser JSON: " + match[3].str());
+              throw runtime_error("Failed to parse LocalUser JSON: " + match[3].str());
             }
             txn.set_local_user(std::stoull(match[2]), parser.builder_);
             break;
@@ -392,45 +394,45 @@ namespace Ludwig {
             }
             parser.SetRootType("Board");
             if (!parser.ParseJson(match[3].str().c_str())) {
-              throw std::runtime_error("Failed to parse Board JSON: " + match[3].str());
+              throw runtime_error("Failed to parse Board JSON: " + match[3].str());
             }
             txn.set_board(std::stoull(match[2]), parser.builder_);
             break;
           case 'B':
             parser.SetRootType("LocalBoard");
             if (!parser.ParseJson(match[3].str().c_str())) {
-              throw std::runtime_error("Failed to parse LocalBoard JSON: " + match[3].str());
+              throw runtime_error("Failed to parse LocalBoard JSON: " + match[3].str());
             }
             txn.set_local_board(std::stoull(match[2]), parser.builder_);
             break;
           case 't':
             parser.SetRootType("Thread");
             if (!parser.ParseJson(match[3].str().c_str())) {
-              throw std::runtime_error("Failed to parse Thread JSON: " + match[3].str());
+              throw runtime_error("Failed to parse Thread JSON: " + match[3].str());
             }
             txn.set_thread(std::stoull(match[2]), parser.builder_);
             break;
           case 'c':
             parser.SetRootType("Comment");
             if (!parser.ParseJson(match[3].str().c_str())) {
-              throw std::runtime_error("Failed to parse Comment JSON: " + match[3].str());
+              throw runtime_error("Failed to parse Comment JSON: " + match[3].str());
             }
             txn.set_comment(std::stoull(match[2]), parser.builder_);
             break;
         }
-      } else if (std::regex_match(line, match, setting_line)) {
+      } else if (regex_match(line, match, setting_line)) {
         if (match[1].str() == "hash_seed") {
           const auto bin_str = cereal::base64::decode(match[2]);
           assert(bin_str.length() == 8);
           seed = *reinterpret_cast<const uint64_t*>(bin_str.data());
         }
         txn.set_setting(match[1].str(), cereal::base64::decode(match[2]));
-      } else if (std::regex_match(line, match, vote_line)) {
-        txn.set_vote(std::stoull(match[1]), std::stoull(match[2]), static_cast<Vote>(std::stoi(match[3])));
-      } else if (std::regex_match(line, match, subscription_line)) {
-        txn.set_subscription(std::stoull(match[1]), std::stoull(match[2]), true);
+      } else if (regex_match(line, match, vote_line)) {
+        txn.set_vote(stoull(match[1]), stoull(match[2]), static_cast<Vote>(std::stoi(match[3])));
+      } else if (regex_match(line, match, subscription_line)) {
+        txn.set_subscription(stoull(match[1]), stoull(match[2]), true);
       } else {
-        throw std::runtime_error("Invalid line in database dump: " + line);
+        throw runtime_error("Invalid line in database dump: " + line);
       }
     }
     txn.commit();
@@ -485,16 +487,14 @@ namespace Ludwig {
   }
 
   auto ReadTxnBase::get_user_id_by_name(string_view name) -> optional<uint64_t> {
-    std::string name_lc;
-    std::transform(name.begin(), name.end(), std::back_inserter(name_lc), [](auto c){ return std::tolower(c); });
+    const auto name_lc = to_ascii_lowercase(name);
     return db_set_disambiguate_hash(txn, db.dbis[User_Name], Cursor(name_lc, db.seed), [&](auto id) {
       const auto user = get_user(id);
       return user && user->get().name()->string_view() == name_lc;
     });
   }
   auto ReadTxnBase::get_user_id_by_email(string_view email) -> optional<uint64_t> {
-    std::string email_lc;
-    std::transform(email.begin(), email.end(), std::back_inserter(email_lc), [](auto c){ return std::tolower(c); });
+    const auto email_lc = to_ascii_lowercase(email);
     return db_set_disambiguate_hash(txn, db.dbis[User_Email], Cursor(email_lc, db.seed), [&](auto id) {
       const auto user = get_local_user(id);
       return user && user->get().email() && user->get().email()->string_view() == email_lc;
@@ -528,7 +528,7 @@ namespace Ludwig {
     return DBIter<uint64_t>(
       db.dbis[Subscription_BoardUser],
       txn,
-      cursor ? cursor : std::optional(Cursor(board_id, 0)),
+      cursor ? cursor : optional(Cursor(board_id, 0)),
       { Cursor(board_id, ID_MAX) },
       second_key
     );
@@ -539,10 +539,9 @@ namespace Ludwig {
   }
 
   auto ReadTxnBase::get_board_id_by_name(string_view name) -> optional<uint64_t> {
-    std::string name_lc;
-    std::transform(name.begin(), name.end(), std::back_inserter(name_lc), [](auto c){ return std::tolower(c); });
+    const auto name_lc = to_ascii_lowercase(name);
     return db_set_disambiguate_hash(txn, db.dbis[Board_Name], Cursor(name_lc, db.seed), [&](auto id) {
-      auto board = get_board(id);
+      const auto board = get_board(id);
       return board && board->get().name()->string_view() == name_lc;
     });
   }
@@ -574,7 +573,7 @@ namespace Ludwig {
     return DBIter<uint64_t>(
       db.dbis[Subscription_UserBoard],
       txn,
-      cursor ? cursor : std::optional(Cursor(user_id, 0)),
+      cursor ? cursor : optional(Cursor(user_id, 0)),
       { Cursor(user_id, ID_MAX) },
       second_key
     );
@@ -583,7 +582,7 @@ namespace Ludwig {
     return DBIter<uint64_t>(
       db.dbis[Owner_UserBoard],
       txn,
-      cursor ? cursor : std::optional(Cursor(user_id, 0)),
+      cursor ? cursor : optional(Cursor(user_id, 0)),
       { Cursor(user_id, ID_MAX) },
       second_key
     );
@@ -876,7 +875,7 @@ namespace Ludwig {
           fbb.Finish(CreateBoardStats(fbb,
             s.thread_count(),
             s.comment_count(),
-            std::min(s.subscriber_count(), s.subscriber_count() - 1),
+            min(s.subscriber_count(), s.subscriber_count() - 1),
             s.users_active_half_year(),
             s.users_active_month(),
             s.users_active_week(),
@@ -980,7 +979,7 @@ namespace Ludwig {
       assert_fmt(!!board_stats, "set_subscription: board {:x} does not exist", board_id);
       if (!existing) {
         spdlog::debug("Subscribing user {:x} to board {:x}", user_id, board_id);
-        auto now = now_s();
+        const auto now = now_s();
         db_put(txn, db.dbis[Subscription_BoardUser], Cursor(board_id, user_id), now);
         db_put(txn, db.dbis[Subscription_UserBoard], Cursor(user_id, board_id), now);
         subscriber_count++;
@@ -989,7 +988,7 @@ namespace Ludwig {
       spdlog::debug("Unsubscribing user {:x} from board {:x}", user_id, board_id);
       db_del(txn, db.dbis[Subscription_BoardUser], Cursor(board_id, user_id));
       db_del(txn, db.dbis[Subscription_UserBoard], Cursor(user_id, board_id));
-      subscriber_count = std::min(subscriber_count, subscriber_count - 1);
+      subscriber_count = min(subscriber_count, subscriber_count - 1);
     }
     if (board_stats) {
       const auto& s = board_stats->get();
@@ -1054,7 +1053,7 @@ namespace Ludwig {
         if (const auto board_stats = get_board_stats(old_thread.board())) {
           const auto& s = board_stats->get();
           fbb.Finish(CreateBoardStats(fbb,
-            std::min(s.thread_count(), s.thread_count() - 1),
+            min(s.thread_count(), s.thread_count() - 1),
             s.comment_count(),
             s.subscriber_count(),
             s.users_active_half_year(),
@@ -1123,8 +1122,8 @@ namespace Ludwig {
       const auto& s = user_stats->get();
       FlatBufferBuilder fbb;
       fbb.Finish(CreateUserStats(fbb,
-        std::min(s.comment_count(), s.comment_count() - 1),
-        karma > 0 ? std::min(s.comment_karma(), s.comment_karma() - karma) : s.comment_karma() - karma,
+        min(s.comment_count(), s.comment_count() - 1),
+        karma > 0 ? min(s.comment_karma(), s.comment_karma() - karma) : s.comment_karma() - karma,
         s.thread_count(),
         s.thread_karma()
       ));
@@ -1177,8 +1176,8 @@ namespace Ludwig {
       fbb.Finish(CreateUserStats(fbb,
         s.comment_count(),
         s.comment_karma(),
-        std::min(s.thread_count(), s.thread_count() - 1),
-        karma > 0 ? std::min(s.thread_karma(), s.thread_karma() - karma) : s.thread_karma() - karma
+        min(s.thread_count(), s.thread_count() - 1),
+        karma > 0 ? min(s.thread_karma(), s.thread_karma() - karma) : s.thread_karma() - karma
       ));
       db_put(txn, db.dbis[UserStats_User], author, fbb);
       fbb.Clear();
@@ -1186,8 +1185,8 @@ namespace Ludwig {
     if (const auto board_stats = get_board_stats(board)) {
       const auto& s = board_stats->get();
       fbb.Finish(CreateBoardStats(fbb,
-        std::min(s.thread_count(), s.thread_count() - 1),
-        std::min(s.comment_count(), s.comment_count() - descendant_count),
+        min(s.thread_count(), s.thread_count() - 1),
+        min(s.comment_count(), s.comment_count() - descendant_count),
         s.subscriber_count(),
         s.users_active_half_year(),
         s.users_active_month(),
@@ -1348,7 +1347,7 @@ namespace Ludwig {
           s.latest_comment_necro(),
           next_descendant_count,
           parent == comment.parent()
-            ? std::min(s.child_count(), s.child_count() - 1)
+            ? min(s.child_count(), s.child_count() - 1)
             : s.child_count(),
           s.upvotes(),
           s.downvotes(),
@@ -1387,7 +1386,7 @@ namespace Ludwig {
     const int64_t diff = vote - existing;
     if (!diff) return;
     const auto thread_opt = get_thread(post_id);
-    const auto comment_opt = thread_opt ? std::nullopt : get_comment(post_id);
+    const auto comment_opt = thread_opt ? nullopt : get_comment(post_id);
     assert(thread_opt || comment_opt);
     const auto op_id = thread_opt ? thread_opt->get().author() : comment_opt->get().author();
     spdlog::debug("Setting vote from user {:x} on post {:x} to {}", user_id, post_id, (int8_t)vote);
@@ -1408,8 +1407,8 @@ namespace Ludwig {
         s.latest_comment_necro(),
         s.descendant_count(),
         s.child_count(),
-        vote > 0 ? s.upvotes() + 1 : (existing > 0 ? std::min(s.upvotes(), s.upvotes() - 1) : s.upvotes()),
-        vote < 0 ? s.downvotes() + 1 : (existing < 0 ? std::min(s.downvotes(), s.downvotes() - 1) : s.downvotes()),
+        vote > 0 ? s.upvotes() + 1 : (existing > 0 ? min(s.upvotes(), s.upvotes() - 1) : s.upvotes()),
+        vote < 0 ? s.downvotes() + 1 : (existing < 0 ? min(s.downvotes(), s.downvotes() - 1) : s.downvotes()),
         new_karma
       ));
       db_put(txn, db.dbis[PostStats_Post], post_id, fbb);
@@ -1447,6 +1446,7 @@ namespace Ludwig {
 
   auto WriteTxn::create_application(uint64_t user_id, FlatBufferBuilder& builder) -> void {
     assert_fmt(!!get_local_user(user_id), "create_application: local user {:x} does not exist", user_id);
+    db_put(txn, db.dbis[Application_User], user_id, builder);
   }
   auto WriteTxn::create_invite(uint64_t sender_user_id, uint64_t lifetime_seconds) -> uint64_t {
     const uint64_t id = next_id(), now = now_s();
@@ -1458,10 +1458,18 @@ namespace Ludwig {
   auto WriteTxn::set_invite(uint64_t invite_id, FlatBufferBuilder& builder) -> void {
     const auto invite = GetRoot<Invite>(builder.GetBufferPointer());
     if (const auto old_invite = get_invite(invite_id)) {
-
+      assert_fmt(invite->created_at() == old_invite->get().created_at(), "set_invite: cannot change created_at field of invite");
+      assert_fmt(invite->from() == old_invite->get().from(), "set_invite: cannot change from field of invite");
+    } else {
+      assert_fmt(!!get_local_user(invite->from()), "set_invite: local user {:x} does not exist", invite->from());
+      db_put(txn, db.dbis[Owner_UserInvite], Cursor(invite->from(), invite_id), invite->from());
     }
+    db_put(txn, db.dbis[Invite_Invite], invite_id, builder);
   }
   auto WriteTxn::delete_invite(uint64_t invite_id) -> void {
-
+    if (auto invite = get_invite(invite_id)) {
+      db_del(txn, db.dbis[Owner_UserInvite], Cursor(invite->get().from(), invite_id));
+    }
+    db_del(txn, db.dbis[Invite_Invite], invite_id);
   }
 }

@@ -8,14 +8,6 @@
 using namespace Ludwig;
 using namespace flatbuffers;
 
-/*
-struct test_init {
-  test_init() {
-    spdlog::set_level(spdlog::level::debug);
-  }
-} test_init_instance;
-*/
-
 TEST_CASE("create DB", "[db]") {
   TempFile file;
   DB db(file.name);
@@ -452,7 +444,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         last_karma = stats.karma();
         top_threads++;
       }
-      uint64_t last_timestamp = std::numeric_limits<uint64_t>::max();
+      uint64_t last_timestamp = ID_MAX;
       for (auto thread_id : txn.list_threads_of_board_new(board)) {
         auto& thread = txn.get_thread(thread_id)->get();
         REQUIRE(thread.created_at() <= last_timestamp);
@@ -467,7 +459,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         last_karma = stats.karma();
         top_comments++;
       }
-      last_timestamp = std::numeric_limits<uint64_t>::max();
+      last_timestamp = ID_MAX;
       for (auto comment_id : txn.list_comments_of_board_new(board)) {
         auto& comment = txn.get_comment(comment_id)->get();
         REQUIRE(comment.created_at() <= last_timestamp);
@@ -511,7 +503,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         last_karma = stats.karma();
         top_threads++;
       }
-      uint64_t last_timestamp = std::numeric_limits<uint64_t>::max();
+      uint64_t last_timestamp = ID_MAX;
       for (auto thread_id : txn.list_threads_of_board_new(board)) {
         auto thread_opt = txn.get_thread(thread_id);
         REQUIRE(!!thread_opt);
@@ -532,7 +524,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         last_karma = stats.karma();
         top_comments++;
       }
-      last_timestamp = std::numeric_limits<uint64_t>::max();
+      last_timestamp = ID_MAX;
       for (auto comment_id : txn.list_comments_of_board_new(board)) {
         auto comment_opt = txn.get_comment(comment_id);
         REQUIRE(!!comment_opt);

@@ -5,6 +5,7 @@
 #include <static_vector.hpp>
 #include "generated/datatypes_generated.h"
 #include "db.h++"
+#include "http_client.h++"
 
 namespace Ludwig {
   constexpr size_t ITEMS_PER_PAGE = 20;
@@ -247,7 +248,7 @@ namespace Ludwig {
 
   static inline auto invite_code_to_id(std::string_view invite_code) -> uint64_t {
     static const std::regex invite_code_regex(R"(([0-9A-F]{5})-([0-9A-F]{3})-([0-9A-F]{3})-([0-9A-F]{5}))");
-    std::match_results<string_view::const_iterator> match;
+    std::match_results<std::string_view::const_iterator> match;
     if (std::regex_match(invite_code.begin(), invite_code.end(), match, invite_code_regex)) {
       return std::stoull(match[1].str() + match[2].str() + match[3].str() + match[4].str());
     }
@@ -263,11 +264,13 @@ namespace Ludwig {
   class Controller : public std::enable_shared_from_this<Controller> {
   private:
     std::shared_ptr<DB> db;
+    //std::shared_ptr<HttpClient> http_client;
     SiteDetail cached_site_detail;
 
+    auto fetch_link_preview(uint64_t thread_id, std::string_view url) -> void;
     virtual auto dispatch_event(Event, uint64_t = 0) -> void {}
   public:
-    Controller(std::shared_ptr<DB> db);
+    Controller(std::shared_ptr<DB> db /*, std::shared_ptr<HttpClient> http_client*/);
 
     static auto parse_sort_type(std::string_view str) -> SortType {
       if (str.empty() || str == "Hot") return SortType::Hot;
@@ -356,7 +359,7 @@ namespace Ludwig {
       return db->open_read_txn();
     }
 
-    auto hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void;
+    auto hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) const -> void;
 
     inline auto validate_session(ReadTxnBase& txn, uint64_t session_id) -> std::optional<uint64_t> {
       auto session = txn.get_session(session_id);

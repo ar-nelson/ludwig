@@ -50,6 +50,7 @@ table LocalUser {
   admin: bool = false;
   accepted_application: bool = false;
   email_verified: bool = false;
+  invite: uint64 = null;
   open_links_in_new_tab: bool = false;
   send_notifications_to_email: bool = false;
   show_avatars: bool = true;

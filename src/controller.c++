@@ -6,7 +6,8 @@
 #include "controller.h++"
 #include "webutil.h++"
 
-using std::optional, std::nullopt, std::string_view, flatbuffers::FlatBufferBuilder;
+using std::function, std::nullopt, std::regex, std::regex_match, std::optional,
+      std::shared_ptr, std::string, std::string_view, flatbuffers::FlatBufferBuilder;
 
 namespace Ludwig {
   static constexpr crypto_argon2_config ARGON2_CONFIG = {
@@ -18,10 +19,15 @@ namespace Ludwig {
   //static constexpr uint64_t JWT_DURATION = 86400; // 1 day
   static constexpr double RANK_GRAVITY = 1.8;
 
-  static const std::regex username_regex(R"([a-z0-9_]{1,64})", std::regex_constants::ECMAScript);
-  static const std::regex email_regex(
-    R"((?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|\[(?:(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9]))\.){3}(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9])|[a-z0-9-]*[a-z0-9]:(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\]))",
-    std::regex_constants::ECMAScript | std::regex_constants::icase
+  static const regex username_regex(R"([a-z0-9_]{1,64})", regex::ECMAScript);
+  static const regex email_regex(
+    R"((?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|")"
+    R"((?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@)"
+    R"((?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|)"
+    R"(\[(?:(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9]))\.){3})"
+    R"((?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9])|[a-z0-9-]*[a-z0-9]:)"
+    R"((?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\]))",
+    regex::ECMAScript | regex::icase
   );
 
   static inline auto make_null_board() -> FlatBufferBuilder {
@@ -217,8 +223,8 @@ namespace Ludwig {
     DBIter<uint64_t> iter_by_top,
     Controller::Login login,
     bool skip_cw,
-    std::function<T (uint64_t)> get_entry,
-    std::function<uint64_t (T&)> get_timestamp,
+    function<T (uint64_t)> get_entry,
+    function<uint64_t (T&)> get_timestamp,
     Cmp cmp,
     optional<uint64_t> from = {},
     size_t page_size = ITEMS_PER_PAGE
@@ -344,14 +350,14 @@ namespace Ludwig {
     return *stats;
   }
 
-  Controller::Controller(std::shared_ptr<DB> db) : db(db) {
+  Controller::Controller(shared_ptr<DB> db) : db(db) {
     auto txn = db->open_read_txn();
-    cached_site_detail.domain = std::string(txn.get_setting_str(SettingsKey::domain));
-    cached_site_detail.name = std::string(txn.get_setting_str(SettingsKey::name));
-    cached_site_detail.description = std::string(txn.get_setting_str(SettingsKey::description));
+    cached_site_detail.domain = string(txn.get_setting_str(SettingsKey::domain));
+    cached_site_detail.name = string(txn.get_setting_str(SettingsKey::name));
+    cached_site_detail.description = string(txn.get_setting_str(SettingsKey::description));
   }
 
-  auto Controller::hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void {
+  auto Controller::hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) const -> void {
     // Lock the password hashing step with a mutex,
     // because the Argon2i context is shared
     static std::mutex mutex;
@@ -578,7 +584,7 @@ namespace Ludwig {
   }
   auto Controller::list_local_users(ReadTxnBase& txn, optional<uint64_t> from_id) -> PageOf<UserListEntry> {
     PageOf<UserListEntry> out { {}, !from_id, {} };
-    auto iter = txn.list_local_users(from_id ? optional(Cursor(*from_id)) : std::nullopt);
+    auto iter = txn.list_local_users(from_id ? optional(Cursor(*from_id)) : nullopt);
     for (auto id : iter) {
       const auto user = txn.get_user(id);
       if (!user) {
@@ -593,7 +599,7 @@ namespace Ludwig {
   }
   auto Controller::list_local_boards(ReadTxnBase& txn, optional<uint64_t> from_id) -> PageOf<BoardListEntry> {
     PageOf<BoardListEntry> out { {}, !from_id, {} };
-    auto iter = txn.list_local_boards(from_id ? optional(Cursor(*from_id)) : std::nullopt);
+    auto iter = txn.list_local_boards(from_id ? optional(Cursor(*from_id)) : nullopt);
     for (auto id : iter) {
       const auto board = txn.get_board(id);
       if (!board) {
@@ -778,7 +784,7 @@ namespace Ludwig {
     // TODO: Old sort
     auto iter = sort == UserPostSortType::Top
       ? txn.list_threads_of_user_top(user_id, next_cursor_top(txn, user_id, from_id))
-      : txn.list_threads_of_user_new(user_id, from_id ? optional(Cursor(user_id, *from_id)) : std::nullopt);
+      : txn.list_threads_of_user_new(user_id, from_id ? optional(Cursor(user_id, *from_id)) : nullopt);
     for (uint64_t thread_id : iter) {
       const auto entry = get_thread_entry(txn, thread_id, login, user);
       if (!should_show(entry, login, skip_cw)) continue;
@@ -802,7 +808,7 @@ namespace Ludwig {
     // TODO: Old sort
     auto iter = sort == UserPostSortType::Top
       ? txn.list_comments_of_user_top(user_id, next_cursor_top(txn, user_id, from_id))
-      : txn.list_comments_of_user_new(user_id, from_id ? optional(Cursor(user_id, *from_id)) : std::nullopt);
+      : txn.list_comments_of_user_new(user_id, from_id ? optional(Cursor(user_id, *from_id)) : nullopt);
     for (uint64_t comment_id : iter) {
       const auto entry = get_comment_entry(txn, comment_id, login);
       if (!should_show(entry, login, skip_cw)) continue;
@@ -814,63 +820,41 @@ namespace Ludwig {
     };
     return out;
   }
-  auto Controller::register_local_user(
-    string_view username,
-    string_view email,
-    SecretString&& password,
-    string_view ip,
-    string_view user_agent,
-    optional<uint64_t> invite,
-    optional<string_view> application_text
-  ) -> std::pair<uint64_t, bool> {
-    const auto site = site_detail();
-    if (!site->registration_enabled) {
-      throw ControllerError("Registration is not allowed on this server", 403);
-    }
-    if (site->registration_application_required && !application_text) {
-      throw ControllerError("An application reason is required to register", 400);
-    }
-    if (site->registration_invite_required) {
-      if (!invite) {
-        throw ControllerError("An invite code is required to register", 400);
-      }
-    }
-
-  }
-  auto Controller::create_local_user(
+  static auto create_local_user_internal(
+    const Controller* controller,
+    WriteTxn& txn,
     string_view username,
     optional<string_view> email,
     SecretString&& password,
     bool is_bot,
     optional<uint64_t> invite
   ) -> uint64_t {
-    if (!std::regex_match(username.begin(), username.end(), username_regex)) {
+    if (!regex_match(username.begin(), username.end(), username_regex)) {
       throw ControllerError("Invalid username (only letters, numbers, and underscores allowed; max 64 characters)", 400);
     }
-    if (email && !std::regex_match(email->begin(), email->end(), email_regex)) {
+    if (email && !regex_match(email->begin(), email->end(), email_regex)) {
       throw ControllerError("Invalid email address", 400);
     }
     if (password.str.length() < 8) {
       throw ControllerError("Password must be at least 8 characters", 400);
     }
-    auto txn = db->open_write_txn();
     if (txn.get_user_id_by_name(username)) {
       throw ControllerError("A user with this name already exists on this instance", 409);
     }
     if (email && txn.get_user_id_by_email(*email)) {
       throw ControllerError("A user with this email address already exists on this instance", 409);
     }
-    // TODO: Check if email already exists
     uint8_t salt[16], hash[32];
     duthomhas::csprng rng;
     rng(salt);
-    hash_password(std::move(password), salt, hash);
+    controller->hash_password(std::move(password), salt, hash);
     flatbuffers::FlatBufferBuilder fbb;
     {
       const auto name_s = fbb.CreateString(username);
       UserBuilder b(fbb);
       b.add_created_at(now_s());
       b.add_name(name_s);
+      b.add_bot(is_bot);
       fbb.Finish(b.Finish());
     }
     const auto user_id = txn.create_user(fbb);
@@ -883,9 +867,88 @@ namespace Ludwig {
       if (email_s) b.add_email(*email_s);
       b.add_password_hash(&hash_struct);
       b.add_password_salt(&salt_struct);
+      if (invite) b.add_invite(*invite);
       fbb.Finish(b.Finish());
     }
     txn.set_local_user(user_id, fbb);
+  }
+  auto Controller::register_local_user(
+    string_view username,
+    string_view email,
+    SecretString&& password,
+    string_view ip,
+    string_view user_agent,
+    optional<uint64_t> invite_id,
+    optional<string_view> application_text
+  ) -> std::pair<uint64_t, bool> {
+    const auto site = site_detail();
+    if (!site->registration_enabled) {
+      throw ControllerError("Registration is not allowed on this server", 403);
+    }
+    if (site->registration_application_required && !application_text) {
+      throw ControllerError("An application reason is required to register", 400);
+    }
+    if (site->registration_invite_required) {
+      if (!invite_id) {
+        throw ControllerError("An invite code is required to register", 400);
+      }
+    }
+    auto txn = db->open_write_txn();
+    const auto user_id = create_local_user_internal(
+      this, txn, username, email, std::move(password), false, invite_id
+    );
+    if (invite_id) {
+      const auto invite_opt = txn.get_invite(*invite_id);
+      if (!invite_opt) {
+        throw ControllerError("Invalid invite code", 400);
+      }
+      const auto& invite = invite_opt->get();
+      if (invite.accepted_at()) {
+        spdlog::warn("Attempt to use already-used invite code {} (for username {}, email {}, ip {}, user agent {})",
+          invite_id_to_code(*invite_id), username, email, ip, user_agent
+        );
+        throw ControllerError("Expired invite code", 400);
+      }
+      const auto now = now_s();
+      if (invite.expires_at() <= now) {
+        throw ControllerError("Expired invite code", 400);
+      }
+      FlatBufferBuilder fbb;
+      InviteBuilder b(fbb);
+      b.add_from(invite.from());
+      b.add_to(user_id);
+      b.add_created_at(invite.created_at());
+      b.add_accepted_at(now);
+      b.add_expires_at(invite.expires_at());
+      fbb.Finish(b.Finish());
+      txn.set_invite(*invite_id, fbb);
+    }
+    if (site->registration_application_required) {
+      FlatBufferBuilder fbb;
+      auto ip_s = fbb.CreateString(ip),
+           user_agent_s = fbb.CreateString(user_agent),
+           application_text_s = fbb.CreateString(*application_text);
+      ApplicationBuilder b(fbb);
+      b.add_ip(ip_s);
+      b.add_user_agent(user_agent_s);
+      b.add_text(application_text_s);
+      fbb.Finish(b.Finish());
+      txn.create_application(user_id, fbb);
+    }
+    txn.commit();
+    return { user_id, site->registration_application_required };
+  }
+  auto Controller::create_local_user(
+    string_view username,
+    optional<string_view> email,
+    SecretString&& password,
+    bool is_bot,
+    optional<uint64_t> invite
+  ) -> uint64_t {
+    auto txn = db->open_write_txn();
+    auto user_id = create_local_user_internal(
+      this, txn, username, email, std::move(password), is_bot, invite
+    );
     txn.commit();
     return user_id;
   }
@@ -898,7 +961,7 @@ namespace Ludwig {
     bool is_restricted_posting,
     bool is_local_only
   ) -> uint64_t {
-    if (!std::regex_match(name.begin(), name.end(), username_regex)) {
+    if (!regex_match(name.begin(), name.end(), username_regex)) {
       throw ControllerError("Invalid board name (only letters, numbers, and underscores allowed; max 64 characters)", 400);
     }
     if (display_name && display_name->length() > 1024) {
@@ -1026,7 +1089,7 @@ namespace Ludwig {
         throw ControllerError("Comment author is not a user on this instance", 400);
       }
       auto parent_thread = txn.get_thread(parent);
-      const auto parent_comment = !parent_thread ? txn.get_comment(parent) : std::nullopt;
+      const auto parent_comment = !parent_thread ? txn.get_comment(parent) : nullopt;
       if (parent_comment) parent_thread = txn.get_thread(parent_comment->get().thread());
       if (!parent_thread) {
         throw ControllerError("Comment parent post does not exist", 400);
@@ -1062,7 +1125,7 @@ namespace Ludwig {
       throw ControllerError("User does not exist", 400);
     }
     const auto thread = txn.get_thread(post_id);
-    const auto comment = !thread ? txn.get_comment(post_id) : std::nullopt;
+    const auto comment = !thread ? txn.get_comment(post_id) : nullopt;
     if (!thread && !comment) {
       throw ControllerError("Post does not exist", 400);
     }

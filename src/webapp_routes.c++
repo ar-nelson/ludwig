@@ -2,7 +2,6 @@
 #include <chrono>
 #include <iterator>
 #include <regex>
-#include <spdlog/fmt/fmt.h>
 #include <spdlog/fmt/chrono.h>
 #include "xxhash.h"
 #include "generated/default-theme.css.h"
@@ -10,20 +9,20 @@
 #include "generated/feather-sprite.svg.h"
 #include "webutil.h++"
 
-using std::optional, std::nullopt, std::string, std::string_view;
+using std::current_exception, std::exception, std::function, std::match_results,
+      std::nullopt, std::optional, std::regex, std::regex_search,
+      std::rethrow_exception, std::shared_ptr, std::stoull, std::string,
+      std::string_view, std::to_string;
+
+namespace chrono = std::chrono;
 
 #define COOKIE_NAME "ludwig_session"
 
 namespace Ludwig {
-  static const std::regex cookie_regex(
+  static const regex cookie_regex(
     R"((?:^|;)\s*)" COOKIE_NAME R"(\s*=\s*([^;]+))",
-    std::regex_constants::ECMAScript
+    regex::ECMAScript
   );
-
-  static inline auto hexstring(uint64_t n, bool padded = false) -> std::string {
-    if (padded) return fmt::format("{:016x}", n);
-    else return fmt::format("{:x}", n);
-  }
 
   enum class SortFormType {
     Board,
@@ -80,7 +79,7 @@ namespace Ludwig {
   // Adapted from https://programming.guide/java/formatting-byte-size-to-human-readable-format.html
   static auto suffixed_short_number(int64_t n) -> string {
     static constexpr auto SUFFIXES = "KMBTqQ";
-    if (-1000 < n && n < 1000) return std::to_string(n);
+    if (-1000 < n && n < 1000) return to_string(n);
     uint8_t i = 0;
     while (n <= -999'950 || n >= 999'950) {
       n /= 1000;
@@ -99,24 +98,24 @@ namespace Ludwig {
     }
   }
 
-  template <typename T> static constexpr auto post_word() -> std::string_view;
-  template <> constexpr auto post_word<ThreadDetailResponse>() -> std::string_view { return "thread"; }
-  template <> constexpr auto post_word<CommentDetailResponse>() -> std::string_view { return "comment"; }
-  template <> constexpr auto post_word<ThreadListEntry>() -> std::string_view { return "thread"; }
-  template <> constexpr auto post_word<CommentListEntry>() -> std::string_view { return "comment"; }
+  template <typename T> static constexpr auto post_word() -> string_view;
+  template <> constexpr auto post_word<ThreadDetailResponse>() -> string_view { return "thread"; }
+  template <> constexpr auto post_word<CommentDetailResponse>() -> string_view { return "comment"; }
+  template <> constexpr auto post_word<ThreadListEntry>() -> string_view { return "thread"; }
+  template <> constexpr auto post_word<CommentListEntry>() -> string_view { return "comment"; }
 
   struct QueryString {
     string_view query;
     inline auto required_hex_id(string_view key) -> uint64_t {
       try {
-        return std::stoull(std::string(uWS::getDecodedQueryValue(key, query)), nullptr, 16);
+        return stoull(string(uWS::getDecodedQueryValue(key, query)), nullptr, 16);
       } catch (...) {
         throw ControllerError(fmt::format("Invalid or missing '{}' parameter", key).c_str(), 400);
       }
     }
     inline auto required_int(string_view key) -> int {
       try {
-        return std::stoi(std::string(uWS::getDecodedQueryValue(key, query)));
+        return std::stoi(string(uWS::getDecodedQueryValue(key, query)));
       } catch (...) {
         throw ControllerError(fmt::format("Invalid or missing '{}' parameter", key).c_str(), 400);
       }
@@ -137,12 +136,12 @@ namespace Ludwig {
   };
 
   template <bool SSL> struct Webapp : public std::enable_shared_from_this<Webapp<SSL>> {
-    std::shared_ptr<Controller> controller;
-    std::string buf;
+    shared_ptr<Controller> controller;
+    string buf;
 
-    Webapp(std::shared_ptr<Controller> controller) : controller(controller) {}
+    Webapp(shared_ptr<Controller> controller) : controller(controller) {}
 
-    using Self = std::shared_ptr<Webapp<SSL>>;
+    using Self = shared_ptr<Webapp<SSL>>;
     using App = uWS::TemplatedApp<SSL>;
     using Response = uWS::HttpResponse<SSL>;
     using Request = uWS::HttpRequest;
@@ -169,24 +168,25 @@ namespace Ludwig {
       Self self;
       Request& req;
       Response& rsp;
-      std::chrono::time_point<std::chrono::steady_clock> start;
+      chrono::time_point<chrono::steady_clock> start;
     public:
-      SafePage(Self self, Request& req, Response& rsp) : self(self), req(req), rsp(rsp), start(std::chrono::steady_clock::now()) {}
+      SafePage(Self self, Request& req, Response& rsp)
+        : self(self), req(req), rsp(rsp), start(chrono::steady_clock::now()) {}
 
       inline auto operator()(
         ReadTxn& txn,
-        std::function<void (Request&, Controller::Login)> before,
-        std::function<void (Response&, Controller::Login)> after
+        function<void (Request&, Controller::Login)> before,
+        function<void (Response&, Controller::Login)> after
       ) -> void {
         optional<uint64_t> old_session;
         optional<LoginResponse> new_session;
         optional<LocalUserDetailResponse> logged_in_user;
         try {
           auto cookies = req.getHeader("cookie");
-          std::match_results<string_view::const_iterator> match;
-          if (std::regex_search(cookies.begin(), cookies.end(), match, cookie_regex)) {
+          match_results<string_view::const_iterator> match;
+          if (regex_search(cookies.begin(), cookies.end(), match, cookie_regex)) {
             try {
-              old_session = std::stoull(match[1], nullptr, 16);
+              old_session = stoull(match[1], nullptr, 16);
               new_session = self->controller->validate_or_regenerate_session(
                 txn, *old_session, rsp.getRemoteAddressAsText(), req.getHeader("user-agent")
               );
@@ -200,10 +200,10 @@ namespace Ludwig {
           self->error_page(rsp, e);
           return;
         } catch (...) {
-          auto eptr = std::current_exception();
+          auto eptr = current_exception();
           try {
-            std::rethrow_exception(eptr);
-          } catch (std::exception& e) {
+            rethrow_exception(eptr);
+          } catch (exception& e) {
             spdlog::error("Unhandled exception in webapp route: {}", e.what());
           } catch (...) {
             spdlog::error("Unhandled exception in webapp route, no information available");
@@ -232,12 +232,12 @@ namespace Ludwig {
       }
 
       inline auto time_elapsed() {
-        const auto end = std::chrono::steady_clock::now();
-        return std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        const auto end = chrono::steady_clock::now();
+        return chrono::duration_cast<chrono::microseconds>(end - start).count();
       }
     };
 
-    inline auto safe_page(std::function<void (Self, SafePage)> fn) {
+    inline auto safe_page(function<void (Self, SafePage)> fn) {
       return [self = this->shared_from_this(), fn](Response* rsp, Request* req) {
         fn(self, SafePage(self, *req, *rsp));
       };
@@ -256,10 +256,10 @@ namespace Ludwig {
       );
     }
 
-    inline auto action_page(std::function<void (Self, Request&, Response&, QueryString, uint64_t)> fn, bool require_login = true) {
+    inline auto action_page(function<void (Self, Request&, Response&, QueryString, uint64_t)> fn, bool require_login = true) {
       return [self = this->shared_from_this(), fn, require_login](Response* rsp, Request* req) {
-        std::string buffer = "?";
-        rsp->onData([self, rsp, req, fn, require_login, buffer = std::move(buffer)](std::string_view data, bool last) mutable {
+        string buffer = "?";
+        rsp->onData([self, rsp, req, fn, require_login, buffer = std::move(buffer)](string_view data, bool last) mutable {
           buffer.append(data.data(), data.length());
           if (!last) return;
           optional<ControllerError> err;
@@ -269,9 +269,9 @@ namespace Ludwig {
               try {
                 auto txn = self->controller->open_read_txn();
                 auto cookies = req->getHeader("cookie");
-                std::match_results<string_view::const_iterator> match;
-                if (std::regex_search(cookies.begin(), cookies.end(), match, cookie_regex)) {
-                  logged_in_user = self->controller->validate_session(txn, std::stoull(match[1], nullptr, 16));
+                match_results<string_view::const_iterator> match;
+                if (regex_search(cookies.begin(), cookies.end(), match, cookie_regex)) {
+                  logged_in_user = self->controller->validate_session(txn, stoull(match[1], nullptr, 16));
                 }
               } catch (...) {}
             }
@@ -288,10 +288,10 @@ namespace Ludwig {
           } catch (ControllerError e) {
             err = e;
           } catch (...) {
-            auto eptr = std::current_exception();
+            auto eptr = current_exception();
             try {
-              std::rethrow_exception(eptr);
-            } catch (std::exception& e) {
+              rethrow_exception(eptr);
+            } catch (exception& e) {
               spdlog::error("Unhandled exception in webapp route: {}", e.what());
             } catch (...) {
               spdlog::error("Unhandled exception in webapp route, no information available");
@@ -537,7 +537,7 @@ namespace Ludwig {
       rsp << "</aside>";
     }
 
-    static auto relative_time(uint64_t timestamp) -> std::string {
+    static auto relative_time(uint64_t timestamp) -> string {
       const uint64_t now = now_s();
       if (timestamp > now) return "in the future";
       const uint64_t diff = now - timestamp;
@@ -550,17 +550,17 @@ namespace Ludwig {
         YEAR = DAY * 365;
       if (diff < MINUTE) return "just now";
       if (diff < MINUTE * 2) return "1 minute ago";
-      if (diff < HOUR) return std::to_string(diff / MINUTE) + " minutes ago";
+      if (diff < HOUR) return to_string(diff / MINUTE) + " minutes ago";
       if (diff < HOUR * 2) return "1 hour ago";
-      if (diff < DAY) return std::to_string(diff / HOUR) + " hours ago";
+      if (diff < DAY) return to_string(diff / HOUR) + " hours ago";
       if (diff < DAY * 2) return "1 day ago";
-      if (diff < WEEK) return std::to_string(diff / DAY) + " days ago";
+      if (diff < WEEK) return to_string(diff / DAY) + " days ago";
       if (diff < WEEK * 2) return "1 week ago";
-      if (diff < MONTH) return std::to_string(diff / WEEK) + " weeks ago";
+      if (diff < MONTH) return to_string(diff / WEEK) + " weeks ago";
       if (diff < MONTH * 2) return "1 month ago";
-      if (diff < YEAR) return std::to_string(diff / MONTH) + " months ago";
+      if (diff < YEAR) return to_string(diff / MONTH) + " months ago";
       if (diff < YEAR * 2) return "1 year ago";
-      return std::to_string(diff / YEAR) + " years ago";
+      return to_string(diff / YEAR) + " years ago";
     }
 
     auto write_datetime(Response& rsp, uint64_t timestamp) noexcept -> void {
@@ -591,7 +591,7 @@ namespace Ludwig {
       );
       if (user.instance()) {
         const auto suffix_ix = name.find('@');
-        if (suffix_ix != std::string::npos) {
+        if (suffix_ix != string::npos) {
           write_fmt(rsp, R"(<span class="at-domain">@{}</span>)", Escape{name.substr(suffix_ix + 1)});
         }
       }
@@ -621,7 +621,7 @@ namespace Ludwig {
       );
       if (board.instance()) {
         const auto suffix_ix = name.find('@');
-        if (suffix_ix != std::string::npos) {
+        if (suffix_ix != string::npos) {
           write_fmt(rsp, R"(<span class="at-domain">@{}</span>)", Escape{name.substr(suffix_ix + 1)});
         }
       }
@@ -649,7 +649,7 @@ namespace Ludwig {
 
     auto write_sort_options(
       Response& rsp,
-      std::string_view sort_name,
+      string_view sort_name,
       SortFormType type,
       bool can_hide_cws,
       bool show_threads,
@@ -1090,7 +1090,7 @@ namespace Ludwig {
       Response& rsp,
       const ThreadDetailResponse& thread,
       Controller::Login login,
-      std::string_view sort_str = "Hot",
+      string_view sort_str = "Hot",
       bool show_cws = false,
       bool show_images = false
     ) noexcept -> void {
@@ -1154,7 +1154,7 @@ namespace Ludwig {
       rsp << "</section></article>";
     }
 
-    inline auto error_banner(optional<string_view> error) noexcept -> std::string {
+    inline auto error_banner(optional<string_view> error) noexcept -> string {
       if (!error) return "";
       return fmt::format(R"(<p class="error-message"><strong>Error:</strong> {}</p>)", Escape{*error});
     }
@@ -1171,7 +1171,7 @@ namespace Ludwig {
       Response& rsp,
       const CommentDetailResponse& comment,
       Controller::Login login,
-      std::string_view sort_str = "Hot",
+      string_view sort_str = "Hot",
       bool show_cws = false,
       bool show_images = false
     ) noexcept -> void {
@@ -1446,7 +1446,7 @@ namespace Ludwig {
       const unsigned char* src,
       size_t len
     ) noexcept -> void {
-      const auto hash = hexstring(XXH3_64bits(src, len), true);
+      const auto hash = fmt::format("{:016x}", XXH3_64bits(src, len));
       app.get(fmt::format("/static/{}", filename), [src, len, mimetype, hash](auto* res, auto* req) {
         if (req->getHeader("if-none-match") == hash) {
           res->writeStatus(http_status(304))->end();
@@ -1499,7 +1499,7 @@ namespace Ludwig {
         optional<BoardDetailResponse> board;
         PageOf<ThreadListEntry> threads;
         PageOf<CommentListEntry> comments;
-        std::string_view sort_str;
+        string_view sort_str;
         bool show_posts, show_images, show_cws, htmx;
         page(txn, [&](Request& req, auto& login) {
           const auto name = req.getParameter(0);
@@ -1509,7 +1509,7 @@ namespace Ludwig {
           show_posts = req.getQuery("type") != "comments";
           sort_str = req.getQuery("sort");
           const auto sort = Controller::parse_sort_type(sort_str);
-          const auto from = Controller::parse_hex_id(std::string(req.getQuery("from")));
+          const auto from = Controller::parse_hex_id(string(req.getQuery("from")));
           show_images = req.getQuery("images") == "1" || sort_str.empty();
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           htmx = is_htmx(req);
@@ -1583,7 +1583,7 @@ namespace Ludwig {
         optional<UserDetailResponse> user;
         PageOf<ThreadListEntry> threads;
         PageOf<CommentListEntry> comments;
-        std::string_view sort_str;
+        string_view sort_str;
         bool show_posts, show_images, show_cws, htmx;
         page(txn, [&](Request& req, auto& login) {
           const auto name = req.getParameter(0);
@@ -1593,7 +1593,7 @@ namespace Ludwig {
           show_posts = req.getQuery("type") != "comments";
           sort_str = req.getQuery("sort");
           const auto sort = Controller::parse_user_post_sort_type(sort_str);
-          const auto from = Controller::parse_hex_id(std::string(req.getQuery("from")));
+          const auto from = Controller::parse_hex_id(string(req.getQuery("from")));
           show_images = req.getQuery("images") == "1" || sort_str.empty();
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           site = self->controller->site_detail();
@@ -1641,15 +1641,15 @@ namespace Ludwig {
         const SiteDetail* site;
         optional<BoardDetailResponse> board;
         optional<ThreadDetailResponse> detail;
-        std::string_view sort_str;
+        string_view sort_str;
         bool show_images, show_cws;
         page(txn, [&](Request& req, auto& login) {
-          const auto id = Controller::parse_hex_id(std::string(req.getParameter(0)));
+          const auto id = Controller::parse_hex_id(string(req.getParameter(0)));
           if (!id) throw ControllerError("Invalid hexadecimal post ID", 404);
           // TODO: Get sort and filter settings from user
           sort_str = req.getQuery("sort");
           const auto sort = Controller::parse_comment_sort_type(sort_str);
-          const auto from = Controller::parse_hex_id(std::string(req.getQuery("from")));
+          const auto from = Controller::parse_hex_id(string(req.getQuery("from")));
           show_images = req.getQuery("images") == "1" || sort_str.empty();
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           site = self->controller->site_detail();
@@ -1676,7 +1676,7 @@ namespace Ludwig {
         const SiteDetail* site;
         optional<ThreadListEntry> thread;
         page(txn, [&](auto& req, auto& login) {
-          const auto id = Controller::parse_hex_id(std::string(req.getParameter(0)));
+          const auto id = Controller::parse_hex_id(string(req.getParameter(0)));
           if (!id) throw ControllerError("Invalid hexadecimal post ID", 404);
           site = self->controller->site_detail();
           thread = self->controller->get_thread_entry(txn, *id, login);
@@ -1697,15 +1697,15 @@ namespace Ludwig {
         const SiteDetail* site;
         optional<BoardDetailResponse> board;
         optional<CommentDetailResponse> detail;
-        std::string_view sort_str;
+        string_view sort_str;
         bool show_images, show_cws;
         page(txn, [&](Request& req, auto& login) {
-          const auto id = Controller::parse_hex_id(std::string(req.getParameter(0)));
+          const auto id = Controller::parse_hex_id(string(req.getParameter(0)));
           if (!id) throw ControllerError("Invalid hexadecimal post ID", 404);
           // TODO: Get sort and filter settings from user
           sort_str = req.getQuery("sort");
           const auto sort = Controller::parse_comment_sort_type(sort_str);
-          const auto from = Controller::parse_hex_id(std::string(req.getQuery("from")));
+          const auto from = Controller::parse_hex_id(string(req.getQuery("from")));
           show_images = req.getQuery("images") == "1" || sort_str.empty();
           show_cws = req.getQuery("cws") == "1" || sort_str.empty();
           site = self->controller->site_detail();
@@ -1972,7 +1972,7 @@ namespace Ludwig {
         write_redirect_back(req, rsp);
       }));
       app.post("/thread/:id/action", action_page([](Self self, auto& req, auto& rsp, auto body, auto logged_in_user) {
-        const auto id = std::stoull(std::string(req.getParameter(0)), nullptr, 16);
+        const auto id = stoull(string(req.getParameter(0)), nullptr, 16);
         const auto action = static_cast<SubmenuAction>(body.required_int("action"));
         switch (action) {
           case SubmenuAction::Reply:
@@ -2115,7 +2115,7 @@ namespace Ludwig {
 
   template <bool SSL> auto webapp_routes(
     uWS::TemplatedApp<SSL>& app,
-    std::shared_ptr<Controller> controller
+    shared_ptr<Controller> controller
   ) -> void {
     auto router = std::make_shared<Webapp<SSL>>(controller);
     router->register_routes(app);
@@ -2123,11 +2123,11 @@ namespace Ludwig {
 
   template auto webapp_routes<true>(
     uWS::TemplatedApp<true>& app,
-    std::shared_ptr<Controller> controller
+    shared_ptr<Controller> controller
   ) -> void;
 
   template auto webapp_routes<false>(
     uWS::TemplatedApp<false>& app,
-    std::shared_ptr<Controller> controller
+    shared_ptr<Controller> controller
   ) -> void;
 }

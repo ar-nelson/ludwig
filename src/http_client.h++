@@ -1,11 +1,6 @@
 #pragma once
-#include <functional>
-#include <optional>
+#include "common.h++"
 #include <regex>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <spdlog/fmt/fmt.h>
 
 namespace Ludwig {
   class HttpClient;
@@ -27,7 +22,7 @@ namespace Ludwig {
     auto status() -> uint16_t { return 0; };
     auto error() -> std::optional<std::string_view> { return { msg }; };
     auto header(std::string_view) -> std::string_view { return { nullptr, 0 }; };
-    auto body() -> std::string_view { return ""; };
+    auto body() -> std::string_view { return { nullptr, 0 }; };
   };
 
   using HttpResponseCallback = std::function<void (std::unique_ptr<HttpClientResponse>)>;

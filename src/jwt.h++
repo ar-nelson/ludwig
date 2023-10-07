@@ -1,8 +1,8 @@
 #pragma once
-#include <chrono>
-#include <optional>
-#include <cereal/archives/json.hpp>
+#include "common.h++"
 #include "base64.h++"
+#include <chrono>
+#include <cereal/archives/json.hpp>
 
 namespace Ludwig {
   static constexpr auto JWT_HEADER_TEXT = Base64::FixedString {

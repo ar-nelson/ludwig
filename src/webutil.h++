@@ -1,9 +1,7 @@
 #pragma once
+#include "common.h++"
 #include <regex>
-#include <string>
-#include <string_view>
 #include <sstream>
-#include <spdlog/fmt/fmt.h>
 #include <uWebSockets/App.h>
 #include <flatbuffers/string.h>
 
@@ -69,38 +67,6 @@ namespace Ludwig {
     lhs.write(fmt::format("{}", rhs));
     return lhs;
   }
-
-  /*
-  template <typename T> static inline auto operator<<(T& lhs, Escape rhs) -> T& {
-    size_t start = 0;
-    for (
-      size_t i = rhs.str.find_first_of(ESCAPED);
-      i != std::string_view::npos;
-      start = i + 1, i = rhs.str.find_first_of(ESCAPED, start)
-    ) {
-      if (i > start) lhs << rhs.str.substr(start, i - start);
-      switch (rhs.str[i]) {
-        case '<':
-          lhs << "&lt;";
-          break;
-        case '>':
-          lhs << "&gt;";
-          break;
-        case '\'':
-          lhs << "&apos;";
-          break;
-        case '"':
-          lhs << "&quot;";
-          break;
-        case '&':
-          lhs << "&amp;";
-          break;
-      }
-    }
-    if (start < rhs.str.length()) lhs << rhs.str.substr(start);
-    return lhs;
-  }
-  */
 }
 
 namespace fmt {

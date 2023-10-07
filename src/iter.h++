@@ -1,21 +1,12 @@
 #pragma once
+#include "common.h++"
 #include <lmdb.h>
 #include <xxhash.h>
-#include <spdlog/fmt/fmt.h>
-#include <spdlog/spdlog.h>
-#include <optional>
 #include <sstream>
-#include <string_view>
 #include <assert.h>
 #include <byteswap.h>
-#include <stdint.h>
-#include <stdlib.h>
-
-using std::optional, std::string_view;
 
 namespace Ludwig {
-  constexpr uint64_t ID_MAX = std::numeric_limits<uint64_t>::max();
-
 #  if __BIG_ENDIAN__
 #    define swap_bytes(x) x
 #  else
@@ -37,7 +28,7 @@ namespace Ludwig {
     Cursor(uint64_t a) : data{a}, size(1) {}
     Cursor(uint64_t a, uint64_t b) : data{swap_bytes(a), swap_bytes(b)}, size(2) {}
     Cursor(uint64_t a, uint64_t b, uint64_t c) : data{swap_bytes(a), swap_bytes(b), swap_bytes(c)}, size(3) {}
-    Cursor(string_view a, uint64_t hash_seed) : data{XXH3_64bits_withSeed(a.data(), a.length(), hash_seed)}, size(1) {}
+    Cursor(std::string_view a, uint64_t hash_seed) : data{XXH3_64bits_withSeed(a.data(), a.length(), hash_seed)}, size(1) {}
 
     inline auto int_field_0() const -> uint64_t {
       if (size == 1) return data[0];
@@ -108,7 +99,7 @@ namespace Ludwig {
     MDB_cursor* cur = nullptr;
     uint64_t n = 0;
     bool done = false;
-    optional<Cursor> from_key, to_key;
+    std::optional<Cursor> from_key, to_key;
     MDB_val key, value;
     auto (*fn_value)(MDB_val&, MDB_val&) -> T;
     auto (*fn_first)(DBIter<T>&) -> bool;
@@ -118,8 +109,8 @@ namespace Ludwig {
     DBIter(
       MDB_dbi dbi,
       MDB_txn* txn,
-      optional<Cursor> from_key = {},
-      optional<Cursor> to_key = {},
+      std::optional<Cursor> from_key = {},
+      std::optional<Cursor> to_key = {},
       auto (*fn_value)(MDB_val&, MDB_val&) -> T = [](MDB_val&, MDB_val& v) noexcept {
         return val_as<T>(v);
       },
@@ -159,7 +150,7 @@ namespace Ludwig {
       if (cur != nullptr) mdb_cursor_close(cur);
     }
 
-    inline auto get_cursor() const noexcept -> optional<Cursor> {
+    inline auto get_cursor() const noexcept -> std::optional<Cursor> {
       if (done) return {};
       return { Cursor(key) };
     }
@@ -223,8 +214,8 @@ namespace Ludwig {
   template <typename T> static inline auto DBIterReverse(
     MDB_dbi dbi,
     MDB_txn* txn,
-    optional<Cursor> from_key = {},
-    optional<Cursor> to_key = {},
+    std::optional<Cursor> from_key = {},
+    std::optional<Cursor> to_key = {},
     auto (*fn_value)(MDB_val&, MDB_val&) -> T = [](MDB_val&, MDB_val& v) noexcept {
       return val_as<T>(v);
     }

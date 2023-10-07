@@ -8,7 +8,7 @@
 using namespace Ludwig;
 
 TEST_CASE("hash password", "[controller]") {
-  static constexpr string_view
+  static constexpr std::string_view
     salt = "0123456789abcdef",
     password = "fhqwhgads",
     // Generated with https://argon2.online/ using this password and salt, mem 65535, iteration 3
