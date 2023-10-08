@@ -4,8 +4,8 @@
 #include "services/http_client.h++"
 #include <map>
 #include <regex>
-#include <monocypher.h>
 #include <static_vector.hpp>
+#include <openssl/crypto.h>
 
 namespace Ludwig {
   constexpr size_t ITEMS_PER_PAGE = 20;
@@ -48,7 +48,7 @@ namespace Ludwig {
     SecretString(const SecretString&) = delete;
     SecretString& operator=(const SecretString&) = delete;
     ~SecretString() {
-      crypto_wipe((char*)str.data(), str.length());
+      OPENSSL_cleanse((char*)str.data(), str.length());
     }
   };
 
@@ -359,7 +359,7 @@ namespace Ludwig {
       return db->open_read_txn();
     }
 
-    auto hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) const -> void;
+    static auto hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void;
 
     inline auto validate_session(ReadTxnBase& txn, uint64_t session_id) -> std::optional<uint64_t> {
       auto session = txn.get_session(session_id);

@@ -4,14 +4,9 @@
 import { faker } from "npm:@faker-js/faker";
 import { decode as hexDecode } from "https://deno.land/std/encoding/hex.ts";
 import { encode as base64Encode } from "https://deno.land/std/encoding/base64.ts";
+import { pbkdf2Sync } from "node:crypto";
 
-// The default password is "fhqwhgads", for every account.
 const PASSWORD_SALT = new TextEncoder().encode("0123456789abcdef");
-const PASSWORD_HASH = hexDecode(
-  new TextEncoder().encode(
-    "1fbf4b3d9639fc815fb394b95ac2913d14e0f9375a5a7e6fa6291ab660b9d9e6",
-  ),
-);
 
 const SCALE = 100;
 let nextId = 0;
@@ -90,14 +85,23 @@ function genUser(
 function genLocalUser(
   baseName: string,
   isAdmin = false,
+  password = faker.internet.password({ length: 8 }),
 ): { id: number; user: User; localUser: LocalUser } {
   const { id, user } = genUser(baseName);
+  const password_hash = pbkdf2Sync(
+    password,
+    PASSWORD_SALT,
+    600000,
+    32,
+    "sha256",
+  );
+  if (isAdmin) console.warn(`User: ${baseName}, Pass: ${password}`);
   return {
     id,
     user,
     localUser: {
       email: faker.internet.email(),
-      password_hash: { bytes: [...PASSWORD_HASH] },
+      password_hash: { bytes: [...password_hash] },
       password_salt: { bytes: [...PASSWORD_SALT] },
       show_avatars: faker.datatype.boolean(0.8),
       show_karma: faker.datatype.boolean(0.8),

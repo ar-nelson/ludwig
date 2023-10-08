@@ -3,9 +3,10 @@
 #include "models/protocols.h++"
 #include <flatbuffers/minireflect.h>
 #include <regex>
-#include <monocypher-ed25519.h>
+#include <openssl/crypto.h>
+#include <openssl/hmac.h>
 
-using std::optional, std::string, std::string_view;
+using std::optional, std::runtime_error, std::string, std::string_view;
 
 namespace Ludwig {
   auto make_jwt(Jwt payload, const uint8_t secret[JWT_SECRET_SIZE]) -> string {
@@ -25,10 +26,15 @@ namespace Ludwig {
     }
     auto buf = fmt::format("{}.{}", JWT_HEADER, Base64::encode(json, false));
     uint8_t sig[64];
-    crypto_sha512_hmac(
-      sig, secret, JWT_SECRET_SIZE,
-      reinterpret_cast<const uint8_t*>(buf.data()), buf.length()
-    );
+    unsigned sig_len;
+    if (!HMAC(
+      EVP_sha512(), secret, JWT_SECRET_SIZE,
+      reinterpret_cast<const uint8_t*>(buf.data()), buf.length(),
+      sig, &sig_len
+    )) {
+      throw runtime_error("JWT HMAC failed");
+    }
+    assert(sig_len == 64);
     fmt::format_to(std::back_inserter(buf), ".{}", Base64::encode(sig, 64, false));
     return buf;
   }
@@ -90,11 +96,17 @@ namespace Ludwig {
     // Check the signature
     uint8_t expected_sig[64], actual_sig[64];
     if (Base64::decode(sig_b64, expected_sig, 64) != 64) return {};
-    crypto_sha512_hmac(
-      actual_sig, secret, JWT_SECRET_SIZE,
-      reinterpret_cast<const uint8_t*>(to_sign.data()), to_sign.length()
-    );
-    if (crypto_verify64(expected_sig, actual_sig)) {
+    unsigned sig_len;
+    if (!HMAC(
+      EVP_sha512(), secret, JWT_SECRET_SIZE,
+      reinterpret_cast<const uint8_t*>(to_sign.data()), to_sign.length(),
+      actual_sig, &sig_len
+    )) {
+      spdlog::warn("JWT HMAC failed");
+      return {};
+    }
+    assert(sig_len == 64);
+    if (CRYPTO_memcmp(expected_sig, actual_sig, 64)) {
       if (spdlog::get_level() <= spdlog::level::warn) {
         const auto payload = parse_jwt_payload(payload_b64);
         if (payload) {

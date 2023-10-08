@@ -12,8 +12,7 @@ TEST_CASE("hash password", "[controller]") {
   static constexpr std::string_view
     salt = "0123456789abcdef",
     password = "fhqwhgads",
-    // Generated with https://argon2.online/ using this password and salt, mem 65535, iteration 3
-    expected_hash = "1fbf4b3d9639fc815fb394b95ac2913d14e0f9375a5a7e6fa6291ab660b9d9e6";
+    expected_hash = "3e7bdeadbcbede063612b1ced9c42852848d088c4bfa5ed160862d168ec11e99";
 
   TempFile file;
   auto db = std::make_shared<DB>(file.name);

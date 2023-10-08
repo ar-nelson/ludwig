@@ -44,15 +44,9 @@ add_library(xxHash INTERFACE)
 target_include_directories(xxHash SYSTEM INTERFACE xxHash/)
 target_compile_definitions(xxHash INTERFACE XXH_INLINE_ALL)
 
-add_library(monocypher STATIC
-  monocypher/monocypher.c
-  monocypher/optional/monocypher-ed25519.c)
-target_include_directories(monocypher PUBLIC monocypher/ monocypher/optional/)
-
 add_library(csprng STATIC
   csprng/source/csprng.cpp)
 target_include_directories(csprng PUBLIC csprng/source/)
-
 
 option(SIMDJSON_BUILD_STATIC_LIB "Build simdjson_static library along with simdjson" ON)
 add_subdirectory(simdjson simdjson)

@@ -150,7 +150,6 @@ set (LUDWIG_LIBS
   giflib
   imagedec
   lmdb
-  monocypher
   png_static
   simdjson_static
   spdlog

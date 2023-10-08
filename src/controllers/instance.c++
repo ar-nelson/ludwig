@@ -2,19 +2,17 @@
 #include "util/web.h++"
 #include <mutex>
 #include <regex>
-#include <monocypher.h>
 #include <duthomhas/csprng.hpp>
+#include <openssl/evp.h>
 
 using std::function, std::nullopt, std::regex, std::regex_match, std::optional,
       std::shared_ptr, std::string, std::string_view, flatbuffers::FlatBufferBuilder;
 
 namespace Ludwig {
-  static constexpr crypto_argon2_config ARGON2_CONFIG = {
-    .algorithm = CRYPTO_ARGON2_ID,
-    .nb_blocks = 65536,
-    .nb_passes = 3,
-    .nb_lanes = 1
-  };
+  // PBKDF2-HMAC-SHA256 iteration count, as suggested by
+  // https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#pbkdf2
+  static constexpr uint32_t PASSWORD_HASH_ITERATIONS = 600'000;
+
   //static constexpr uint64_t JWT_DURATION = 86400; // 1 day
   static constexpr double RANK_GRAVITY = 1.8;
 
@@ -356,20 +354,15 @@ namespace Ludwig {
     cached_site_detail.description = string(txn.get_setting_str(SettingsKey::description));
   }
 
-  auto InstanceController::hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) const -> void {
-    // Lock the password hashing step with a mutex,
-    // because the Argon2i context is shared
-    static std::mutex mutex;
-    static uint8_t work_area[ARGON2_CONFIG.nb_blocks * 1024];
-    std::lock_guard<std::mutex> lock(mutex);
-    crypto_argon2(
-      hash, 32, work_area, ARGON2_CONFIG, crypto_argon2_inputs {
-        .pass = reinterpret_cast<const uint8_t*>(password.str.data()),
-        .salt = salt,
-        .pass_size = static_cast<uint32_t>(password.str.length()),
-        .salt_size = 16
-      }, {}
-    );
+  auto InstanceController::hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void {
+    if (!PKCS5_PBKDF2_HMAC(
+      password.str.data(), password.str.length(),
+      salt, 16,
+      PASSWORD_HASH_ITERATIONS, EVP_sha256(),
+      32, hash
+    )) {
+      throw std::runtime_error("Allocation failure when hashing password");
+    }
   }
 
   auto InstanceController::should_show(const ThreadListEntry& thread, Login login, bool hide_cw) -> bool {
@@ -511,7 +504,7 @@ namespace Ludwig {
     hash_password(std::move(password), local_user->get().password_salt()->bytes()->Data(), hash);
 
     // Comment that this returns 0 on success, 1 on failure!
-    if (crypto_verify32(hash, local_user->get().password_hash()->bytes()->Data())) {
+    if (CRYPTO_memcmp(hash, local_user->get().password_hash()->bytes()->Data(), 32)) {
       // TODO: Lock users out after repeated failures
       spdlog::debug("Tried to login with wrong password for user {}", username_or_email);
       throw ControllerError("Invalid username or password", 400);

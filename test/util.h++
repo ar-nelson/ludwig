@@ -5,10 +5,10 @@
 using namespace std::literals::string_view_literals;
 
 struct TempFile {
-  char name[L_tmpnam];
+  char* name;
 
   TempFile() {
-    std::tmpnam(name);
+    name = std::tmpnam(nullptr);
   }
   ~TempFile() {
     std::remove(name);
@@ -39,5 +39,6 @@ struct TempDB {
   }
   ~TempDB() {
     mdb_env_close(env);
+    std::remove(fmt::format("{}-lock", file.name).c_str());
   }
 };
