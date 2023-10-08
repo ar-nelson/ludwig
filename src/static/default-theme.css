@@ -260,7 +260,10 @@ body > div, body > main, body > header, body > footer {
 
 #page-header {
   grid-area: header;
-  padding: 2rem 1rem;
+  display: flex;
+  align-items: center;
+  height: 160px;
+  padding: 2rem;
   margin-bottom: 2rem;
   border-bottom: 1px dotted var(--color-fg);
 }

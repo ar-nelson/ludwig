@@ -8,10 +8,10 @@ namespace Ludwig {
   class HttpClientResponse {
   public:
     virtual inline ~HttpClientResponse() {};
-    virtual auto status() -> uint16_t = 0;
-    virtual auto error() -> std::optional<std::string_view> = 0;
-    virtual auto header(std::string_view name) -> std::string_view = 0;
-    virtual auto body() -> std::string_view = 0;
+    virtual auto status() const -> uint16_t = 0;
+    virtual auto error() const -> std::optional<std::string_view> = 0;
+    virtual auto header(std::string_view name) const -> std::string_view = 0;
+    virtual auto body() const -> std::string_view = 0;
   };
 
   class ErrorHttpClientResponse : public HttpClientResponse {
@@ -19,30 +19,29 @@ namespace Ludwig {
     std::string msg;
   public:
     ErrorHttpClientResponse(std::string msg) : msg(msg) {}
-    auto status() -> uint16_t { return 0; };
-    auto error() -> std::optional<std::string_view> { return { msg }; };
-    auto header(std::string_view) -> std::string_view { return { nullptr, 0 }; };
-    auto body() -> std::string_view { return { nullptr, 0 }; };
+    auto status() const -> uint16_t { return 0; };
+    auto error() const -> std::optional<std::string_view> { return { msg }; };
+    auto header(std::string_view) const -> std::string_view { return { nullptr, 0 }; };
+    auto body() const -> std::string_view { return { nullptr, 0 }; };
   };
 
-  using HttpResponseCallback = std::function<void (std::unique_ptr<HttpClientResponse>)>;
+  using HttpResponseCallback = std::function<void (std::shared_ptr<const HttpClientResponse>)>;
 
   class HttpClientRequest {
+  private:
+    static inline const std::regex url_regex = std::regex(
+      R"((https?)://([\w\-.]+)(?::\d+)?(/[^#]*)?(?:#.*)?)",
+      std::regex_constants::ECMAScript
+    );
   public:
     HttpClient& client;
-    std::string_view url, method;
-    std::string host;
+    std::string url, method, host, request;
     bool https = false, has_body = false;
-    std::string request;
 
-    HttpClientRequest(HttpClient& client, std::string_view url, std::string_view method)
+    HttpClientRequest(HttpClient& client, std::string url, std::string method)
       : client(client), url(url), method(method) {
-      static const std::regex url_regex(
-        R"((https?)://([\w\-.]+)(?::\d+)?(/[^#]*)?(?:#.*)?)",
-        std::regex_constants::ECMAScript
-      );
-      std::match_results<std::string_view::const_iterator> match;
-      if (!std::regex_match(url.begin(), url.end(), match, url_regex)) {
+      std::smatch match;
+      if (!std::regex_match(url, match, url_regex)) {
         throw std::runtime_error(fmt::format("Invalid HTTP URL: {}", url));
       }
       https = match.str(1) == "https";
@@ -67,7 +66,10 @@ namespace Ludwig {
       return *this;
     }
 
-    inline auto with_new_url(std::string_view new_url) -> HttpClientRequest {
+    inline auto with_new_url(std::string new_url) -> HttpClientRequest {
+      if (!std::regex_match(new_url, url_regex) && new_url.starts_with("/")) {
+        new_url = fmt::format("{}://{}{}", https ? "https" : "http", host, new_url);
+      }
       auto new_req = HttpClientRequest(client, new_url, method);
       new_req.has_body = has_body || request.ends_with("\r\n\r\n");
       new_req.request.append(request.substr(request.find("User-Agent: ludwig\r\n") + 18));
@@ -82,16 +84,16 @@ namespace Ludwig {
     virtual auto fetch(HttpClientRequest&& req, HttpResponseCallback callback) -> void = 0;
   public:
     virtual inline ~HttpClient() {};
-    inline auto get(std::string_view url) -> HttpClientRequest {
+    inline auto get(std::string url) -> HttpClientRequest {
       return HttpClientRequest(*this, url, "GET");
     }
-    inline auto post(std::string_view url) -> HttpClientRequest {
+    inline auto post(std::string url) -> HttpClientRequest {
       return HttpClientRequest(*this, url, "POST");
     }
-    inline auto put(std::string_view url) -> HttpClientRequest {
+    inline auto put(std::string url) -> HttpClientRequest {
       return HttpClientRequest(*this, url, "PUT");
     }
-    inline auto delete_(std::string_view url) -> HttpClientRequest {
+    inline auto delete_(std::string url) -> HttpClientRequest {
       return HttpClientRequest(*this, url, "DELETE");
     }
 

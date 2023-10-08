@@ -2,12 +2,16 @@
 #include "services/db.h++"
 #include "services/asio_http_client.h++"
 #include "controllers/instance.h++"
+#include "controllers/remote_media.h++"
 #include "views/webapp.h++"
+#include "views/media.h++"
 #include <uWebSockets/App.h>
 #include <asio.hpp>
 #include <optparse.h>
 #include <fstream>
 #include <csignal>
+
+using namespace Ludwig;
 
 static us_listen_socket_t* global_socket = nullptr;
 
@@ -54,7 +58,7 @@ int main(int argc, char** argv) {
     const auto importfile = options["import"];
     std::ifstream in(importfile, std::ios_base::in);
     spdlog::info("Importing database dump from {}", importfile);
-    Ludwig::DB db(dbfile, in, map_size);
+    DB db(dbfile, in, map_size);
     spdlog::info("Import complete. You can now start Ludwig without --import.");
     return EXIT_SUCCESS;
   }
@@ -68,9 +72,12 @@ int main(int argc, char** argv) {
   auto io = std::make_shared<asio::io_context>();
   auto ssl = std::make_shared<asio::ssl::context>(asio::ssl::context::sslv23);
   ssl->set_default_verify_paths();
-  auto http_client = std::make_shared<Ludwig::AsioHttpClient>(io, ssl);
-  auto db = std::make_shared<Ludwig::DB>(dbfile, map_size);
-  auto controller = std::make_shared<Ludwig::InstanceController>(db);
+  auto http_client = std::make_shared<AsioHttpClient>(io, ssl);
+  auto db = std::make_shared<DB>(dbfile, map_size);
+  auto instance_c = std::make_shared<InstanceController>(db);
+  auto remote_media_c = std::make_shared<RemoteMediaController>(db, http_client);
+
+  std::thread io_thread([io]{io->run();});
 
   struct sigaction sigint_handler { .sa_flags = 0 }, sigterm_handler { .sa_flags = 0 };
   sigint_handler.sa_handler = signal_handler;
@@ -81,13 +88,17 @@ int main(int argc, char** argv) {
   sigaction(SIGTERM, &sigterm_handler, nullptr);
 
   uWS::App app;
-  webapp_routes(app, controller);
+  media_routes(app, remote_media_c);
+  webapp_routes(app, instance_c);
   app.listen(port, [port](auto *listen_socket) {
     if (listen_socket) {
       global_socket = listen_socket;
       spdlog::info("Listening on port {}", port);
     }
   }).run();
+
+  io->stop();
+  io_thread.join();
 
   if (global_socket != nullptr) {
     spdlog::info("Shut down cleanly");

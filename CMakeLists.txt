@@ -125,8 +125,11 @@ set (LUDWIG_COMMON_SRC
   src/util/jwt.c++
   src/services/db.c++
   src/services/asio_http_client.c++
+  src/services/thumbnail_cache.c++
   src/models/protocols_parser.c++
   src/controllers/instance.c++
+  src/controllers/remote_media.c++
+  src/views/media.c++
   src/views/webapp.c++
 )
 

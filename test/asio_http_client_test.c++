@@ -3,11 +3,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <static_block.hpp>
 
-using namespace std::literals;
-
-//static_block {
-//  spdlog::set_level(spdlog::level::debug);
-//}
+static_block {
+  spdlog::set_level(spdlog::level::debug);
+}
 
 using namespace Ludwig;
 
@@ -20,7 +18,7 @@ TEST_CASE("send request to example.com", "[http_client]") {
   std::ostringstream response_body;
   client.get("https://example.com")
     .header("Accept", "text/html")
-    .dispatch([&](std::unique_ptr<HttpClientResponse> response) {
+    .dispatch([&](std::shared_ptr<const HttpClientResponse> response) {
       REQUIRE(response->error().value_or("") == "");
       REQUIRE(response->status() == 200);
       REQUIRE(response->header("content-type").starts_with("text/html"));

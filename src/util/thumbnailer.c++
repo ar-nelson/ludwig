@@ -154,7 +154,8 @@ namespace Ludwig {
       std::string_view mimetype,
       const uint8_t* data,
       size_t sz,
-      uint16_t target_size_pixels,
+      uint16_t target_width,
+      uint16_t target_height,
       size_t target_size_bytes
     ) -> std::string {
       std::string intermediate;
@@ -178,9 +179,7 @@ namespace Ludwig {
           else reader = WebPGuessImageReader(data, sz);
 
           if (!reader(data, sz, &pic, true, nullptr)) {
-            throw std::runtime_error(
-              "Image parse failed, cannot generate thumbnail. Error: " + ENC_ERROR_MESSAGES[pic.error_code]
-            );
+            throw std::runtime_error("Image parse failed, cannot generate thumbnail.");
           }
         }
         WebPConfig enc_config = { .lossless = true, .segments = 1, .pass = 1 };
@@ -204,18 +203,26 @@ namespace Ludwig {
       if (!WebPGetInfo(data, sz, &original_w, &original_h)) {
         throw std::runtime_error("WebP stream is invalid");
       }
-      if (original_w != original_h) {
+      const float aspect_ratio = (float)target_width / (float)target_height,
+        original_aspect_ratio = (float)original_w / (float)original_h;
+      if ((int)std::round((float)original_h * aspect_ratio) != original_w) {
         config.options.use_cropping = true;
-        int cropped_sz = config.options.crop_width = config.options.crop_height =
-          std::min(original_w, original_h);
-        if (original_w > original_h) {
-          config.options.crop_left = (original_w - original_h) / 2;
-        } else {
-          config.options.crop_top = (original_h - original_w) / 2;
+        if (original_aspect_ratio < aspect_ratio) /* tall */ {
+          config.options.crop_width = original_w;
+          const auto h = config.options.crop_height = (int)std::round((float)original_w / aspect_ratio);
+          config.options.crop_top = (original_h - h) / 2;
+          config.options.scaled_width = std::min((uint16_t)original_w, target_width);
+          config.options.scaled_height = (int)std::round((float)config.options.scaled_width / aspect_ratio);
+        } else /* wide */ {
+          config.options.crop_height = original_h;
+          const auto w = config.options.crop_width = (int)std::round((float)original_h * aspect_ratio);
+          config.options.crop_left = (original_w - w) / 2;
+          config.options.scaled_height = std::min((uint16_t)original_h, target_height);
+          config.options.scaled_width = (int)std::round((float)config.options.scaled_height * aspect_ratio);
         }
-        config.options.scaled_width = config.options.scaled_height = std::min((uint16_t)cropped_sz, target_size_pixels);
       } else {
-        config.options.scaled_width = config.options.scaled_height = std::min((uint16_t)original_w, target_size_pixels);
+        config.options.scaled_width = std::min((uint16_t)original_w, target_width);
+        config.options.scaled_height = std::min((uint16_t)original_h, target_height);
       }
       if (auto err = WebPDecode(data, sz, &config)) {
         throw std::runtime_error("WebP decode failed. Error: " + DEC_ERROR_MESSAGES[err]);
@@ -249,7 +256,8 @@ namespace Ludwig {
   auto generate_thumbnail(
     std::optional<std::string_view> mimetype,
     std::string_view data,
-    uint16_t width
+    uint16_t width,
+    uint16_t height
   ) -> std::string {
     Thumbnailer t;
     return t.generate(
@@ -257,7 +265,8 @@ namespace Ludwig {
       reinterpret_cast<const uint8_t*>(data.data()),
       data.length(),
       width,
-      (width * width) / 8 // for 256x256, this is about 8KiB
+      height ? height : width,
+      (width * (height ? height : width)) / 8 // for 256x256, this is about 8KiB
     );
   }
 }

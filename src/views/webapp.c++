@@ -297,7 +297,7 @@ namespace Ludwig {
             }
             err = ControllerError("Unhandled internal exception", 500);
           }
-          rsp->cork([req, rsp, self, &err]() {
+          rsp->cork([req, rsp, self, &err]{
             if (is_htmx(*req)) {
               rsp->writeHeader("Content-Type", TYPE_HTML);
               rsp->writeHeader("HX-Retarget", "#toasts");
@@ -309,9 +309,8 @@ namespace Ludwig {
             }
           });
         });
-        rsp->onAborted([rsp](){
-          rsp->writeStatus(http_status(400));
-          rsp->endWithoutBody({}, true);
+        rsp->onAborted([]{
+          spdlog::warn("HTTP session aborted");
         });
       };
     }
@@ -575,8 +574,8 @@ namespace Ludwig {
       const auto& user = user_opt->get();
       write_fmt(rsp, R"(<a class="user-link" href="/u/{}">)", Escape(user.name()));
       if (user.avatar_url()) {
-        write_fmt(rsp, R"(<img aria-hidden="true" class="avatar" loading="lazy" src="{}">)",
-          Escape(user.avatar_url())
+        write_fmt(rsp, R"(<img aria-hidden="true" class="avatar" loading="lazy" src="/media/user/{}/avatar.webp">)",
+          Escape{user.name()}
         );
       } else {
         rsp << R"(<svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#user"></svg>)";
@@ -605,8 +604,8 @@ namespace Ludwig {
       const auto& board = board_opt->get();
       write_fmt(rsp, R"(<a class="board-link" href="/b/{}">)", Escape(board.name()));
       if (board.icon_url()) {
-        write_fmt(rsp, R"(<img aria-hidden="true" class="avatar" loading="lazy" src="{}">)",
-          Escape(board.icon_url())
+        write_fmt(rsp, R"(<img aria-hidden="true" class="avatar" loading="lazy" src="/media/board/{}/icon.webp">)",
+          Escape(board.name())
         );
       } else {
         rsp << R"(<svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#book"></svg>)";
@@ -1538,8 +1537,8 @@ namespace Ludwig {
             .canonical_path = "/b/" + board->board().name()->str(),
             .banner_title = display_name(board->board()),
             .banner_link = "/b/" + board->board().name()->str(),
-            .banner_image = board->board().banner_url() ? optional(board->board().banner_url()->string_view()) : nullopt,
-            .card_image = board->board().icon_url() ? optional(board->board().icon_url()->string_view()) : nullopt
+            .banner_image = board->board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board->board().name()->string_view())) : nullopt,
+            .card_image = board->board().icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board->board().name()->string_view())) : nullopt
           });
           rsp << "<div>";
           self->write_sidebar(rsp, site, login, {board});
@@ -1568,9 +1567,9 @@ namespace Ludwig {
             .canonical_path = fmt::format("/b/{}/create_thread", board->board().name()->string_view()),
             .banner_title = display_name(board->board()),
             .banner_link = fmt::format("/b/{}", board->board().name()->string_view()),
-            .banner_image = board->board().banner_url() ? optional(board->board().banner_url()->string_view()) : nullopt,
+            .banner_image = board->board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board->board().name()->string_view())) : nullopt,
             .page_title = "Create Thread",
-            .card_image = board->board().icon_url() ? optional(board->board().icon_url()->string_view()) : nullopt
+            .card_image = board->board().icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board->board().name()->string_view())) : nullopt
           });
           self->write_create_thread_form(rsp, show_url, *board, *login);
           end_with_html_footer(rsp, page.time_elapsed());
@@ -1622,8 +1621,8 @@ namespace Ludwig {
             .canonical_path = "/u/" + user->user().name()->str(),
             .banner_title = display_name(user->user()),
             .banner_link = "/u/" + user->user().name()->str(),
-            .banner_image = user->user().banner_url() ? optional(user->user().banner_url()->string_view()) : nullopt,
-            .card_image = user->user().avatar_url() ? optional(user->user().avatar_url()->string_view()) : nullopt
+            .banner_image = user->user().banner_url() ? optional(fmt::format("/media/user/{}/banner.webp", user->user().name()->string_view())) : nullopt,
+            .card_image = user->user().avatar_url() ? optional(fmt::format("/media/user/{}/avatar.webp", user->user().name()->string_view())) : nullopt
           });
           rsp << "<div>";
           self->write_sidebar(rsp, site, login);
@@ -1659,8 +1658,8 @@ namespace Ludwig {
             .canonical_path = fmt::format("/thread/{:x}", detail->id),
             .banner_title = display_name(board->board()),
             .banner_link = fmt::format("/b/{}", board->board().name()->string_view()),
-            .banner_image = board->board().banner_url() ? optional(board->board().banner_url()->string_view()) : nullopt,
-            .card_image = board->board().icon_url() ? optional(board->board().icon_url()->string_view()) : nullopt
+            .banner_image = board->board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board->board().name()->string_view())) : nullopt,
+            .card_image = board->board().icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board->board().name()->string_view())) : nullopt
           });
           rsp << "<div>";
           self->write_sidebar(rsp, site, login, board);
@@ -1685,7 +1684,7 @@ namespace Ludwig {
             .canonical_path = fmt::format("/thread/{:x}/edit", thread->id),
             .banner_title = display_name(thread->board()),
             .banner_link = fmt::format("/b/{}", thread->board().name()->string_view()),
-            .banner_image = thread->board().banner_url() ? optional(thread->board().banner_url()->string_view()) : nullopt,
+            .banner_image = thread->board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", thread->board().name()->string_view())) : nullopt,
           });
           self->write_edit_thread_form(rsp, *thread, *login);
           end_with_html_footer(rsp, page.time_elapsed());
@@ -1715,8 +1714,8 @@ namespace Ludwig {
             .canonical_path = fmt::format("/comment/{:x}", detail->id),
             .banner_title = display_name(board->board()),
             .banner_link = fmt::format("/b/{}", board->board().name()->string_view()),
-            .banner_image = board->board().banner_url() ? optional(board->board().banner_url()->string_view()) : nullopt,
-            .card_image = board->board().icon_url() ? optional(board->board().icon_url()->string_view()) : nullopt
+            .banner_image = board->board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board->board().name()->string_view())) : nullopt,
+            .card_image = board->board().icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board->board().name()->string_view())) : nullopt
           });
           rsp << "<div>";
           self->write_sidebar(rsp, site, login, board);
@@ -1802,8 +1801,9 @@ namespace Ludwig {
             .canonical_path = fmt::format("/b/{}/settings", board->board().name()->string_view()),
             .banner_title = display_name(board->board()),
             .banner_link = fmt::format("/b/{}", board->board().name()->string_view()),
-            .banner_image = board->board().banner_url() ? optional(board->board().banner_url()->string_view()) : nullopt,
+            .banner_image = board->board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board->board().name()->string_view())) : nullopt,
             .page_title = "Board Settings",
+            .card_image = board->board().icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board->board().name()->string_view())) : nullopt
           });
           rsp << "<main>";
           self->write_board_settings_form(rsp, *board);
