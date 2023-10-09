@@ -1097,6 +1097,7 @@ namespace Ludwig {
       b.add_created_at(now_s());
       b.add_author(author);
       b.add_thread(thread_id = parent_comment ? parent_comment->get().thread() : parent);
+      b.add_parent(parent);
       // TODO: Parse Markdown and HTML
       b.add_content_raw(content_raw_s);
       b.add_content_safe(content_safe_s);

@@ -435,9 +435,11 @@ namespace Ludwig {
 
 #   define HTML_FIELD(ID, LABEL, TYPE, EXTRA) \
       "<label for=\"" ID "\"><span>" LABEL "</span><input type=\"" TYPE "\" name=\"" ID "\" id=\"" ID "\"" EXTRA "></label>"
+#   define HTML_CHECKBOX(ID, LABEL, EXTRA) \
+      "<label for=\"" ID "\"><span>" LABEL "</span><input type=\"checkbox\" class=\"a11y\" name=\"" ID "\" id=\"" ID "\"" EXTRA "><div class=\"toggle-switch\"></div></label>"
 #   define HTML_TEXTAREA(ID, LABEL, EXTRA, CONTENT) \
       "<label for=\"" ID "\"><span>" LABEL "</span><div><textarea name=\"" ID "\" id=\"" ID "\"" EXTRA ">" CONTENT \
-      R"(</textarea><p><small><a href="https://www.markdownguide.org/cheat-sheet/" target="_blank">Markdown</a> formatting is supported.</small></p></div></label>)"
+      R"(</textarea><small><a href="https://www.markdownguide.org/cheat-sheet/" target="_blank">Markdown</a> formatting is supported.</small></div></label>)"
 
     inline auto write_subscribe_button(
       Response& rsp,
@@ -455,12 +457,9 @@ namespace Ludwig {
       );
     }
 
-    static constexpr string_view LOGIN_FIELDS =
+    static constexpr string_view HONEYPOT_FIELD =
       R"(<label for="username" class="a11y"><span>Don't type here unless you're a bot</span>)"
-      R"(<input type="text" name="username" id="username" tabindex="-1" autocomplete="off"></label>)"
-      HTML_FIELD("actual_username", "Username or email", "text", R"( placeholder="Username or email")")
-      HTML_FIELD("password", "Password", "password", R"( placeholder="password")")
-      HTML_FIELD("remember", "Remember me", "checkbox", "");
+      R"(<input type="text" name="username" id="username" tabindex="-1" autocomplete="off"></label>)";
 
     auto write_sidebar(
       Response& rsp,
@@ -493,10 +492,13 @@ namespace Ludwig {
       rsp << "</form></section>";
       if (!login) {
         write_fmt(rsp,
-          R"(<section id="login-section"><h2>Login</h2><form method="post" action="/login" id="login-form">)"
-          R"({}<input type="submit" value="Login" class="big-button"></form>)"
+          R"(<section id="login-section"><h2>Login</h2><form method="post" action="/login" id="login-form">{})"
+          R"(<label for="actual_username"><span class="a11y">Username or email</span><input type="text" name="actual_username" id="actual_username" placeholder="Username or email"></label>)"
+          R"(<label for="password"><span class="a11y">Password</span><input type="password" name="password" id="password" placeholder="Password"></label>)"
+          R"(<label for="remember"><input type="checkbox" name="remember" id="remember"> Remember me</label>)"
+          R"(<input type="submit" value="Login" class="big-button"></form>)"
           R"(<a href="/register" class="big-button">Register</a></section>)",
-          LOGIN_FIELDS
+          HONEYPOT_FIELD
         );
       } else if (board) {
         rsp << R"(<section id="actions-section"><h2>Actions</h2>)";
@@ -1068,7 +1070,7 @@ namespace Ludwig {
 
     auto write_reply_form(Response& rsp, uint64_t parent) noexcept -> void {
       write_fmt(rsp,
-        R"(<form class="reply-form" method="post" action="/do/reply" id="reply"><input type="hidden" name="parent" value="{:x}">)"
+        R"(<form class="form reply-form" method="post" action="/do/reply" id="reply"><input type="hidden" name="parent" value="{:x}">)"
         HTML_TEXTAREA("text_content", "Reply", R"( placeholder="Write your reply here")", "")
         HTML_FIELD("content_warning", "Content warning (optional)", "text", "")
         R"(<input type="submit" value="Reply">)"
@@ -1138,15 +1140,17 @@ namespace Ludwig {
         }
       }
       write_fmt(rsp, R"(<section class="comments" id="comments"><h2>{:d} comments</h2>)", thread.stats().descendant_count());
-      if (InstanceController::can_reply_to(thread, login)) {
-        write_reply_form(rsp, thread.id);
-      }
       if (thread.stats().descendant_count()) {
         write_sort_options(
           rsp, sort_str, SortFormType::Comments,
           !thread.board().content_warning() && !thread.thread().content_warning(),
           false, show_images, show_cws
         );
+      }
+      if (InstanceController::can_reply_to(thread, login)) {
+        write_reply_form(rsp, thread.id);
+      }
+      if (thread.stats().descendant_count()) {
         write_comment_tree(rsp, thread.comments, thread.id, sort_str, login, true, true);
       }
       rsp << "</section></article>";
@@ -1159,9 +1163,12 @@ namespace Ludwig {
 
     inline auto write_login_form(Response& rsp, optional<string_view> error = {}) noexcept -> void {
       write_fmt(rsp,
-        R"(<main><form class="form-page" method="post" action="/login">{}{})"
+        R"(<main><form class="form form-page" method="post" action="/login">{}{})"
+        HTML_FIELD("actual_username", "Username or email", "text", "")
+        HTML_FIELD("password", "Password", "password", "")
+        HTML_CHECKBOX("remember", "Remember me", "")
         R"(<input type="submit" value="Login"></form></main>)",
-        error_banner(error), LOGIN_FIELDS
+        error_banner(error), HONEYPOT_FIELD
       );
     }
 
@@ -1174,7 +1181,7 @@ namespace Ludwig {
       bool show_images = false
     ) noexcept -> void {
       write_fmt(rsp,
-        R"(<li><article class="comment-with-comments"><div class="comment" id="{:x}"><h2 class="comment-info"><span>)",
+        R"(<article class="comment-with-comments"><div class="comment" id="{:x}"><h2 class="comment-info"><span>)",
         comment.id
       );
       write_user_link(rsp, comment._author);
@@ -1182,19 +1189,20 @@ namespace Ludwig {
       write_datetime(rsp, comment.comment().created_at());
       write_fmt(rsp, R"(</span></h3><div class="comment-content">{}</div>)", comment.comment().content_safe()->string_view());
       write_vote_buttons(rsp, comment, login);
-      write_fmt(rsp, R"(<div class="controls"><a href="/comment/{0:x}"><span></span>)", comment.id);
+      rsp << R"(<div class="controls"><span></span>)";
       write_controls_submenu(rsp, comment, login, true, false);
-      rsp << "</div></div>";
-      rsp << R"(<section class="comments" id="comments"><h2>)" << comment.stats().descendant_count() << R"( replies</h2>)";
-      if (InstanceController::can_reply_to(comment, login)) {
-        write_reply_form(rsp, comment.id);
-      }
+      write_fmt(rsp, R"(</div></div><section class="comments" id="comments"><h2>{:d} replies</h2>)", comment.stats().descendant_count());
       if (comment.stats().descendant_count()) {
         write_sort_options(
           rsp, sort_str, SortFormType::Comments,
           !comment.comment().content_warning() && !comment.thread().content_warning(),
           false, show_images, show_cws
         );
+      }
+      if (InstanceController::can_reply_to(comment, login)) {
+        write_reply_form(rsp, comment.id);
+      }
+      if (comment.stats().descendant_count()) {
         write_comment_tree(rsp, comment.comments, comment.id, sort_str, login, true, true);
       }
       rsp << "</section></article>";
@@ -1202,7 +1210,7 @@ namespace Ludwig {
 
     inline auto write_register_form(Response& rsp, optional<string_view> error = {}) noexcept -> void {
       write_fmt(rsp,
-        R"(<main><form class="form-page" method="post" action="/do/register">{})"
+        R"(<main><form class="form form-page" method="post" action="/do/register">{})"
         R"(<label for="username" class="a11y"><span>Don't type here unless you're a bot</span>)"
         R"(<input type="text" name="username" id="username" tabindex="-1" autocomplete="off"></label>)"
         HTML_FIELD("actual_username", "Username", "text", "")
@@ -1221,15 +1229,15 @@ namespace Ludwig {
       optional<string_view> error = {}
     ) noexcept -> void {
       write_fmt(rsp,
-        R"(<main><form class="form-page" method="post" action="/do/create_board"><h2>Create Board</h2>{})"
+        R"(<main><form class="form form-page" method="post" action="/do/create_board"><h2>Create Board</h2>{})"
         HTML_FIELD("name", "Name", "text", R"( autocomplete="off" required)")
         HTML_FIELD("display_name", "Display name", "text", R"( autocomplete="off")")
         HTML_FIELD("content_warning", "Content warning (optional)", "text", R"( autocomplete="off")")
-        HTML_FIELD("private", "Private (only visible to members)", "checkbox", "")
-        HTML_FIELD("restricted_posting", "Restrict posting to moderators", "checkbox", "")
-        HTML_FIELD("approve_subscribe", "Approval required to join", "checkbox", "")
-        //HTML_FIELD("invite_required", "Invite code required to join", "checkbox", "")
-        //HTML_FIELD("invite_mod_only", "Only moderators can invite new members", "checkbox", "")
+        HTML_CHECKBOX("private", "Private (only visible to members)", "")
+        HTML_CHECKBOX("restricted_posting", "Restrict posting to moderators", "")
+        HTML_CHECKBOX("approve_subscribe", "Approval required to join", "")
+        //HTML_CHECKBOX("invite_required", "Invite code required to join", "")
+        //HTML_CHECKBOX("invite_mod_only", "Only moderators can invite new members", "")
         R"(<fieldset><legend>Voting</legend>)"
           R"(<label for="vote_both"><input type="radio" id="vote_both" name="voting" value="2" checked> Allow voting</label>)"
           R"(<label for="vote_up"><input type="radio" id="vote_up" name="voting" value="1"> Only upvotes allowed</label>)"
@@ -1249,7 +1257,7 @@ namespace Ludwig {
       optional<string_view> error = {}
     ) noexcept -> void {
       write_fmt(rsp,
-        R"(<main><form class="form-page" method="post" action="/b/{}/create_thread"><h2>Create Thread</h2>{})"
+        R"(<main><form class="form form-page" method="post" action="/b/{}/create_thread"><h2>Create Thread</h2>{})"
         R"(<p class="thread-info"><span>Posting as )",
         Escape(board.board().name()), error_banner(error)
       );
@@ -1275,7 +1283,7 @@ namespace Ludwig {
       optional<string_view> error = {}
     ) noexcept -> void {
       write_fmt(rsp,
-        R"(<main><form class="form-page" method="post" action="/thread/{:x}/edit"><h2>Edit Thread</h2>{})"
+        R"(<main><form class="form form-page" method="post" action="/thread/{:x}/edit"><h2>Edit Thread</h2>{})"
         R"(<p class="thread-info"><span>Posting as )",
         thread.id, error_banner(error)
       );
@@ -1300,18 +1308,18 @@ namespace Ludwig {
       optional<string_view> error = {}
     ) noexcept -> void {
       write_fmt(rsp,
-        R"(<form class="form-page" method="post" action="/site_admin"><h2>Site settings</h2>{})"
+        R"(<form class="form form-page" method="post" action="/site_admin"><h2>Site settings</h2>{})"
         HTML_FIELD("name", "Site name", "text", R"( value="{}")")
         HTML_TEXTAREA("description", "Sidebar description", "", "{}")
         HTML_FIELD("icon_url", "Icon URL", "text", R"( value="{}")")
         HTML_FIELD("banner_url", "Banner URL", "text", R"( value="{}")")
         HTML_FIELD("max_post_length", "Max post length (bytes)", "number", R"( min="512" value="{:d}")")
-        HTML_FIELD("javascript_enabled", "JavaScript enabled", "checkbox", "{}")
-        HTML_FIELD("board_creation_admin_only", "Only admins can create boards", "checkbox", "{}")
-        HTML_FIELD("registration_enabled", "Registration enabled", "checkbox", "{}")
-        HTML_FIELD("registration_application_required", "Application required for registration", "checkbox", "{}")
-        HTML_FIELD("registration_invite_required", "Invite code required for registration", "checkbox", "{}")
-        HTML_FIELD("invite_admin_only", "Only admins can invite new users", "checkbox", "{}")
+        HTML_CHECKBOX("javascript_enabled", "JavaScript enabled", "{}")
+        HTML_CHECKBOX("board_creation_admin_only", "Only admins can create boards", "{}")
+        HTML_CHECKBOX("registration_enabled", "Registration enabled", "{}")
+        HTML_CHECKBOX("registration_application_required", "Application required for registration", "{}")
+        HTML_CHECKBOX("registration_invite_required", "Invite code required for registration", "{}")
+        HTML_CHECKBOX("invite_admin_only", "Only admins can invite new users", "{}")
         R"(<input type="submit" value="Submit"></form>)",
         error_banner(error),
         Escape{site->name}, Escape{site->description},
@@ -1334,16 +1342,16 @@ namespace Ludwig {
       else if (login.local_user().expand_cw_images()) cw_mode = 3;
       else if (login.local_user().expand_cw_posts()) cw_mode = 2;
       write_fmt(rsp,
-        R"(<form class="form-page" method="post" action="/settings"><h2>User settings</h2>{})"
+        R"(<form class="form form-page" method="post" action="/settings"><h2>User settings</h2>{})"
         HTML_FIELD("display_name", "Display name", "text", R"( value="{}")")
         HTML_FIELD("email", "Email address", "email", R"( required value="{}")")
         HTML_TEXTAREA("bio", "Bio", "", "{}")
         HTML_FIELD("avatar_url", "Avatar URL", "text", R"( value="{}")")
         HTML_FIELD("banner_url", "Banner URL", "text", R"( value="{}")")
-        HTML_FIELD("open_links_in_new_tab", "Open links in new tab", "checkbox", "{}")
-        HTML_FIELD("show_avatars", "Show avatars", "checkbox", "{}")
-        HTML_FIELD("show_bot_accounts", "Show bot accounts", "checkbox", "{}")
-        HTML_FIELD("show_karma", "Show karma", "checkbox", "{}")
+        HTML_CHECKBOX("open_links_in_new_tab", "Open links in new tab", "{}")
+        HTML_CHECKBOX("show_avatars", "Show avatars", "{}")
+        HTML_CHECKBOX("show_bot_accounts", "Show bot accounts", "{}")
+        HTML_CHECKBOX("show_karma", "Show karma", "{}")
         R"(<fieldset><legend>Content warnings</legend>)"
           R"(<label for="cw_hide"><input type="radio" id="cw_hide" name="content_warnings" value="0"{}> Hide posts with content warnings completely</label>)"
           R"(<label for="cw_default"><input type="radio" id="cw_default" name="content_warnings" value="1"{}> Collapse posts with content warnings (default)</label>)"
@@ -1352,8 +1360,8 @@ namespace Ludwig {
         R"(</fieldset>)",
         error_banner(error),
         Escape(login.user().display_name()),
-        Escape(login.user().bio_raw()),
         Escape(login.local_user().email()),
+        Escape(login.user().bio_raw()),
         Escape(login.user().avatar_url()),
         Escape(login.user().banner_url()),
         login.local_user().open_links_in_new_tab() ? " checked" : "",
@@ -1364,7 +1372,7 @@ namespace Ludwig {
       );
       if (site->javascript_enabled) {
         write_fmt(rsp,
-          R"(<label for="javascript_enabled"><span>JavaScript enabled</span><input type="checkbox" name="javascript_enabled" id="javascript_enabled"{}></label>)",
+          HTML_CHECKBOX("javascript_enabled", "JavaScript enabled", "{}"),
           login.local_user().javascript_enabled() ? " checked" : ""
         );
       }
@@ -1379,17 +1387,17 @@ namespace Ludwig {
       optional<string_view> error = {}
     ) noexcept -> void {
       write_fmt(rsp,
-        R"(<form class="form-page" method="post" action="/b/{}/settings"><h2>Board settings</h2>{})"
+        R"(<form class="form form-page" method="post" action="/b/{}/settings"><h2>Board settings</h2>{})"
         HTML_FIELD("display_name", "Display name", "text", R"( autocomplete="off" value="{}")")
         HTML_TEXTAREA("description", "Sidebar description", "", "{}")
         HTML_FIELD("content_warning", "Content warning (optional)", "text", R"( autocomplete="off" value="{}")")
         HTML_FIELD("icon_url", "Icon URL", "text", R"( autocomplete="off" value="{}")")
         HTML_FIELD("banner_url", "Banner URL", "text", R"( autocomplete="off" value="{}")")
-        HTML_FIELD("private", "Private (only visible to members)", "checkbox", "{}")
-        HTML_FIELD("restricted_posting", "Restrict posting to moderators", "checkbox", "{}")
-        HTML_FIELD("approve_subscribe", "Approval required to join", "checkbox", "{}")
-        //HTML_FIELD("invite_required", "Invite code required to join", "checkbox", "{}")
-        //HTML_FIELD("invite_mod_only", "Only moderators can invite new members", "checkbox", "{}")
+        HTML_CHECKBOX("private", "Private (only visible to members)", "{}")
+        HTML_CHECKBOX("restricted_posting", "Restrict posting to moderators", "{}")
+        HTML_CHECKBOX("approve_subscribe", "Approval required to join", "{}")
+        //HTML_CHECKBOX("invite_required", "Invite code required to join", "{}")
+        //HTML_CHECKBOX("invite_mod_only", "Only moderators can invite new members", "{}")
         R"(<fieldset><legend>Voting</legend>)"
           R"(<label for="vote_both"><input type="radio" id="vote_both" name="voting" value="2"{}> Allow voting</label>)"
           R"(<label for="vote_up"><input type="radio" id="vote_up" name="voting" value="1"{}> Only upvotes allowed</label>)"
@@ -1920,7 +1928,7 @@ namespace Ludwig {
         const SiteDetail* site = self->controller->site_detail();
         rsp.cork([&]() {
           self->write_html_header(rsp, site, {}, { .banner_title = "Register" });
-          rsp << R"(<main><div class="form-page"><h2>Registration complete!</h2>)"
+          rsp << R"(<main><div class="form form-page"><h2>Registration complete!</h2>)"
             R"(<p>Log in to your new account:</p><p><a class="big-button" href="/login">Login</a></p>)"
             "</div></main>";
           end_with_html_footer(rsp, 0);

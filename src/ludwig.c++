@@ -12,6 +12,8 @@
 #include <csignal>
 
 using namespace Ludwig;
+using std::make_shared;
+namespace ssl = asio::ssl;
 
 static us_listen_socket_t* global_socket = nullptr;
 
@@ -69,13 +71,15 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  auto io = std::make_shared<asio::io_context>();
-  auto ssl = std::make_shared<asio::ssl::context>(asio::ssl::context::sslv23);
-  ssl->set_default_verify_paths();
-  auto http_client = std::make_shared<AsioHttpClient>(io, ssl);
-  auto db = std::make_shared<DB>(dbfile, map_size);
-  auto instance_c = std::make_shared<InstanceController>(db);
-  auto remote_media_c = std::make_shared<RemoteMediaController>(db, http_client);
+  auto io = make_shared<asio::io_context>();
+  auto ssl_ctx = make_shared<ssl::context>(ssl::context::sslv23);
+  // TODO: Load system root certificates
+  //ssl_ctx->set_verify_mode(ssl::verify_peer | ssl::context::verify_fail_if_no_peer_cert);
+  ssl_ctx->set_default_verify_paths();
+  auto http_client = make_shared<AsioHttpClient>(io, ssl_ctx);
+  auto db = make_shared<DB>(dbfile, map_size);
+  auto instance_c = make_shared<InstanceController>(db);
+  auto remote_media_c = make_shared<RemoteMediaController>(db, http_client);
 
   std::thread io_thread([io]{io->run();});
 

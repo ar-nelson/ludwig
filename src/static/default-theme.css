@@ -202,6 +202,7 @@ a:link.big-button, a:visited.big-button {
   align-self: stretch;
   display: flex;
   padding: 0.25rem;
+  margin-bottom: 0.5rem;
 }
 
 .topbar ul, .topbar li, .topbar div {
@@ -303,6 +304,14 @@ a.page-header-link:hover {
   font-size: 1.25rem;
 }
 
+#sidebar label {
+  display: flex;
+}
+
+#sidebar input[type=text], #sidebar input[type=password], #sidebar input[type=search] {
+  flex: 1 1 auto;
+}
+
 #sidebar input[type=search] {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
@@ -310,18 +319,6 @@ a.page-header-link:hover {
 
 #sidebar-toggle-label {
   display: none;
-}
-
-form label {
-  display: flex;
-  align-items: center;
-}
-form label input[type=text],
-form label input[type=password],
-form label input[type=search],
-form label input[type=email],
-form label > div {
-  flex: 1 1;
 }
 
 aside section {
@@ -334,14 +331,6 @@ aside section {
   display: block;
   max-width: 18rem;
   margin: auto;
-}
-
-#login-section label[for=remember] input[type=checkbox] {
-  order: 1;
-}
-
-#login-section label[for=remember] span {
-  order: 2;
 }
 
 summary {
@@ -705,26 +694,77 @@ label.upvote, label.downvote {
   border-radius: 0.5rem;
 }
 
-.form-page label {
+.reply-form {
   display: flex;
-  margin-bottom: 1rem;
+  flex-direction: column;
+  padding: 0 1rem 2rem;
+}
+
+.form label, .form fieldset {
+  display: flex;
+  flex-direction: column;
   align-items: stretch;
+  margin: 1rem 0;
 }
 
-.form-page label > span {
-  flex: 0 0 10rem;
-  text-align: right;
-  padding-right: 0.5rem;
-  margin-right: 0.5rem;
-  border-right: 1px dotted var(--color-fg);
+.form label > span, .form legend {
+  display: block;
+  margin-bottom: 0.5rem;
   font-size: 0.8rem;
-  color: var(--color-fg-dim);
+  font-weight: bold;
+  color: var(--color-fg);
 }
 
-.form-page input[type=submit] {
+.form input[type=submit] {
   display: inline-block;
   padding: 0.5rem 2rem;
-  margin-left: 10.5rem;
+  margin-top: 2rem;
+  align-self: flex-start;
+}
+
+.form fieldset label {
+  display: block;
+  margin: 0.25rem 0;
+}
+
+.toggle-switch {
+  cursor: pointer;
+  width: 3.5rem;
+  height: 2rem;
+  background: var(--color-fg-dim);
+  display: block;
+  border-radius: 2rem;
+  position: relative;
+  transition: background 0.3s;
+}
+
+.toggle-switch:after {
+  content: '';
+  position: absolute;
+  top: 0.25rem;
+  left: 0.25rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  background: var(--color-bg);
+  border-radius: 1.5rem;
+  transition: 0.3s ease-in-out;
+}
+
+input:checked + .toggle-switch {
+  background: var(--color-accent);
+}
+
+input:checked + .toggle-switch:after {
+  left: calc(100% - 0.25rem);
+  transform: translateX(-100%);
+}
+
+input:focus + .toggle-switch {
+  box-shadow: 0 0 1rem var(--color-accent-hover);
+}
+
+.toggle-switch:active:after {
+  width: 2rem;
 }
 
 .error-message {

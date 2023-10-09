@@ -66,6 +66,14 @@ tasks:
       - build-release
     cmds:
       - ./build.release/ludwig
+  gen-random-db:
+    deps:
+      - build-debug
+    cmds:
+      - rm -f ludwig.mdb
+      - rm -f ludwig.mdb-lock
+      - deno run extras/generate-mock-data.ts > random.dbdump
+      - ./build.debug/ludwig --import random.dbdump
   html-sample:
     sources:
       - extras/static-sample-server.ts
