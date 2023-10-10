@@ -54,6 +54,9 @@ set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(flatbuffers flatbuffers)
 add_subdirectory(spdlog spdlog)
+option(SPM_ENABLE_SHARED "Builds shared libaries in addition to static libraries." OFF)
+add_subdirectory(sentencepiece sentencepiece)
+target_include_directories(sentencepiece-static SYSTEM INTERFACE sentencepiece/src/)
 
 add_library(giflib STATIC
   giflib/dgif_lib.c

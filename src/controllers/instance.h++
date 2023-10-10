@@ -2,8 +2,10 @@
 #include "models/db.h++"
 #include "services/db.h++"
 #include "services/http_client.h++"
+#include "services/search_engine.h++"
 #include <map>
 #include <regex>
+#include <variant>
 #include <static_vector.hpp>
 #include <openssl/crypto.h>
 
@@ -264,13 +266,29 @@ namespace Ludwig {
   class InstanceController : public std::enable_shared_from_this<InstanceController> {
   private:
     std::shared_ptr<DB> db;
-    //std::shared_ptr<HttpClient> http_client;
+    std::shared_ptr<HttpClient> http_client;
+    std::optional<std::shared_ptr<SearchEngine>> search_engine;
     SiteDetail cached_site_detail;
 
     auto fetch_link_preview(uint64_t thread_id, std::string_view url) -> void;
+    auto create_local_user_internal(
+      WriteTxn& txn,
+      std::string_view username,
+      std::optional<std::string_view> email,
+      SecretString&& password,
+      bool is_bot,
+      std::optional<uint64_t> invite
+    ) -> uint64_t;
     virtual auto dispatch_event(Event, uint64_t = 0) -> void {}
   public:
-    InstanceController(std::shared_ptr<DB> db /*, std::shared_ptr<HttpClient> http_client*/);
+    InstanceController(
+      std::shared_ptr<DB> db,
+      std::shared_ptr<HttpClient> http_client,
+      std::optional<std::shared_ptr<SearchEngine>> search_engine = {}
+    );
+
+    using SearchResultListEntry = std::variant<UserListEntry, BoardListEntry, ThreadListEntry, CommentListEntry>;
+    using SearchCallback = std::function<void (std::vector<SearchResultListEntry>)>;
 
     static auto parse_sort_type(std::string_view str) -> SortType {
       if (str.empty() || str == "Hot") return SortType::Hot;
@@ -436,6 +454,13 @@ namespace Ludwig {
       bool skip_cw = false,
       std::optional<uint64_t> from_id = {}
     ) -> PageOf<CommentListEntry>;
+    auto search(
+      SearchQuery query,
+      Login login,
+      size_t offset,
+      SearchCallback callback
+    ) -> void;
+
     auto register_local_user(
       std::string_view username,
       std::string_view email,

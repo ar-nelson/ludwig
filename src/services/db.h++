@@ -1,6 +1,8 @@
 #pragma once
+#include "util/common.h++"
 #include "util/iter.h++"
 #include "util/jwt.h++"
+#include "services/search_engine.h++"
 #include "models/db.h++"
 #include <atomic>
 
@@ -71,7 +73,7 @@ namespace Ludwig {
     uint64_t seed;
     uint8_t jwt_secret[JWT_SECRET_SIZE];
     DB(const char* filename, size_t map_size_mb = 1024);
-    DB(const char* filename, std::istream& dump_stream, size_t map_size_mb = 1024);
+    DB(const char* filename, std::istream& dump_stream, std::optional<std::shared_ptr<SearchEngine>> search = {}, size_t map_size_mb = 1024);
     ~DB();
 
     auto open_read_txn() -> ReadTxn;
@@ -89,10 +91,11 @@ namespace Ludwig {
     DB& db;
     MDB_txn* txn;
     ReadTxnBase(DB& db) : db(db) {}
+    ReadTxnBase(const ReadTxnBase& from) : db(from.db), txn(from.txn) {}
   public:
+    ReadTxnBase(ReadTxnBase&& from) : db(from.db), txn(from.txn) {}
     virtual ~ReadTxnBase() {};
 
-    ReadTxnBase (const ReadTxnBase&) = delete;
     ReadTxnBase& operator= (const ReadTxnBase&) = delete;
 
     using OptCursor = const std::optional<Cursor>&;
@@ -167,6 +170,7 @@ namespace Ludwig {
       }
     }
   public:
+    ReadTxn(ReadTxn&& from) : ReadTxnBase(from) {};
     ~ReadTxn() {
       mdb_txn_abort(txn);
     }
@@ -186,6 +190,7 @@ namespace Ludwig {
       }
     };
   public:
+    WriteTxn(WriteTxn&& from) : ReadTxnBase(from) { committed = from.committed; };
     ~WriteTxn() {
       if (!committed) {
         spdlog::warn("Aborting uncommitted write transaction");

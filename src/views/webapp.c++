@@ -1,8 +1,8 @@
 #include "views/webapp.h++"
 #include "util/web.h++"
-#include "static/default-theme.css.h"
-#include "static/htmx.min.js.h"
-#include "static/feather-sprite.svg.h"
+#include "static/default-theme.css.h++"
+#include "static/htmx.min.js.h++"
+#include "static/feather-sprite.svg.h++"
 #include <iterator>
 #include <regex>
 #include <spdlog/fmt/chrono.h>
@@ -1449,17 +1449,16 @@ namespace Ludwig {
       App& app,
       string_view filename,
       string_view mimetype,
-      const unsigned char* src,
-      size_t len
+      string_view src
     ) noexcept -> void {
-      const auto hash = fmt::format("{:016x}", XXH3_64bits(src, len));
-      app.get(fmt::format("/static/{}", filename), [src, len, mimetype, hash](auto* res, auto* req) {
+      const auto hash = fmt::format("{:016x}", XXH3_64bits(src.data(), src.length()));
+      app.get(fmt::format("/static/{}", filename), [src, mimetype, hash](auto* res, auto* req) {
         if (req->getHeader("if-none-match") == hash) {
           res->writeStatus(http_status(304))->end();
         } else {
           res->writeHeader("Content-Type", mimetype)
             ->writeHeader("Etag", hash)
-            ->end(string_view(reinterpret_cast<const char*>(src), len));
+            ->end(src);
         }
       });
     }
@@ -1468,12 +1467,9 @@ namespace Ludwig {
       // -----------------------------------------------------------------------
       // STATIC FILES
       // -----------------------------------------------------------------------
-      serve_static(app, "default-theme.css", TYPE_CSS,
-        default_theme_css, default_theme_css_len);
-      serve_static(app, "htmx.min.js", TYPE_JS,
-        htmx_min_js, htmx_min_js_len);
-      serve_static(app, "feather-sprite.svg", TYPE_SVG,
-        feather_sprite_svg, feather_sprite_svg_len);
+      serve_static(app, "default-theme.css", TYPE_CSS, default_theme_css);
+      serve_static(app, "htmx.min.js", TYPE_JS, htmx_min_js);
+      serve_static(app, "feather-sprite.svg", TYPE_SVG, feather_sprite_svg);
 
       // -----------------------------------------------------------------------
       // PAGES

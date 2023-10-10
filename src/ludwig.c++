@@ -1,6 +1,7 @@
 #include "util/common.h++"
 #include "services/db.h++"
 #include "services/asio_http_client.h++"
+#include "services/lmdb_search_engine.h++"
 #include "controllers/instance.h++"
 #include "controllers/remote_media.h++"
 #include "views/webapp.h++"
@@ -12,7 +13,7 @@
 #include <csignal>
 
 using namespace Ludwig;
-using std::make_shared;
+using std::make_shared, std::optional, std::shared_ptr;
 namespace ssl = asio::ssl;
 
 static us_listen_socket_t* global_socket = nullptr;
@@ -36,12 +37,16 @@ int main(int argc, char** argv) {
     .set_default("http://localhost");
   parser.add_option("-s", "--map-size")
     .dest("map_size")
-    .help("maximum database size, in MiB")
+    .help("maximum database size, in MiB; also applies to search db if search type is lmdb")
     .set_default("4096");
   parser.add_option("--db")
     .dest("db")
     .help("database filename, will be created if it does not exist")
     .set_default("ludwig.mdb");
+  parser.add_option("--search")
+    .dest("search")
+    .help(R"(search provider, can be "none" or "lmdb:filename.mdb")")
+    .set_default("lmdb:search.mdb");
   parser.add_option("--import")
     .dest("import")
     .help("database dump file to import; if present, database file (--db) must not exist yet");
@@ -56,11 +61,20 @@ int main(int argc, char** argv) {
   const auto map_size = std::stoull(options["map_size"]);
   const auto log_level = options["log_level"];
   spdlog::set_level(spdlog::level::from_str(log_level));
+
+  optional<shared_ptr<SearchEngine>> search_engine;
+  if (options["search"].starts_with("lmdb:")) {
+    const auto filename = options["search"].substr(5);
+    search_engine = make_shared<LmdbSearchEngine>(filename, map_size);
+  } else if (options["search"] != "none") {
+    spdlog::critical(R"(Invalid --search option: {} (must be "none" or "lmdb:filename.mdb")", options["search"]);
+  }
+
   if (options.is_set_by_user("import")) {
     const auto importfile = options["import"];
     std::ifstream in(importfile, std::ios_base::in);
     spdlog::info("Importing database dump from {}", importfile);
-    DB db(dbfile, in, map_size);
+    DB db(dbfile, in, search_engine, map_size);
     spdlog::info("Import complete. You can now start Ludwig without --import.");
     return EXIT_SUCCESS;
   }
@@ -78,7 +92,7 @@ int main(int argc, char** argv) {
   ssl_ctx->set_default_verify_paths();
   auto http_client = make_shared<AsioHttpClient>(io, ssl_ctx);
   auto db = make_shared<DB>(dbfile, map_size);
-  auto instance_c = make_shared<InstanceController>(db);
+  auto instance_c = make_shared<InstanceController>(db, http_client, search_engine);
   auto remote_media_c = make_shared<RemoteMediaController>(db, http_client);
 
   std::thread io_thread([io]{io->run();});

@@ -6,7 +6,7 @@
 #include <openssl/evp.h>
 
 using std::function, std::nullopt, std::regex, std::regex_match, std::optional,
-      std::shared_ptr, std::string, std::string_view, flatbuffers::FlatBufferBuilder;
+      std::shared_ptr, std::string, std::string_view, flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot;
 
 namespace Ludwig {
   // PBKDF2-HMAC-SHA256 iteration count, as suggested by
@@ -347,7 +347,11 @@ namespace Ludwig {
     return *stats;
   }
 
-  InstanceController::InstanceController(shared_ptr<DB> db) : db(db) {
+  InstanceController::InstanceController(
+    shared_ptr<DB> db,
+    shared_ptr<HttpClient> http_client,
+    optional<shared_ptr<SearchEngine>> search_engine
+  ) : db(db), http_client(http_client), search_engine(search_engine) {
     auto txn = db->open_read_txn();
     cached_site_detail.domain = string(txn.get_setting_str(SettingsKey::domain));
     cached_site_detail.name = string(txn.get_setting_str(SettingsKey::name));
@@ -812,8 +816,46 @@ namespace Ludwig {
     };
     return out;
   }
-  static auto create_local_user_internal(
-    const InstanceController* controller,
+  auto InstanceController::search(
+    SearchQuery query,
+    Login login,
+    size_t offset,
+    SearchCallback callback
+  ) -> void {
+    if (!search_engine) throw ControllerError("Search is not enabled on this server", 403);
+    const auto limit = query.limit ? query.limit : ITEMS_PER_PAGE;
+    query.limit = limit + offset;
+    (*search_engine)->search(query, [this, offset, limit, login, callback](auto results) {
+      auto txn = open_read_txn();
+      std::vector<SearchResultListEntry> entries;
+      entries.reserve(limit);
+      for (size_t i = offset; i < results.size(); i++) {
+        const auto id = results[i].id;
+        switch (results[i].type) {
+        case SearchResultType::User:
+          if (auto user = txn.get_user(id)) entries.emplace_back(UserListEntry{id, *user});
+          break;
+        case SearchResultType::Board:
+          if (auto board = txn.get_board(id)) entries.emplace_back(BoardListEntry{id, *board});
+          break;
+        case SearchResultType::Thread:
+          try {
+            entries.emplace_back(get_thread_entry(txn, id, login));
+          } catch (...) {}
+          break;
+        case SearchResultType::Comment:
+          try {
+            entries.emplace_back(get_comment_entry(txn, id, login));
+          } catch (...) {}
+          break;
+        }
+      }
+      callback(entries);
+    });
+  }
+
+
+  auto InstanceController::create_local_user_internal(
     WriteTxn& txn,
     string_view username,
     optional<string_view> email,
@@ -839,7 +881,7 @@ namespace Ludwig {
     uint8_t salt[16], hash[32];
     duthomhas::csprng rng;
     rng(salt);
-    controller->hash_password(std::move(password), salt, hash);
+    hash_password(std::move(password), salt, hash);
     flatbuffers::FlatBufferBuilder fbb;
     {
       const auto name_s = fbb.CreateString(username);
@@ -850,6 +892,9 @@ namespace Ludwig {
       fbb.Finish(b.Finish());
     }
     const auto user_id = txn.create_user(fbb);
+    if (search_engine) {
+      (*search_engine)->index(user_id, *GetRoot<User>(fbb.GetBufferPointer()));
+    }
     fbb.Clear();
     {
       const auto email_s = email.transform([&](auto s) { return fbb.CreateString(s); });
@@ -888,7 +933,7 @@ namespace Ludwig {
     }
     auto txn = db->open_write_txn();
     const auto user_id = create_local_user_internal(
-      this, txn, username, email, std::move(password), false, invite_id
+      txn, username, email, std::move(password), false, invite_id
     );
     if (invite_id) {
       const auto invite_opt = txn.get_invite(*invite_id);
@@ -940,7 +985,7 @@ namespace Ludwig {
   ) -> uint64_t {
     auto txn = db->open_write_txn();
     auto user_id = create_local_user_internal(
-      this, txn, username, email, std::move(password), is_bot, invite
+      txn, username, email, std::move(password), is_bot, invite
     );
     txn.commit();
     return user_id;
@@ -981,6 +1026,9 @@ namespace Ludwig {
       fbb.Finish(b.Finish());
     }
     const auto board_id = txn.create_board(fbb);
+    if (search_engine) {
+      (*search_engine)->index(board_id, *GetRoot<Board>(fbb.GetBufferPointer()));
+    }
     fbb.Clear();
     {
       LocalBoardBuilder b(fbb);
@@ -1056,6 +1104,9 @@ namespace Ludwig {
       if (content_warning) b.add_content_warning(content_warning_s);
       fbb.Finish(b.Finish());
       thread_id = txn.create_thread(fbb);
+      if (search_engine) {
+        (*search_engine)->index(thread_id, *GetRoot<Thread>(fbb.GetBufferPointer()));
+      }
       txn.set_vote(author, thread_id, Vote::Upvote);
       txn.commit();
     }
@@ -1104,6 +1155,9 @@ namespace Ludwig {
       if (content_warning) b.add_content_warning(content_warning_s);
       fbb.Finish(b.Finish());
       comment_id = txn.create_comment(fbb);
+      if (search_engine) {
+        (*search_engine)->index(comment_id, *GetRoot<Comment>(fbb.GetBufferPointer()));
+      }
       txn.set_vote(author, comment_id, Vote::Upvote);
       txn.commit();
     }

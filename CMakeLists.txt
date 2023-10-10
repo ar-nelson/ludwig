@@ -1,6 +1,6 @@
 cmake_minimum_required (VERSION 3.4.1)
 
-project (ludwig VERSION 0.1 LANGUAGES C CXX)
+project (ludwig VERSION 0.1 LANGUAGES C CXX ASM)
 
 set (CMAKE_C_STANDARD 11)
 set (CMAKE_CXX_STANDARD 23)
@@ -29,14 +29,15 @@ endif ()
 
 # Generate static files
 set(static_depends)
-find_program(resource_compiler xxd)
-file(GLOB_RECURSE static_files "${PROJECT_SOURCE_DIR}/src/static/*")
+find_program(deno deno)
+file(GLOB_RECURSE static_files "${PROJECT_SOURCE_DIR}/src/static/*.*")
 foreach (static_path IN ITEMS ${static_files})
   cmake_path(GET static_path FILENAME static_basename)
-  string(REGEX REPLACE "[./-]" "_" static_symbol ${static_basename})
-  set(static_outname "${PROJECT_BINARY_DIR}/generated/static/${static_basename}.h")
+  set(static_outname "${PROJECT_BINARY_DIR}/generated/static/${static_basename}.h++")
   add_custom_command(
-    COMMAND ${resource_compiler} -i -n ${static_symbol} ${static_path} ${static_outname}
+    COMMAND ${deno} run --allow-read=${static_path},${static_outname} --allow-write=${static_outname}
+      "${PROJECT_SOURCE_DIR}/extras/binary-header.ts" --once
+      --out ${static_outname} ${static_path}
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/src/static"
     DEPENDS ${static_path}
     OUTPUT ${static_outname}
@@ -64,10 +65,9 @@ set(fbs_depends)
 file(GLOB_RECURSE fbs_files "${PROJECT_SOURCE_DIR}/src/models/*.fbs")
 foreach (fbs_path IN ITEMS ${fbs_files})
   cmake_path(GET fbs_path FILENAME fbs_basename)
-  string(REGEX REPLACE "[./-]" "_" fbs_symbol ${fbs_basename})
   get_filename_component(fbs_prefix ${fbs_basename} NAME_WE)
   set(fbs_gen_outname "${PROJECT_BINARY_DIR}/generated/models/${fbs_prefix}.h++")
-  set(fbs_src_outname "${PROJECT_BINARY_DIR}/generated/models/${fbs_basename}.h")
+  set(fbs_src_outname "${PROJECT_BINARY_DIR}/generated/models/${fbs_basename}.h++")
   add_custom_command(
     COMMAND "${PROJECT_BINARY_DIR}/flatc"
       -o "${PROJECT_BINARY_DIR}/generated/models/"
@@ -84,7 +84,9 @@ foreach (fbs_path IN ITEMS ${fbs_files})
     VERBATIM
   )
   add_custom_command(
-    COMMAND ${resource_compiler} -i -n ${fbs_symbol} ${fbs_path} ${fbs_src_outname}
+    COMMAND ${deno} run --allow-read=${fbs_path},${fbs_src_outname} --allow-write=${fbs_src_outname}
+      "${PROJECT_SOURCE_DIR}/extras/binary-header.ts" --once
+      --type char --out ${fbs_src_outname} ${fbs_path}
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/src/models"
     DEPENDS ${fbs_path}
     OUTPUT ${fbs_src_outname}
@@ -125,12 +127,14 @@ set (LUDWIG_COMMON_SRC
   src/util/jwt.c++
   src/services/db.c++
   src/services/asio_http_client.c++
+  src/services/lmdb_search_engine.c++
   src/services/thumbnail_cache.c++
   src/models/protocols_parser.c++
   src/controllers/instance.c++
   src/controllers/remote_media.c++
   src/views/media.c++
   src/views/webapp.c++
+  src/static/tokenizer/tokenizer_model.S
 )
 
 if (CMAKE_BUILD_TYPE MATCHES Release AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -154,6 +158,7 @@ set (LUDWIG_LIBS
   imagedec
   lmdb
   png_static
+  sentencepiece-static
   simdjson_static
   spdlog
   ssl

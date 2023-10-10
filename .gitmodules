@@ -34,3 +34,6 @@
 [submodule "vendor/simdjson"]
 	path = vendor/simdjson
 	url = https://github.com/simdjson/simdjson.git
+[submodule "vendor/sentencepiece"]
+	path = vendor/sentencepiece
+	url = https://github.com/google/sentencepiece.git

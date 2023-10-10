@@ -1,5 +1,5 @@
 #include "services/db.h++"
-#include "models/db.fbs.h"
+#include "models/db.fbs.h++"
 #include <random>
 #include <regex>
 #include <span>
@@ -10,8 +10,9 @@
 #include <flatbuffers/idl.h>
 
 using std::function, std::min, std::nullopt, std::regex, std::regex_match,
-    std::runtime_error, std::optional, std::stoull, std::string,
-    std::string_view, flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot;
+    std::runtime_error, std::optional, std::shared_ptr, std::stoull,
+    std::string, std::string_view, flatbuffers::FlatBufferBuilder,
+    flatbuffers::GetRoot;
 
 #define assert_fmt(CONDITION, ...) if (!(CONDITION)) { spdlog::critical(__VA_ARGS__); throw runtime_error("Assertion failed: " #CONDITION); }
 
@@ -278,8 +279,10 @@ namespace Ludwig {
     return 0;
   }
 
+  constexpr size_t MB = 1024 * 1024;
+
   DB::DB(const char* filename, size_t map_size_mb) :
-    map_size(map_size_mb * 1024 * 1024 - (map_size_mb * 1024 * 2014) % (size_t)sysconf(_SC_PAGESIZE)) {
+    map_size(map_size_mb * MB - (map_size_mb * MB) % (size_t)sysconf(_SC_PAGESIZE)) {
     MDB_txn* txn = nullptr;
     int err = init_env(filename, &txn);
     if (err) goto die;
@@ -334,7 +337,7 @@ namespace Ludwig {
     }
   };
 
-  DB::DB(const char* filename, std::istream& dump_stream, size_t map_size_mb) :
+  DB::DB(const char* filename, std::istream& dump_stream, optional<shared_ptr<SearchEngine>> search, size_t map_size_mb) :
     map_size(map_size_mb * 1024 * 1024 - (map_size_mb * 1024 * 2014) % (size_t)sysconf(_SC_PAGESIZE)) {
     {
       struct stat stat_buf;
@@ -354,11 +357,7 @@ namespace Ludwig {
     }
 
     flatbuffers::Parser parser;
-    parser.Parse(
-      std::string(reinterpret_cast<const char*>(db_fbs), db_fbs_len).c_str(),
-      nullptr,
-      "db.fbs"
-    );
+    parser.Parse(db_fbs, nullptr, "db.fbs");
 
     DeferDelete on_error{ env, filename };
     auto txn = open_write_txn();
@@ -368,6 +367,7 @@ namespace Ludwig {
       if (line.empty()) continue;
       std::smatch match;
       if (regex_match(line, match, json_line)) {
+        const auto id = stoull(match[2]);
         switch (match[1].str()[0]) {
           case 'u':
             if (seed == 0) {
@@ -377,14 +377,15 @@ namespace Ludwig {
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw runtime_error("Failed to parse User JSON: " + match[3].str());
             }
-            txn.set_user(stoull(match[2]), parser.builder_);
+            txn.set_user(id, parser.builder_);
+            if (search) (*search)->index(id, *GetRoot<User>(parser.builder_.GetBufferPointer()));
             break;
           case 'U':
             parser.SetRootType("LocalUser");
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw runtime_error("Failed to parse LocalUser JSON: " + match[3].str());
             }
-            txn.set_local_user(stoull(match[2]), parser.builder_);
+            txn.set_local_user(id, parser.builder_);
             break;
           case 'b':
             if (seed == 0) {
@@ -394,7 +395,8 @@ namespace Ludwig {
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw runtime_error("Failed to parse Board JSON: " + match[3].str());
             }
-            txn.set_board(stoull(match[2]), parser.builder_);
+            txn.set_board(id, parser.builder_);
+            if (search) (*search)->index(id, *GetRoot<Board>(parser.builder_.GetBufferPointer()));
             break;
           case 'B':
             parser.SetRootType("LocalBoard");
@@ -408,14 +410,16 @@ namespace Ludwig {
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw runtime_error("Failed to parse Thread JSON: " + match[3].str());
             }
-            txn.set_thread(stoull(match[2]), parser.builder_);
+            txn.set_thread(id, parser.builder_);
+            if (search) (*search)->index(id, *GetRoot<Thread>(parser.builder_.GetBufferPointer()));
             break;
           case 'c':
             parser.SetRootType("Comment");
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw runtime_error("Failed to parse Comment JSON: " + match[3].str());
             }
-            txn.set_comment(stoull(match[2]), parser.builder_);
+            txn.set_comment(id, parser.builder_);
+            if (search) (*search)->index(id, *GetRoot<Comment>(parser.builder_.GetBufferPointer()));
             break;
         }
       } else if (regex_match(line, match, setting_line)) {
