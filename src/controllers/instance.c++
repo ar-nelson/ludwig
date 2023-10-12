@@ -125,7 +125,7 @@ namespace Ludwig {
     const auto stats = txn.get_post_stats(thread_id);
     if (!thread || !stats) {
       spdlog::error("Entry references nonexistent thread {:x} (database is inconsistent!)", thread_id);
-      throw ControllerError("Database error", 500);
+      throw ApiError("Database error", 500);
     }
     if (!author) {
       const auto id = thread->get().author();
@@ -171,7 +171,7 @@ namespace Ludwig {
     const auto stats = txn.get_post_stats(comment_id);
     if (!comment || !stats) {
       spdlog::error("Entry references nonexistent comment {:x} (database is inconsistent!)", comment_id);
-      throw ControllerError("Database error", 500);
+      throw ApiError("Database error", 500);
     }
     if (!author) {
       const auto id = comment->get().author();
@@ -255,7 +255,7 @@ namespace Ludwig {
           sorted_entries.erase(last);
         }
         sorted_entries.insert(entry);
-      } catch (ControllerError e) {
+      } catch (ApiError e) {
         continue;
       }
     }
@@ -318,7 +318,7 @@ namespace Ludwig {
         iter = txn.list_comments_of_post_new(parent, next_cursor_comment_new(txn, parent, from_id));
         break;
       case CommentSortType::Old:
-        throw ControllerError("Sort type not yet implemented", 500);
+        throw ApiError("Sort type not yet implemented", 500);
       case CommentSortType::Top:
         iter = txn.list_comments_of_post_top(parent, next_cursor_top(txn, parent, from_id));
         break;
@@ -342,7 +342,7 @@ namespace Ludwig {
     const auto stats = txn.get_post_stats(post_id);
     if (!stats) {
       spdlog::error("Post {:x} has no corresponding post_stats (database is inconsistent!)", post_id);
-      throw ControllerError("Database error");
+      throw ApiError("Database error");
     }
     return *stats;
   }
@@ -497,13 +497,13 @@ namespace Ludwig {
       : txn.get_user_id_by_email(username_or_email);
     if (!user_id_opt) {
       spdlog::debug("Tried to log in as nonexistent user {}", username_or_email);
-      throw ControllerError("Invalid username or password", 400);
+      throw ApiError("Invalid username or password", 400);
     }
     const auto user_id = *user_id_opt;
     const auto local_user = txn.get_local_user(user_id);
     if (!local_user) {
       spdlog::debug("Tried to log in as non-local user {}", username_or_email);
-      throw ControllerError("Invalid username or password", 400);
+      throw ApiError("Invalid username or password", 400);
     }
     hash_password(std::move(password), local_user->get().password_salt()->bytes()->Data(), hash);
 
@@ -511,7 +511,7 @@ namespace Ludwig {
     if (CRYPTO_memcmp(hash, local_user->get().password_hash()->bytes()->Data(), 32)) {
       // TODO: Lock users out after repeated failures
       spdlog::debug("Tried to login with wrong password for user {}", username_or_email);
-      throw ControllerError("Invalid username or password", 400);
+      throw ApiError("Invalid username or password", 400);
     }
     const auto session = txn.create_session(
       user_id,
@@ -551,30 +551,30 @@ namespace Ludwig {
   auto InstanceController::user_detail(ReadTxnBase& txn, uint64_t id) -> UserDetailResponse {
     auto user = txn.get_user(id);
     auto user_stats = txn.get_user_stats(id);
-    if (!user || !user_stats) throw ControllerError("User not found", 404);
+    if (!user || !user_stats) throw ApiError("User not found", 404);
     return { { id, *user, }, *user_stats };
   }
   auto InstanceController::local_user_detail(ReadTxnBase& txn, uint64_t id) -> LocalUserDetailResponse {
     const auto user = txn.get_user(id);
     const auto user_stats = txn.get_user_stats(id);
-    if (!user || !user_stats) throw ControllerError("User not found", 404);
+    if (!user || !user_stats) throw ApiError("User not found", 404);
     const auto local_user = txn.get_local_user(id);
-    if (!local_user) throw ControllerError("Local user not found", 404);
+    if (!local_user) throw ApiError("Local user not found", 404);
     return { { { id, *user }, *user_stats, }, *local_user };
   }
   auto InstanceController::board_detail(ReadTxnBase& txn, uint64_t id, optional<uint64_t> logged_in_user) -> BoardDetailResponse {
     const auto board = txn.get_board(id);
     const auto board_stats = txn.get_board_stats(id);
-    if (!board || !board_stats) throw ControllerError("Board not found", 404);
+    if (!board || !board_stats) throw ApiError("Board not found", 404);
     const auto subscribed = logged_in_user ? txn.is_user_subscribed_to_board(*logged_in_user, id) : false;
     return { { id, *board }, *board_stats, subscribed };
   }
   auto InstanceController::local_board_detail(ReadTxnBase& txn, uint64_t id, optional<uint64_t> logged_in_user) -> LocalBoardDetailResponse {
     const auto board = txn.get_board(id);
     const auto board_stats = txn.get_board_stats(id);
-    if (!board || !board_stats) throw ControllerError("Board not found", 404);
+    if (!board || !board_stats) throw ApiError("Board not found", 404);
     const auto local_board = txn.get_local_board(id);
-    if (!local_board) throw ControllerError("Local board not found", 404);
+    if (!local_board) throw ApiError("Local board not found", 404);
     const auto subscribed = logged_in_user ? txn.is_user_subscribed_to_board(*logged_in_user, id) : false;
     return { { { id, *board }, *board_stats, subscribed }, *local_board };
   }
@@ -633,7 +633,7 @@ namespace Ludwig {
     PageOf<ThreadListEntry> out { {}, !from_id, {} };
     const auto board = txn.get_board(board_id);
     if (!board) {
-      throw ControllerError("Board does not exist", 404);
+      throw ApiError("Board does not exist", 404);
     }
     const bool board_hidden = login && txn.has_user_hidden_board(login->id, board_id);
     switch (sort) {
@@ -689,7 +689,7 @@ namespace Ludwig {
         break;
       }
       default:
-        throw ControllerError("Sort type not yet supported");
+        throw ApiError("Sort type not yet supported");
     }
     return out;
   }
@@ -704,7 +704,7 @@ namespace Ludwig {
     PageOf<CommentListEntry> out { {}, !from_id, {} };
     const auto board = txn.get_board(board_id);
     if (!board) {
-      throw ControllerError("Board does not exist", 404);
+      throw ApiError("Board does not exist", 404);
     }
     const bool board_hidden = login && txn.has_user_hidden_board(login->id, board_id);
     switch (sort) {
@@ -760,7 +760,7 @@ namespace Ludwig {
         break;
       }
       default:
-        throw ControllerError("Sort type not yet supported");
+        throw ApiError("Sort type not yet supported");
     }
     return out;
   }
@@ -775,7 +775,7 @@ namespace Ludwig {
     PageOf<ThreadListEntry> out { {}, !from_id, {} };
     const auto user = txn.get_user(user_id);
     if (!user) {
-      throw ControllerError("User does not exist", 404);
+      throw ApiError("User does not exist", 404);
     }
     // TODO: Old sort
     auto iter = sort == UserPostSortType::Top
@@ -822,7 +822,7 @@ namespace Ludwig {
     size_t offset,
     SearchCallback callback
   ) -> void {
-    if (!search_engine) throw ControllerError("Search is not enabled on this server", 403);
+    if (!search_engine) throw ApiError("Search is not enabled on this server", 403);
     const auto limit = query.limit ? query.limit : ITEMS_PER_PAGE;
     query.limit = limit + offset;
     (*search_engine)->search(query, [this, offset, limit, login, callback](auto results) {
@@ -864,19 +864,19 @@ namespace Ludwig {
     optional<uint64_t> invite
   ) -> uint64_t {
     if (!regex_match(username.begin(), username.end(), username_regex)) {
-      throw ControllerError("Invalid username (only letters, numbers, and underscores allowed; max 64 characters)", 400);
+      throw ApiError("Invalid username (only letters, numbers, and underscores allowed; max 64 characters)", 400);
     }
     if (email && !regex_match(email->begin(), email->end(), email_regex)) {
-      throw ControllerError("Invalid email address", 400);
+      throw ApiError("Invalid email address", 400);
     }
     if (password.str.length() < 8) {
-      throw ControllerError("Password must be at least 8 characters", 400);
+      throw ApiError("Password must be at least 8 characters", 400);
     }
     if (txn.get_user_id_by_name(username)) {
-      throw ControllerError("A user with this name already exists on this instance", 409);
+      throw ApiError("A user with this name already exists on this instance", 409);
     }
     if (email && txn.get_user_id_by_email(*email)) {
-      throw ControllerError("A user with this email address already exists on this instance", 409);
+      throw ApiError("A user with this email address already exists on this instance", 409);
     }
     uint8_t salt[16], hash[32];
     duthomhas::csprng rng;
@@ -921,14 +921,14 @@ namespace Ludwig {
   ) -> std::pair<uint64_t, bool> {
     const auto site = site_detail();
     if (!site->registration_enabled) {
-      throw ControllerError("Registration is not allowed on this server", 403);
+      throw ApiError("Registration is not allowed on this server", 403);
     }
     if (site->registration_application_required && !application_text) {
-      throw ControllerError("An application reason is required to register", 400);
+      throw ApiError("An application reason is required to register", 400);
     }
     if (site->registration_invite_required) {
       if (!invite_id) {
-        throw ControllerError("An invite code is required to register", 400);
+        throw ApiError("An invite code is required to register", 400);
       }
     }
     auto txn = db->open_write_txn();
@@ -938,18 +938,18 @@ namespace Ludwig {
     if (invite_id) {
       const auto invite_opt = txn.get_invite(*invite_id);
       if (!invite_opt) {
-        throw ControllerError("Invalid invite code", 400);
+        throw ApiError("Invalid invite code", 400);
       }
       const auto& invite = invite_opt->get();
       if (invite.accepted_at()) {
         spdlog::warn("Attempt to use already-used invite code {} (for username {}, email {}, ip {}, user agent {})",
           invite_id_to_code(*invite_id), username, email, ip, user_agent
         );
-        throw ControllerError("Expired invite code", 400);
+        throw ApiError("Expired invite code", 400);
       }
       const auto now = now_s();
       if (invite.expires_at() <= now) {
-        throw ControllerError("Expired invite code", 400);
+        throw ApiError("Expired invite code", 400);
       }
       FlatBufferBuilder fbb;
       InviteBuilder b(fbb);
@@ -1000,17 +1000,17 @@ namespace Ludwig {
     bool is_local_only
   ) -> uint64_t {
     if (!regex_match(name.begin(), name.end(), username_regex)) {
-      throw ControllerError("Invalid board name (only letters, numbers, and underscores allowed; max 64 characters)", 400);
+      throw ApiError("Invalid board name (only letters, numbers, and underscores allowed; max 64 characters)", 400);
     }
     if (display_name && display_name->length() > 1024) {
-      throw ControllerError("Display name cannot be longer than 1024 bytes", 400);
+      throw ApiError("Display name cannot be longer than 1024 bytes", 400);
     }
     auto txn = db->open_write_txn();
     if (txn.get_board_id_by_name(name)) {
-      throw ControllerError("A board with this name already exists on this instance", 409);
+      throw ApiError("A board with this name already exists on this instance", 409);
     }
     if (!txn.get_local_user(owner)) {
-      throw ControllerError("Board owner is not a user on this instance", 400);
+      throw ApiError("Board owner is not a user on this instance", 400);
     }
     // TODO: Check if user is allowed to create boards
     flatbuffers::FlatBufferBuilder fbb;
@@ -1052,7 +1052,7 @@ namespace Ludwig {
     if (submission_url) {
       auto len = submission_url->length();
       if (len > 2048) {
-        throw ControllerError("Submission URL cannot be longer than 2048 bytes", 400);
+        throw ApiError("Submission URL cannot be longer than 2048 bytes", 400);
       } else if (len < 1) {
         submission_url = {};
       }
@@ -1060,28 +1060,28 @@ namespace Ludwig {
     if (text_content_markdown) {
       auto len = text_content_markdown->length();
       if (len > 1024 * 1024) {
-        throw ControllerError("Post text content cannot be larger than 1MB", 400);
+        throw ApiError("Post text content cannot be larger than 1MB", 400);
       } else if (len < 1) {
         text_content_markdown = {};
       }
     }
     if (!submission_url && !text_content_markdown) {
-      throw ControllerError("Post must contain either a submission URL or text content", 400);
+      throw ApiError("Post must contain either a submission URL or text content", 400);
     }
     auto len = title.length();
     if (len > 1024) {
-      throw ControllerError("Post title cannot be longer than 1024 bytes", 400);
+      throw ApiError("Post title cannot be longer than 1024 bytes", 400);
     } else if (len < 1) {
-      throw ControllerError("Post title cannot be blank", 400);
+      throw ApiError("Post title cannot be blank", 400);
     }
     uint64_t thread_id;
     {
       auto txn = db->open_write_txn();
       if (!txn.get_local_user(author)) {
-        throw ControllerError("Post author is not a user on this instance", 400);
+        throw ApiError("Post author is not a user on this instance", 400);
       }
       if (!txn.get_board(board)) {
-        throw ControllerError("Board does not exist", 400);
+        throw ApiError("Board does not exist", 400);
       }
       // TODO: Check if user is banned
       flatbuffers::FlatBufferBuilder fbb;
@@ -1122,21 +1122,21 @@ namespace Ludwig {
   ) -> uint64_t {
     auto len = text_content_markdown.length();
     if (len > 1024 * 1024) {
-      throw ControllerError("Comment text content cannot be larger than 1MB", 400);
+      throw ApiError("Comment text content cannot be larger than 1MB", 400);
     } else if (len < 1) {
-      throw ControllerError("Comment text content cannot be blank", 400);
+      throw ApiError("Comment text content cannot be blank", 400);
     }
     uint64_t comment_id, thread_id, board_id;
     {
       auto txn = db->open_write_txn();
       if (!txn.get_local_user(author)) {
-        throw ControllerError("Comment author is not a user on this instance", 400);
+        throw ApiError("Comment author is not a user on this instance", 400);
       }
       auto parent_thread = txn.get_thread(parent);
       const auto parent_comment = !parent_thread ? txn.get_comment(parent) : nullopt;
       if (parent_comment) parent_thread = txn.get_thread(parent_comment->get().thread());
       if (!parent_thread) {
-        throw ControllerError("Comment parent post does not exist", 400);
+        throw ApiError("Comment parent post does not exist", 400);
       }
       board_id = parent_thread->get().board();
       // TODO: Check if user is banned
@@ -1170,12 +1170,12 @@ namespace Ludwig {
   auto InstanceController::vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void {
     auto txn = db->open_write_txn();
     if (!txn.get_user(user_id)) {
-      throw ControllerError("User does not exist", 400);
+      throw ApiError("User does not exist", 400);
     }
     const auto thread = txn.get_thread(post_id);
     const auto comment = !thread ? txn.get_comment(post_id) : nullopt;
     if (!thread && !comment) {
-      throw ControllerError("Post does not exist", 400);
+      throw ApiError("Post does not exist", 400);
     }
     const auto op = thread ? thread->get().author() : comment->get().author();
     txn.set_vote(user_id, post_id, vote);
@@ -1188,10 +1188,10 @@ namespace Ludwig {
   auto InstanceController::subscribe(uint64_t user_id, uint64_t board_id, bool subscribed) -> void {
     auto txn = db->open_write_txn();
     if (!txn.get_user(user_id)) {
-      throw ControllerError("User does not exist", 400);
+      throw ApiError("User does not exist", 400);
     }
     if (!txn.get_board(board_id)) {
-      throw ControllerError("Board does not exist", 400);
+      throw ApiError("Board does not exist", 400);
     }
     txn.set_subscription(user_id, board_id, subscribed);
     txn.commit();
@@ -1202,10 +1202,10 @@ namespace Ludwig {
   auto InstanceController::save_post(uint64_t user_id, uint64_t post_id, bool saved) -> void {
     auto txn = db->open_write_txn();
     if (!txn.get_local_user(user_id)) {
-      throw ControllerError("User does not exist", 400);
+      throw ApiError("User does not exist", 400);
     }
     if (!txn.get_post_stats(post_id)) {
-      throw ControllerError("Post does not exist", 400);
+      throw ApiError("Post does not exist", 400);
     }
     txn.set_save(user_id, post_id, saved);
     txn.commit();
@@ -1213,10 +1213,10 @@ namespace Ludwig {
   auto InstanceController::hide_post(uint64_t user_id, uint64_t post_id, bool hidden) -> void {
     auto txn = db->open_write_txn();
     if (!txn.get_local_user(user_id)) {
-      throw ControllerError("User does not exist", 400);
+      throw ApiError("User does not exist", 400);
     }
     if (!txn.get_post_stats(post_id)) {
-      throw ControllerError("Post does not exist", 400);
+      throw ApiError("Post does not exist", 400);
     }
     txn.set_hide_post(user_id, post_id, hidden);
     txn.commit();
@@ -1224,7 +1224,7 @@ namespace Ludwig {
   auto InstanceController::hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden) -> void {
     auto txn = db->open_write_txn();
     if (!txn.get_local_user(user_id) || !txn.get_user(hidden_user_id)) {
-      throw ControllerError("User does not exist", 400);
+      throw ApiError("User does not exist", 400);
     }
     txn.set_hide_user(user_id, hidden_user_id, hidden);
     txn.commit();
@@ -1232,10 +1232,10 @@ namespace Ludwig {
   auto InstanceController::hide_board(uint64_t user_id, uint64_t board_id, bool hidden) -> void {
     auto txn = db->open_write_txn();
     if (!txn.get_local_user(user_id)) {
-      throw ControllerError("User does not exist", 400);
+      throw ApiError("User does not exist", 400);
     }
     if (!txn.get_post_stats(board_id)) {
-      throw ControllerError("Board does not exist", 400);
+      throw ApiError("Board does not exist", 400);
     }
     txn.set_hide_post(user_id, board_id, hidden);
     txn.commit();

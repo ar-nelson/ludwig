@@ -1,4 +1,5 @@
 #pragma once
+#include "util/web.h++"
 #include "models/db.h++"
 #include "services/db.h++"
 #include "services/http_client.h++"
@@ -216,19 +217,6 @@ namespace Ludwig {
     std::optional<std::optional<std::string_view>> content_warning;
   };
 
-  class ControllerError : public std::runtime_error {
-    private:
-      uint16_t _http_error;
-    public:
-      ControllerError(
-        const char* message,
-        uint16_t http_error = 500
-      ) : std::runtime_error(message), _http_error(http_error) {}
-      inline auto http_error() const -> uint16_t {
-        return _http_error;
-      }
-  };
-
   enum class Event : uint8_t {
     SiteUpdate,
     UserUpdate,
@@ -254,7 +242,7 @@ namespace Ludwig {
     if (std::regex_match(invite_code.begin(), invite_code.end(), match, invite_code_regex)) {
       return std::stoull(match[1].str() + match[2].str() + match[3].str() + match[4].str());
     }
-    throw ControllerError("Invalid invite code", 400);
+    throw ApiError("Invalid invite code", 400);
   }
 
   static inline auto invite_id_to_code(uint64_t id) -> std::string {
@@ -286,6 +274,7 @@ namespace Ludwig {
       std::shared_ptr<HttpClient> http_client,
       std::optional<std::shared_ptr<SearchEngine>> search_engine = {}
     );
+    virtual ~InstanceController() = default;
 
     using SearchResultListEntry = std::variant<UserListEntry, BoardListEntry, ThreadListEntry, CommentListEntry>;
     using SearchCallback = std::function<void (std::vector<SearchResultListEntry>)>;
@@ -307,7 +296,7 @@ namespace Ludwig {
       if (str == "TopTwelveHour") return SortType::TopTwelveHour;
       if (str == "TopSixHour") return SortType::TopSixHour;
       if (str == "TopHour") return SortType::TopHour;
-      throw ControllerError("Bad sort type", 400);
+      throw ApiError("Bad sort type", 400);
     }
 
     static auto parse_comment_sort_type(std::string_view str) -> CommentSortType {
@@ -315,20 +304,20 @@ namespace Ludwig {
       if (str == "New") return CommentSortType::New;
       if (str == "Old") return CommentSortType::Old;
       if (str == "Top") return CommentSortType::Top;
-      throw ControllerError("Bad comment sort type", 400);
+      throw ApiError("Bad comment sort type", 400);
     }
 
     static auto parse_user_post_sort_type(std::string_view str) -> UserPostSortType {
       if (str.empty() || str == "New") return UserPostSortType::New;
       if (str == "Old") return UserPostSortType::Old;
       if (str == "Top") return UserPostSortType::Top;
-      throw ControllerError("Bad post sort type", 400);
+      throw ApiError("Bad post sort type", 400);
     }
 
     static auto parse_hex_id(std::string hex_id) -> std::optional<uint64_t> {
       if (hex_id.empty()) return {};
       auto n = std::stoull(hex_id, nullptr, 16);
-      if (!n && hex_id != "0") throw ControllerError("Bad hexadecimal ID", 400);
+      if (!n && hex_id != "0") throw ApiError("Bad hexadecimal ID", 400);
       return { n };
     }
 

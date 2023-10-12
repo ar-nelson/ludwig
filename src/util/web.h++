@@ -2,8 +2,10 @@
 #include "util/common.h++"
 #include <regex>
 #include <sstream>
+#include <variant>
 #include <uWebSockets/App.h>
 #include <flatbuffers/string.h>
+#include <simdjson.h>
 
 namespace Ludwig {
   static constexpr std::string_view ESCAPED = "<>'\"&",
@@ -11,7 +13,8 @@ namespace Ludwig {
     TYPE_CSS = "text/css; charset=utf-8",
     TYPE_JS = "text/javascript; charset=utf-8",
     TYPE_SVG = "image/svg+xml; charset=utf-8",
-    TYPE_WEBP = "image/webp";
+    TYPE_WEBP = "image/webp",
+    TYPE_FORM = "application/x-www-form-urlencoded";
 
   static constexpr auto http_status(uint16_t code) -> std::string_view {
     switch (code) {
@@ -47,26 +50,237 @@ namespace Ludwig {
     }
   }
 
+  class ApiError : public std::runtime_error {
+  public:
+    uint16_t http_status;
+    std::string_view message, internal_message;
+    ApiError(std::string_view message, uint16_t http_status = 500, std::string_view internal_message = { nullptr, 0 })
+      : std::runtime_error(internal_message.data() ? fmt::format("{} - {}", message, internal_message) : std::string(message)),
+        http_status(http_status), message(message), internal_message(internal_message) {}
+  };
+
+  struct QueryString {
+    std::string_view query;
+    inline auto required_hex_id(std::string_view key) -> uint64_t {
+      try {
+        return std::stoull(std::string(uWS::getDecodedQueryValue(key, query)), nullptr, 16);
+      } catch (...) {
+        throw ApiError(fmt::format("Invalid or missing '{}' parameter", key).c_str(), 400);
+      }
+    }
+    inline auto required_int(std::string_view key) -> int {
+      try {
+        return std::stoi(std::string(uWS::getDecodedQueryValue(key, query)));
+      } catch (...) {
+        throw ApiError(fmt::format("Invalid or missing '{}' parameter", key).c_str(), 400);
+      }
+    }
+    inline auto required_string(std::string_view key) -> std::string_view {
+      auto s = uWS::getDecodedQueryValue(key, query);
+      if (s.empty()) ApiError(fmt::format("Invalid or missing '{}' parameter", key).c_str(), 400);
+      return s;
+    }
+    inline auto optional_string(std::string_view key) -> std::optional<std::string_view> {
+      auto s = uWS::getDecodedQueryValue(key, query);
+      if (s.empty()) return {};
+      return s;
+    }
+    inline auto optional_bool(std::string_view key) -> bool {
+      return uWS::getDecodedQueryValue(key, query) == "1";
+    }
+  };
+
+  template <bool SSL, typename M = std::monostate, typename E = std::monostate> class Router {
+  public:
+    using Middleware = std::function<M (uWS::HttpResponse<SSL>*, uWS::HttpRequest*)>;
+    using ErrorMiddleware = std::function<E (const uWS::HttpResponse<SSL>*, uWS::HttpRequest*)>;
+    using ErrorHandler = std::function<void (uWS::HttpResponse<SSL>*, const ApiError&, const E&)>;
+  private:
+    uWS::TemplatedApp<SSL>& app;
+
+    static auto default_error_handler(uWS::HttpResponse<SSL>* rsp, const ApiError& err, const E&) -> void {
+      rsp->writeHeader("Content-Type", "text/plain; charset=utf-8")
+        ->end(fmt::format("Error {:d} - {}", err.http_status, err.message));
+    }
+
+    struct Impl {
+      Middleware middleware;
+      ErrorMiddleware error_middleware;
+      ErrorHandler error_handler;
+
+      auto handle_error(
+        const ApiError& e,
+        uWS::HttpResponse<SSL>* rsp,
+        const E& meta,
+        std::string_view method,
+        std::string_view url
+      ) noexcept -> void {
+        if (e.http_status >= 500) {
+          spdlog::error("{} {} - {:d} {}", method, url, e.http_status, e.internal_message.data() ? e.internal_message : e.message);
+        } else {
+          spdlog::info("{} {} - {:d} {}", method, url, e.http_status, e.internal_message.data() ? e.internal_message : e.message);
+        }
+        if (rsp->getWriteOffset()) {
+          spdlog::critical("Route {} threw exception after starting to respond; response has been truncated. This is a bug.", url);
+          rsp->end();
+          return;
+        }
+        rsp->writeStatus(http_status(e.http_status));
+        try {
+          error_handler(rsp, e, meta);
+        } catch (...) {
+          spdlog::critical("Route {} threw exception in error page callback; response has been truncated. This is a bug.", url);
+          rsp->end();
+        }
+      }
+
+      auto handle_error(
+        std::exception_ptr eptr,
+        uWS::HttpResponse<SSL>* rsp,
+        const E& meta,
+        std::string_view method,
+        std::string_view url
+      ) noexcept -> void {
+        try {
+          rethrow_exception(eptr);
+        } catch (const ApiError& e) {
+          handle_error(e, rsp, meta, method, url);
+        } catch (const std::exception& e) {
+          handle_error(ApiError("Unhandled internal exception", 500, e.what()), rsp, meta, method, url);
+        } catch (...) {
+          handle_error(
+            ApiError("Unhandled internal exception", 500, "Unhandled internal exception, no information available"),
+            rsp, meta, method, url
+          );
+        }
+      }
+    };
+
+    std::shared_ptr<Impl> impl;
+  public:
+    Router(
+      uWS::TemplatedApp<SSL>& app,
+      Middleware middleware,
+      ErrorMiddleware error_middleware,
+      ErrorHandler error_handler = default_error_handler
+    ) : app(app), impl(std::make_shared<Impl>(middleware, error_middleware, error_handler)) {}
+
+    Router(
+      uWS::TemplatedApp<SSL>& app,
+      Middleware middleware,
+      ErrorHandler error_handler = default_error_handler
+    ) requires std::same_as<E, std::monostate>
+      : Router(app, middleware, [](auto*, auto*){return std::monostate();}, error_handler) {}
+
+    Router(
+      uWS::TemplatedApp<SSL>& app,
+      ErrorHandler error_handler = default_error_handler
+    ) requires std::same_as<M, std::monostate> && std::same_as<E, std::monostate>
+      : Router(app, [](auto*, auto*){return std::monostate();}, [](auto*, auto*){return std::monostate();}, error_handler) {}
+
+    Router &&get(std::string pattern, uWS::MoveOnlyFunction<void (uWS::HttpResponse<SSL>*, uWS::HttpRequest*, M&)> &&handler) {
+      app.get(pattern, [impl = impl, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
+        const auto url = req->getUrl();
+        try {
+          auto meta = impl->middleware(rsp, req);
+          handler(rsp, req, meta);
+          spdlog::debug("GET {} - {} {}", url, rsp->getRemoteAddressAsText(), req->getHeader("user-agent"));
+        } catch (...) {
+          impl->handle_error(std::current_exception(), rsp, impl->error_middleware(rsp, req), "GET", url);
+        }
+      });
+      return std::move(*this);
+    }
+
+    Router &&get_async(
+      std::string pattern,
+      uWS::MoveOnlyFunction<void (
+        uWS::HttpResponse<SSL>*,
+        uWS::HttpRequest*,
+        std::unique_ptr<M>,
+        uWS::MoveOnlyFunction<void (std::function<void ()>)>
+      )> &&handler
+    ) {
+      app.get(pattern, [impl = impl, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
+        auto abort_flag = std::make_shared<bool>(false);
+        const auto url = std::string(req->getUrl());
+        rsp->onAborted([abort_flag, url]{
+          *abort_flag = true;
+          spdlog::debug("GET {} - HTTP session aborted", url);
+        });
+        auto error_meta = std::make_unique<E>(impl->error_middleware(rsp, req));
+        try {
+          auto meta = std::make_unique<M>(impl->middleware(rsp, req));
+          handler(rsp, req, std::move(meta), [impl = impl, rsp, url, error_meta = std::move(error_meta), abort_flag](std::function<void()> body) mutable {
+            if (*abort_flag) return;
+            rsp->cork([&]{
+              try { body(); }
+              catch (...) { impl->handle_error(std::current_exception(), rsp, *error_meta, "GET", url); }
+            });
+          });
+          spdlog::debug("GET {} - {} {}", url, rsp->getRemoteAddressAsText(), req->getHeader("user-agent"));
+        } catch (...) {
+          impl->handle_error(std::current_exception(), rsp, *error_meta, "GET", url);
+        }
+      });
+      return std::move(*this);
+    }
+
+    Router &&post_form(
+      std::string pattern,
+      uWS::MoveOnlyFunction<uWS::MoveOnlyFunction<void (QueryString)> (
+        uWS::HttpResponse<SSL>*,
+        uWS::HttpRequest*,
+        std::unique_ptr<M>
+      )> &&handler,
+      size_t max_size = 10 * 1024 * 1024 // 10MiB
+    ) {
+      app.post(pattern, [impl = impl, max_size, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
+        const auto url = std::string(req->getUrl());
+        auto error_meta = std::make_unique<E>(impl->error_middleware(rsp, req));
+        rsp->onAborted([url]{
+          spdlog::debug("POST {} - HTTP session aborted", url);
+        });
+        const auto user_agent = std::string(req->getHeader("user-agent"));
+        std::string buffer = "?";
+        try {
+          const auto content_type = req->getHeader("content-type");
+          if (content_type.data() && !content_type.starts_with(TYPE_FORM)) {
+            throw ApiError("Wrong POST request Content-Type (expected application/x-www-form-urlencoded)", 415);
+          }
+          auto meta = std::make_unique<M>(impl->middleware(rsp, req));
+          auto body_handler = handler(rsp, req, std::move(meta));
+          rsp->onData([
+            impl = impl, rsp, max_size, url, user_agent,
+            body_handler = std::move(body_handler),
+            error_meta = std::move(error_meta),
+            buffer = std::move(buffer)
+          ](std::string_view data, bool last) mutable {
+            buffer.append(data);
+            try {
+              if (buffer.length() > max_size) throw ApiError("POST body is too large", 413);
+              if (!last) return;
+              if (!simdjson::validate_utf8(buffer)) throw ApiError("POST body is not valid UTF-8", 415);
+              rsp->cork([&]{ body_handler(QueryString{buffer}); });
+              spdlog::debug("POST {} - {} {}", url, rsp->getRemoteAddressAsText(), user_agent);
+            } catch (...) {
+              rsp->cork([&] { impl->handle_error(std::current_exception(), rsp, *error_meta, "POST", url); });
+            }
+          });
+        } catch (...) {
+          impl->handle_error(std::current_exception(), rsp, *error_meta, "POST", url);
+          return;
+        }
+      });
+      return std::move(*this);
+    }
+  };
+
   struct Escape {
     std::string_view str;
     Escape(std::string_view str) : str(str) {}
     Escape(const flatbuffers::String* fbs) : str(fbs ? fbs->string_view() : "") {}
   };
-
-  template <bool SSL> static inline auto operator<<(uWS::HttpResponse<SSL>& lhs, const std::string_view rhs) -> uWS::HttpResponse<SSL>& {
-    lhs.write(rhs);
-    return lhs;
-  }
-
-  template <bool SSL> static inline auto operator<<(uWS::HttpResponse<SSL>& lhs, int64_t rhs) -> uWS::HttpResponse<SSL>& {
-    lhs.write(fmt::format("{}", rhs));
-    return lhs;
-  }
-
-  template <bool SSL> static inline auto operator<<(uWS::HttpResponse<SSL>& lhs, uint64_t rhs) -> uWS::HttpResponse<SSL>& {
-    lhs.write(fmt::format("{}", rhs));
-    return lhs;
-  }
 }
 
 namespace fmt {

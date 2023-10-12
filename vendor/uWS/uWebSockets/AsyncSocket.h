@@ -227,6 +227,13 @@ protected:
         static thread_local char buf[16];
         int ipLength = 16;
         us_socket_remote_address(SSL, (us_socket_t *) this, buf, &ipLength);
+
+        // MODIFIED FOR LUDWIG - This fix makes IPv4 addresses work
+        static const uint8_t IPv4_PREFIX[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
+        if (ipLength == 16 && !memcmp(buf, IPv4_PREFIX, 12)) {
+            return std::string_view(buf + 12, 4);
+        }
+
         return std::string_view(buf, (unsigned int) ipLength);
     }
 

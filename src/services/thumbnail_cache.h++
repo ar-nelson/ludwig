@@ -2,15 +2,16 @@
 #include "services/http_client.h++"
 #include "util/thumbnailer.h++"
 #include <concurrent_lru_cache.h>
+#include <uWebSockets/MoveOnlyFunction.h>
 #include <variant>
 
 namespace Ludwig {
   class ThumbnailCache {
   public:
     using Image = std::shared_ptr<std::optional<std::pair<std::string, uint64_t>>>;
-    using Callback = std::function<void (Image)>;
+    using Callback = uWS::MoveOnlyFunction<void (Image)>;
   private:
-    using Promise = std::list<Callback>;
+    using Promise = std::list<std::shared_ptr<Callback>>;
     using Entry = std::variant<Promise, Image>;
     auto fetch_thumbnail(std::string url) -> Entry;
     tbb::concurrent_lru_cache<std::string, Entry, std::function<Entry (std::string)>> cache;

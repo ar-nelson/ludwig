@@ -44,7 +44,7 @@ namespace Ludwig {
           {
             auto handle = cache[url];
             visit(overload{
-              [&](Promise p) { callbacks = p; },
+              [&](Promise p) { callbacks = std::move(p); },
               [&](Image&) {
                 spdlog::warn("Overwrote cached thumbnail for {}, this is probably a race condition and shouldn't happen!", url);
               }
@@ -52,7 +52,7 @@ namespace Ludwig {
             handle.value() = img;
           }
           spdlog::debug("Got thumbnail for {}, dispatching {:d} callbacks", url, callbacks.size());
-          for (auto cb : callbacks) cb(img);
+          for (auto& cb : callbacks) (*cb)(img);
         }
       });
     return *entry_cell;
@@ -63,7 +63,7 @@ namespace Ludwig {
     visit(overload{
       [&](Promise& p) {
         spdlog::debug("Adding callback to in-flight thumbnail request for {}", url);
-        p.push_back(callback);
+        p.push_back(std::make_shared<Callback>(std::move(callback)));
       },
       [&](Image i) { callback(i); }
     }, handle.value());

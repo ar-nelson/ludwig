@@ -5,7 +5,6 @@
       cmake
       go-task
       zlib
-      xxd
       nasm
       deno
     ];

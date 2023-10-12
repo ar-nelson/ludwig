@@ -27,6 +27,7 @@ namespace Ludwig {
   class SearchEngine {
   public:
     using Callback = std::function<void (std::vector<SearchResult>)>;
+    virtual ~SearchEngine() = default;
     virtual auto index( uint64_t id, const User& user) -> void = 0;
     virtual auto index(uint64_t id, const Board& board) -> void = 0;
     virtual auto index(uint64_t id, const Thread& thread) -> void = 0;

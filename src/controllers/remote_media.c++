@@ -12,7 +12,7 @@ namespace Ludwig {
     const auto user =
       txn.get_user_id_by_name(user_name).and_then([&](auto id){return txn.get_user(id);});
     if (user && user->get().avatar_url()) {
-      small_cache.thumbnail(user->get().avatar_url()->str(), cb);
+      small_cache.thumbnail(user->get().avatar_url()->str(), std::move(cb));
     } else {
       cb(make_shared<optional<pair<string, uint64_t>>>());
     }
@@ -23,7 +23,7 @@ namespace Ludwig {
     const auto user =
       txn.get_user_id_by_name(user_name).and_then([&](auto id){return txn.get_user(id);});
     if (user && user->get().banner_url()) {
-      banner_cache.thumbnail(user->get().banner_url()->str(), cb);
+      banner_cache.thumbnail(user->get().banner_url()->str(), std::move(cb));
     } else {
       cb(make_shared<optional<pair<string, uint64_t>>>());
     }
@@ -34,7 +34,7 @@ namespace Ludwig {
     const auto board =
       txn.get_board_id_by_name(board_name).and_then([&](auto id){return txn.get_board(id);});
     if (board && board->get().icon_url()) {
-      small_cache.thumbnail(board->get().icon_url()->str(), cb);
+      small_cache.thumbnail(board->get().icon_url()->str(), std::move(cb));
     } else {
       cb(make_shared<optional<pair<string, uint64_t>>>());
     }
@@ -45,7 +45,7 @@ namespace Ludwig {
     const auto board =
       txn.get_board_id_by_name(board_name).and_then([&](auto id){return txn.get_board(id);});
     if (board && board->get().banner_url()) {
-      banner_cache.thumbnail(board->get().banner_url()->str(), cb);
+      banner_cache.thumbnail(board->get().banner_url()->str(), std::move(cb));
     } else {
       cb(make_shared<optional<pair<string, uint64_t>>>());
     }
@@ -55,7 +55,7 @@ namespace Ludwig {
     auto txn = db->open_read_txn();
     const auto thread = txn.get_thread(thread_id);
     if (thread && thread->get().card_image_url()) {
-      small_cache.thumbnail(thread->get().card_image_url()->str(), cb);
+      small_cache.thumbnail(thread->get().card_image_url()->str(), std::move(cb));
     } else {
       cb(make_shared<optional<pair<string, uint64_t>>>());
     }

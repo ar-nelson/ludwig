@@ -1,3 +1,4 @@
+.section .note.GNU-stack,"",@progbits
     .global tokenizer_model
     .global tokenizer_model_size
     .section .rodata

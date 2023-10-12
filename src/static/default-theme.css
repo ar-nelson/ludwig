@@ -684,7 +684,7 @@ label.upvote, label.downvote {
   border-left: 2px solid var(--color-accent);
 }
 
-.comment-tree .comment.odd-depth {
+.comment-tree .odd-depth > .comment {
   border-color: var(--color-accent-dim);
 }
 
