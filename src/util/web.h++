@@ -1,5 +1,6 @@
 #pragma once
 #include "util/common.h++"
+#include "models/db.h++"
 #include <regex>
 #include <sstream>
 #include <variant>
@@ -53,8 +54,8 @@ namespace Ludwig {
   class ApiError : public std::runtime_error {
   public:
     uint16_t http_status;
-    std::string_view message, internal_message;
-    ApiError(std::string_view message, uint16_t http_status = 500, std::string_view internal_message = { nullptr, 0 })
+    std::string message, internal_message;
+    ApiError(std::string message, uint16_t http_status = 500, std::string internal_message = { nullptr, 0 })
       : std::runtime_error(internal_message.data() ? fmt::format("{} - {}", message, internal_message) : std::string(message)),
         http_status(http_status), message(message), internal_message(internal_message) {}
   };
@@ -65,20 +66,27 @@ namespace Ludwig {
       try {
         return std::stoull(std::string(uWS::getDecodedQueryValue(key, query)), nullptr, 16);
       } catch (...) {
-        throw ApiError(fmt::format("Invalid or missing '{}' parameter", key).c_str(), 400);
+        throw ApiError(fmt::format("Invalid or missing '{}' parameter", key), 400);
       }
     }
     inline auto required_int(std::string_view key) -> int {
       try {
         return std::stoi(std::string(uWS::getDecodedQueryValue(key, query)));
       } catch (...) {
-        throw ApiError(fmt::format("Invalid or missing '{}' parameter", key).c_str(), 400);
+        throw ApiError(fmt::format("Invalid or missing '{}' parameter", key), 400);
       }
     }
     inline auto required_string(std::string_view key) -> std::string_view {
       auto s = uWS::getDecodedQueryValue(key, query);
-      if (s.empty()) ApiError(fmt::format("Invalid or missing '{}' parameter", key).c_str(), 400);
+      if (s.empty()) throw ApiError(fmt::format("Invalid or missing '{}' parameter", key), 400);
       return s;
+    }
+    inline auto required_vote(std::string_view key) -> Vote {
+      const auto vote_str = uWS::getDecodedQueryValue(key, query);
+      if (vote_str == "1") return Vote::Upvote;
+      else if (vote_str == "-1") return Vote::Downvote;
+      else if (vote_str == "0") return Vote::NoVote;
+      else throw ApiError(fmt::format("Invalid or missing '{}' parameter", key), 400);
     }
     inline auto optional_string(std::string_view key) -> std::optional<std::string_view> {
       auto s = uWS::getDecodedQueryValue(key, query);
@@ -99,7 +107,8 @@ namespace Ludwig {
     uWS::TemplatedApp<SSL>& app;
 
     static auto default_error_handler(uWS::HttpResponse<SSL>* rsp, const ApiError& err, const E&) -> void {
-      rsp->writeHeader("Content-Type", "text/plain; charset=utf-8")
+      rsp->writeStatus(http_status(err.http_status))
+        ->writeHeader("Content-Type", "text/plain; charset=utf-8")
         ->end(fmt::format("Error {:d} - {}", err.http_status, err.message));
     }
 
@@ -116,16 +125,15 @@ namespace Ludwig {
         std::string_view url
       ) noexcept -> void {
         if (e.http_status >= 500) {
-          spdlog::error("{} {} - {:d} {}", method, url, e.http_status, e.internal_message.data() ? e.internal_message : e.message);
+          spdlog::error("[{} {}] - {:d} {}", method, url, e.http_status, e.internal_message.empty() ? e.message : e.internal_message);
         } else {
-          spdlog::info("{} {} - {:d} {}", method, url, e.http_status, e.internal_message.data() ? e.internal_message : e.message);
+          spdlog::info("[{} {}] - {:d} {}", method, url, e.http_status, e.internal_message.empty() ? e.message : e.internal_message);
         }
         if (rsp->getWriteOffset()) {
           spdlog::critical("Route {} threw exception after starting to respond; response has been truncated. This is a bug.", url);
           rsp->end();
           return;
         }
-        rsp->writeStatus(http_status(e.http_status));
         try {
           error_handler(rsp, e, meta);
         } catch (...) {
@@ -184,7 +192,7 @@ namespace Ludwig {
         try {
           auto meta = impl->middleware(rsp, req);
           handler(rsp, req, meta);
-          spdlog::debug("GET {} - {} {}", url, rsp->getRemoteAddressAsText(), req->getHeader("user-agent"));
+          spdlog::debug("[GET {}] - {} {}", url, rsp->getRemoteAddressAsText(), req->getHeader("user-agent"));
         } catch (...) {
           impl->handle_error(std::current_exception(), rsp, impl->error_middleware(rsp, req), "GET", url);
         }
@@ -206,19 +214,19 @@ namespace Ludwig {
         const auto url = std::string(req->getUrl());
         rsp->onAborted([abort_flag, url]{
           *abort_flag = true;
-          spdlog::debug("GET {} - HTTP session aborted", url);
+          spdlog::debug("[GET {}] - HTTP session aborted", url);
         });
-        auto error_meta = std::make_unique<E>(impl->error_middleware(rsp, req));
+        auto error_meta = std::make_shared<E>(impl->error_middleware(rsp, req));
         try {
           auto meta = std::make_unique<M>(impl->middleware(rsp, req));
-          handler(rsp, req, std::move(meta), [impl = impl, rsp, url, error_meta = std::move(error_meta), abort_flag](std::function<void()> body) mutable {
+          handler(rsp, req, std::move(meta), [impl = impl, rsp, url, error_meta, abort_flag](std::function<void()> body) mutable {
             if (*abort_flag) return;
             rsp->cork([&]{
               try { body(); }
               catch (...) { impl->handle_error(std::current_exception(), rsp, *error_meta, "GET", url); }
             });
           });
-          spdlog::debug("GET {} - {} {}", url, rsp->getRemoteAddressAsText(), req->getHeader("user-agent"));
+          spdlog::debug("[GET {}] - {} {}", url, rsp->getRemoteAddressAsText(), req->getHeader("user-agent"));
         } catch (...) {
           impl->handle_error(std::current_exception(), rsp, *error_meta, "GET", url);
         }
@@ -237,9 +245,9 @@ namespace Ludwig {
     ) {
       app.post(pattern, [impl = impl, max_size, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
         const auto url = std::string(req->getUrl());
-        auto error_meta = std::make_unique<E>(impl->error_middleware(rsp, req));
+        auto error_meta = std::make_shared<E>(impl->error_middleware(rsp, req));
         rsp->onAborted([url]{
-          spdlog::debug("POST {} - HTTP session aborted", url);
+          spdlog::debug("[POST {}] - HTTP session aborted", url);
         });
         const auto user_agent = std::string(req->getHeader("user-agent"));
         std::string buffer = "?";
@@ -252,8 +260,8 @@ namespace Ludwig {
           auto body_handler = handler(rsp, req, std::move(meta));
           rsp->onData([
             impl = impl, rsp, max_size, url, user_agent,
+            error_meta = error_meta,
             body_handler = std::move(body_handler),
-            error_meta = std::move(error_meta),
             buffer = std::move(buffer)
           ](std::string_view data, bool last) mutable {
             buffer.append(data);
@@ -262,7 +270,7 @@ namespace Ludwig {
               if (!last) return;
               if (!simdjson::validate_utf8(buffer)) throw ApiError("POST body is not valid UTF-8", 415);
               rsp->cork([&]{ body_handler(QueryString{buffer}); });
-              spdlog::debug("POST {} - {} {}", url, rsp->getRemoteAddressAsText(), user_agent);
+              spdlog::debug("[POST {}] - {} {}", url, rsp->getRemoteAddressAsText(), user_agent);
             } catch (...) {
               rsp->cork([&] { impl->handle_error(std::current_exception(), rsp, *error_meta, "POST", url); });
             }

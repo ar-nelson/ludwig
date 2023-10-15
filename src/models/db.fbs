@@ -2,6 +2,29 @@ namespace Ludwig;
 
 enum Vote : byte { Upvote = 1, NoVote = 0, Downvote = -1 }
 
+enum SortType : ubyte {
+  Active,
+  Hot,
+  New,
+  Old,
+  MostComments,
+  NewComments,
+  TopAll,
+  TopYear,
+  TopSixMonths,
+  TopThreeMonths,
+  TopMonth,
+  TopWeek,
+  TopDay,
+  TopTwelveHour,
+  TopSixHour,
+  TopHour
+}
+
+enum CommentSortType : ubyte { Hot, Top, New, Old }
+
+enum UserPostSortType : ubyte { Top, New, Old }
+
 enum ModState : ubyte { Visible, Flagged, Locked, Removed }
 
 table Session {

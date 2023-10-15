@@ -1,6 +1,7 @@
 #pragma once
 #include "util/common.h++"
 #include "models/db.h++"
+#include <uWebSockets/MoveOnlyFunction.h>
 
 namespace Ludwig {
   enum class SearchResultType : uint8_t {
@@ -26,7 +27,7 @@ namespace Ludwig {
 
   class SearchEngine {
   public:
-    using Callback = std::function<void (std::vector<SearchResult>)>;
+    using Callback = uWS::MoveOnlyFunction<void (std::vector<SearchResult>)>;
     virtual ~SearchEngine() = default;
     virtual auto index( uint64_t id, const User& user) -> void = 0;
     virtual auto index(uint64_t id, const Board& board) -> void = 0;

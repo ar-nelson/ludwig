@@ -231,7 +231,7 @@ a:link.big-button, a:visited.big-button {
   position: fixed;
   top: 0;
   left: 0;
-  max-width: auto;
+  max-width: 40rem;
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -247,6 +247,17 @@ a:link.big-button, a:visited.big-button {
   color: var(--color-bg-dim);
   box-shadow: rgba(0, 0, 0, 0.35) 0 0.25rem 1rem;
   cursor: pointer;
+  transition: transform 0.25s ease-in-out, opacity 0.25s linear;
+}
+
+.toast.htmx-added {
+  transform: translate(-30rem, 0);
+  opacity: 0.25;
+}
+
+.toast:hover {
+  transform: translate(-1rem, 0);
+  opacity: 0.75;
 }
 
 .toast-error {
@@ -341,17 +352,23 @@ summary + * {
   margin-top: 1rem;
 }
 
-.sort-options {
-  margin-bottom: 1rem;
+.sort-form {
+  margin: 1rem 0;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
-.sort-options form {
-  margin-top: 1rem;
-  margin-left: 1rem;
+.sort-form label, .sort-form legend {
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
 }
 
-.sort-options label span {
-  width: 5rem;
+.sort-form > *:not(:last-child) {
+  margin-right: 1rem;
 }
 
 ol.thread-list, ol.comment-list, ol.board-list {
@@ -373,8 +390,20 @@ ol.thread-list, ol.comment-list, ol.board-list {
   margin-left: 2rem;
 }
 
-.pagination.hx-request > *:not(.spinner) {
+.more-link {
+  display: block;
+  padding: 1rem;
+  text-align: center;
+  width: 100%;
+  background-color: var(--color-bg-dim);
+}
+
+.more-link.htmx-request {
   display: none;
+}
+
+.more-link.htmx-request + .spinner {
+  display: inline-block;
 }
 
 .thread {
@@ -672,7 +701,11 @@ label.upvote, label.downvote {
   width: 4rem;
 }
 
-.has-js .controls-submenu button[type=submit] {
+body:not(.has-js) .js {
+  display: none;
+}
+
+.has-js .no-js {
   display: none;
 }
 
@@ -697,7 +730,10 @@ label.upvote, label.downvote {
 .reply-form {
   display: flex;
   flex-direction: column;
-  padding: 0 1rem 2rem;
+  padding: 1rem;
+  border-top: 1px dotted var(--color-fg);
+  border-bottom: 1px dotted var(--color-fg);
+  margin-bottom: 1rem;
 }
 
 .form label, .form fieldset {
@@ -705,6 +741,10 @@ label.upvote, label.downvote {
   flex-direction: column;
   align-items: stretch;
   margin: 1rem 0;
+}
+
+.reply-form label, .reply-form fieldset {
+  margin-top: 0;
 }
 
 .form label > span, .form legend {
@@ -722,6 +762,10 @@ label.upvote, label.downvote {
   align-self: flex-start;
 }
 
+.reply-form input[type=submit] {
+  margin-top: 0;
+}
+
 .form fieldset label {
   display: block;
   margin: 0.25rem 0;
@@ -732,9 +776,10 @@ label.upvote, label.downvote {
   width: 3.5rem;
   height: 2rem;
   background: var(--color-fg-dim);
-  display: block;
+  display: inline-block;
   border-radius: 2rem;
   position: relative;
+  margin-right: 0.5rem;
   transition: background 0.3s;
 }
 
@@ -759,12 +804,43 @@ input:checked + .toggle-switch:after {
   transform: translateX(-100%);
 }
 
-input:focus + .toggle-switch {
+input:focus + .toggle-switch, input:focus + .toggle-button {
   box-shadow: 0 0 1rem var(--color-accent-hover);
 }
 
 .toggle-switch:active:after {
   width: 2rem;
+}
+
+.toggle-buttons {
+  display: flex;
+  flex-direction: row;
+}
+
+.toggle-buttons .toggle-button:not(:last-child) {
+  border-right: 0;
+}
+
+.toggle-button {
+  cursor: pointer;
+  height: 36px;
+  text-align: center;
+  padding: 0.5rem 1rem;
+  font-weight: bold;
+  font-size: 1rem;
+  color: var(--color-accent);
+  background-color: var(--color-bg-dim);
+  border: 1px solid var(--color-accent);
+}
+
+input:checked + .toggle-button {
+  cursor: default;
+  background-color: var(--color-accent);
+  color: var(--color-fg);
+}
+
+#content_warning_toggle:checked ~ label[for=content_warning] {
+  display: block;
 }
 
 .error-message {
@@ -784,24 +860,20 @@ body > footer {
   color: var(--color-fg-dim);
 }
 
-.hx-request .spinner {
-  display: block;
-}
-
 .spinner,
 .spinner:before,
 .spinner:after {
-  background: #ffffff;
-  -webkit-animation: load1 1s infinite ease-in-out;
-  animation: load1 1s infinite ease-in-out;
+  background: var(--color-accent);
+  -webkit-animation: spinner 1s infinite ease-in-out;
+  animation: spinner 1s infinite ease-in-out;
   width: 1em;
   height: 4em;
 }
 .spinner {
   display: none;
-  color: #ffffff;
+  color: var(--color-accent);
   text-indent: -9999em;
-  margin: 88px auto;
+  margin: 1rem auto;
   position: relative;
   font-size: 11px;
   -webkit-transform: translateZ(0);

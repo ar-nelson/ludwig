@@ -13,38 +13,6 @@
 namespace Ludwig {
   constexpr size_t ITEMS_PER_PAGE = 20;
 
-  enum class SortType : uint8_t {
-    Active,
-    Hot,
-    New,
-    Old,
-    MostComments,
-    NewComments,
-    TopAll,
-    TopYear,
-    TopSixMonths,
-    TopThreeMonths,
-    TopMonth,
-    TopWeek,
-    TopDay,
-    TopTwelveHour,
-    TopSixHour,
-    TopHour
-  };
-
-  enum class CommentSortType : uint8_t {
-    Hot,
-    Top,
-    New,
-    Old
-  };
-
-  enum class UserPostSortType : uint8_t {
-    Top,
-    New,
-    Old
-  };
-
   struct SecretString {
     std::string_view str;
     SecretString(std::string_view str) : str(str) {};
@@ -63,7 +31,7 @@ namespace Ludwig {
     std::string name, domain, description;
     std::optional<std::string> icon_url, banner_url;
     uint64_t max_post_length;
-    bool javascript_enabled, board_creation_admin_only,
+    bool javascript_enabled, infinite_scroll_enabled, board_creation_admin_only,
          registration_enabled, registration_application_required,
          registration_invite_required, invite_admin_only;
   };
@@ -277,7 +245,7 @@ namespace Ludwig {
     virtual ~InstanceController() = default;
 
     using SearchResultListEntry = std::variant<UserListEntry, BoardListEntry, ThreadListEntry, CommentListEntry>;
-    using SearchCallback = std::function<void (std::vector<SearchResultListEntry>)>;
+    using SearchCallback = uWS::MoveOnlyFunction<void (ReadTxn&, std::vector<SearchResultListEntry>)>;
 
     static auto parse_sort_type(std::string_view str) -> SortType {
       if (str.empty() || str == "Hot") return SortType::Hot;
@@ -394,54 +362,48 @@ namespace Ludwig {
       uint64_t id,
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
-      bool skip_cw = false,
-      std::optional<uint64_t> from_id = {}
+      std::optional<uint64_t> from = {}
     ) -> ThreadDetailResponse;
     auto comment_detail(
       ReadTxnBase& txn,
       uint64_t id,
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
-      bool skip_cw = false,
-      std::optional<uint64_t> from_id = {}
+      std::optional<uint64_t> from = {}
     ) -> CommentDetailResponse;
     auto user_detail(ReadTxnBase& txn, uint64_t id) -> UserDetailResponse;
     auto local_user_detail(ReadTxnBase& txn, uint64_t id) -> LocalUserDetailResponse;
     auto board_detail(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> logged_in_user) -> BoardDetailResponse;
     auto local_board_detail(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> logged_in_user) -> LocalBoardDetailResponse;
-    auto list_local_users(ReadTxnBase& txn, std::optional<uint64_t> from_id = {}) -> PageOf<UserListEntry>;
-    auto list_local_boards(ReadTxnBase& txn, std::optional<uint64_t> from_id = {}) -> PageOf<BoardListEntry>;
+    auto list_local_users(ReadTxnBase& txn, std::optional<uint64_t> from = {}) -> PageOf<UserListEntry>;
+    auto list_local_boards(ReadTxnBase& txn, std::optional<uint64_t> from = {}) -> PageOf<BoardListEntry>;
     auto list_board_threads(
       ReadTxnBase& txn,
       uint64_t board_id,
       SortType sort = SortType::Hot,
       Login login = {},
-      bool skip_cw = false,
-      std::optional<uint64_t> from_id = {}
+      std::optional<uint64_t> from = {}
     ) -> PageOf<ThreadListEntry>;
     auto list_board_comments(
       ReadTxnBase& txn,
       uint64_t board_id,
       SortType sort = SortType::Hot,
       Login login = {},
-      bool skip_cw = false,
-      std::optional<uint64_t> from_id = {}
+      std::optional<uint64_t> from = {}
     ) -> PageOf<CommentListEntry>;
     auto list_user_threads(
       ReadTxnBase& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
-      bool skip_cw = false,
-      std::optional<uint64_t> from_id = {}
+      std::optional<uint64_t> from = {}
     ) -> PageOf<ThreadListEntry>;
     auto list_user_comments(
       ReadTxnBase& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
-      bool skip_cw = false,
-      std::optional<uint64_t> from_id = {}
+      std::optional<uint64_t> from = {}
     ) -> PageOf<CommentListEntry>;
     auto search(
       SearchQuery query,

@@ -83,7 +83,10 @@ namespace Ludwig {
   template <class T, typename std::enable_if<std::is_arithmetic<T>::value, T>::type* = nullptr>
   inline auto val_as(const MDB_val& v) noexcept -> T {
     T ret;
-    assert(v.mv_size == sizeof(T));
+    if (v.mv_size != sizeof(T)) {
+      spdlog::error("DATABASE CORRUPTION: DB entry is wrong size (expected {}B, got {}B); returning 0", sizeof(T), v.mv_size);
+      return 0;
+    }
     memcpy(&ret, v.mv_data, sizeof(T));
     return ret;
   }
@@ -137,7 +140,7 @@ namespace Ludwig {
       }
     ) : dbi(dbi), txn(txn), from_key(from_key), to_key(to_key),
         fn_value(fn_value), fn_first(fn_first), fn_next(fn_next) {
-      auto err = mdb_cursor_open(txn, dbi, &cur);
+      const auto err = mdb_cursor_open(txn, dbi, &cur);
       if (err) {
         spdlog::error("Failed to create iterator: {}", mdb_strerror(err));
         failed = true;
@@ -145,6 +148,16 @@ namespace Ludwig {
       } else {
         done = fn_first(*this);
       }
+    }
+    DBIter(const DBIter&) = delete;
+    auto operator=(const DBIter&) = delete;
+    DBIter(DBIter&& from) {
+      memcpy(this, &from, sizeof(DBIter));
+      from.cur = nullptr;
+    };
+    DBIter& operator=(DBIter&& from) noexcept {
+      memcpy(this, &from, sizeof(DBIter));
+      from.cur = nullptr;
     }
     ~DBIter() {
       if (cur != nullptr) mdb_cursor_close(cur);

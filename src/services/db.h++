@@ -12,6 +12,8 @@ namespace Ludwig {
     return (uint64_t)std::numeric_limits<int64_t>::max() + (uint64_t)karma;
   }
 
+  static constexpr uint64_t ACTIVE_COMMENT_MAX_AGE = 86400 * 2; // 2 days
+
   class StringVal {
   private:
     const std::string str;
@@ -129,16 +131,23 @@ namespace Ludwig {
     auto get_thread(uint64_t id) -> OptRef<Thread>;
     auto get_post_stats(uint64_t id) -> OptRef<PostStats>;
     auto list_threads_of_board_new(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_threads_of_board_old(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_threads_of_board_top(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_threads_of_board_most_comments(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_threads_of_user_new(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_threads_of_user_old(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_threads_of_user_top(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
 
     auto get_comment(uint64_t id) -> OptRef<Comment>;
     auto list_comments_of_post_new(uint64_t post_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_comments_of_post_old(uint64_t post_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_comments_of_post_top(uint64_t post_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_comments_of_board_new(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_comments_of_board_old(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_comments_of_board_top(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_comments_of_board_most_comments(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_comments_of_user_new(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_comments_of_user_old(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
     auto list_comments_of_user_top(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
 
     auto get_vote_of_user_for_post(uint64_t user_id, uint64_t post_id) -> Vote;

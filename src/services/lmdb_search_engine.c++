@@ -1,5 +1,6 @@
 #include "lmdb_search_engine.h++"
 #include "static/tokenizer/tokenizer_model.h"
+#include <map>
 
 using std::runtime_error, std::string, std::string_view;
 
@@ -193,9 +194,18 @@ namespace Ludwig {
     txn.commit();
   }
 
+  using MatchMap = std::map<uint64_t, std::pair<SearchResultType, uint64_t>>;
+
+  static inline auto into_match_map(MatchMap& mm, SearchResultType type, std::set<uint64_t> ids) {
+    for (auto id : ids) {
+      const auto [it, inserted] = mm.insert({ id, { type, 1 } });
+      if (!inserted) it->second.second++;
+    }
+  }
+
   auto LmdbSearchEngine::search(SearchQuery query, Callback callback) -> void {
     std::set<int> tokens;
-    std::set<uint64_t> user_matches, board_matches, thread_matches, comment_matches;
+    MatchMap matches;
 
     // string-start tokens are different from mid-string tokens
     into_set(tokens, processor.EncodeAsIds(query.query));
@@ -203,32 +213,25 @@ namespace Ludwig {
 
     Txn txn(env, MDB_RDONLY);
     for (const auto token : tokens) {
-      if (query.include_users) into_set(user_matches, txn.get_all(Token_Users, (uint64_t)token));
-      if (query.include_boards) into_set(board_matches, txn.get_all(Token_Boards, (uint64_t)token));
-      if (query.include_threads) into_set(thread_matches, txn.get_all(Token_Threads, (uint64_t)token));
-      if (query.include_comments) into_set(comment_matches, txn.get_all(Token_Comments, (uint64_t)token));
+      if (query.include_users) into_match_map(matches, SearchResultType::User, txn.get_all(Token_Users, (uint64_t)token));
+      if (query.include_boards) into_match_map(matches, SearchResultType::Board, txn.get_all(Token_Boards, (uint64_t)token));
+      if (query.include_threads) into_match_map(matches, SearchResultType::Thread, txn.get_all(Token_Threads, (uint64_t)token));
+      if (query.include_comments) into_match_map(matches, SearchResultType::Comment, txn.get_all(Token_Comments, (uint64_t)token));
     }
 
     // TODO: Filter and sort
 
+    auto buf = std::make_unique<std::pair<uint64_t, std::pair<SearchResultType, uint64_t>>[]>(query.limit);
+    std::partial_sort_copy(matches.begin(), matches.end(), buf.get(), buf.get() + query.limit, [](auto a, auto b) {
+      return a.second.second > b.second.second;
+    });
+    const auto n = std::min(matches.size(), query.limit);
     std::vector<SearchResult> results;
-    results.reserve(query.limit);
-    for (const auto id : user_matches) {
-      if (results.size() >= query.limit) break;
-      results.emplace_back(SearchResultType::User, id);
+    results.reserve(n);
+    for (size_t i = 0; i < n; i++) {
+      results.emplace_back(buf[i].second.first, buf[i].first);
     }
-    for (const auto id : board_matches) {
-      if (results.size() >= query.limit) break;
-      results.emplace_back(SearchResultType::Board, id);
-    }
-    for (const auto id : thread_matches) {
-      if (results.size() >= query.limit) break;
-      results.emplace_back(SearchResultType::Thread, id);
-    }
-    for (const auto id : comment_matches) {
-      if (results.size() >= query.limit) break;
-      results.emplace_back(SearchResultType::Comment, id);
-    }
+
     callback(results);
   }
 }
