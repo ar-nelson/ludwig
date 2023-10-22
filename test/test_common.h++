@@ -1,8 +1,16 @@
 #include "util/common.h++"
 #include <lmdb.h>
-#include <memory>
+#include <catch2/catch_test_macros.hpp>
+#include <static_block.hpp>
 
+using std::make_shared, std::nullopt, std::optional, std::pair, std::shared_ptr,
+    std::string, std::string_view, std::vector;
 using namespace std::literals::string_view_literals;
+using namespace Ludwig;
+
+static_block {
+  spdlog::set_level(spdlog::level::debug);
+}
 
 struct TempFile {
   char* name;
@@ -32,7 +40,7 @@ struct TempDB {
     MDB_txn* txn;
     err = mdb_txn_begin(env, nullptr, 0, &txn);
     if (err) throw std::runtime_error(mdb_strerror(err));
-    err = mdb_dbi_open(txn, "test", MDB_CREATE, &dbi);
+    err = mdb_dbi_open(txn, "test", MDB_CREATE | MDB_DUPSORT, &dbi);
     if (err) throw std::runtime_error(mdb_strerror(err));
     err = mdb_txn_commit(txn);
     if (err) throw std::runtime_error(mdb_strerror(err));

@@ -21,6 +21,6 @@ namespace Ludwig {
     auto index(uint64_t id, const Thread& thread) -> void;
     auto index(uint64_t id, const Comment& comment) -> void;
     auto unindex(uint64_t id, SearchResultType type) -> void;
-    auto search(SearchQuery query, Callback callback) -> void;
+    auto search(SearchQuery query, Callback&& callback) -> void;
   };
 }

@@ -39,20 +39,28 @@ namespace Ludwig {
   struct UserListEntry {
     uint64_t id;
     std::reference_wrapper<const User> _user;
+    OptRef<const LocalUser> _local_user;
+    std::reference_wrapper<const UserStats> _stats;
+    bool hidden;
 
     inline auto user() const -> const User& { return _user; }
+    inline auto maybe_local_user() const -> OptRef<const LocalUser> { return _local_user; }
+    inline auto stats() const -> const UserStats& { return _stats; }
   };
 
   struct BoardListEntry {
     uint64_t id;
     std::reference_wrapper<const Board> _board;
+    std::reference_wrapper<const BoardStats> _stats;
+    bool hidden, subscribed;
 
     inline auto board() const -> const Board& { return _board; }
+    inline auto stats() const -> const BoardStats& { return _stats; }
   };
 
   struct ThreadListEntry {
   private:
-    static flatbuffers::FlatBufferBuilder null_user, null_board;
+    static const flatbuffers::FlatBufferBuilder null_user, null_board;
   public:
     uint64_t id;
     double rank;
@@ -75,7 +83,7 @@ namespace Ludwig {
 
   struct CommentListEntry {
   private:
-    static flatbuffers::FlatBufferBuilder null_user, null_thread, null_board;
+    static const flatbuffers::FlatBufferBuilder null_user, null_thread, null_board;
   public:
     uint64_t id;
     double rank;
@@ -100,14 +108,61 @@ namespace Ludwig {
     }
   };
 
+  struct PageCursor {
+    bool exists = false;
+    uint64_t k, v;
+
+    PageCursor() : exists(false) {}
+    explicit PageCursor(uint64_t k) : exists(true), k(k) {}
+    PageCursor(uint64_t k, uint64_t v) : exists(true), k(k), v(v) {}
+    PageCursor(std::string_view str) {
+      static const std::regex re(R"(^([0-9a-f]+)(?:_([0-9a-f]+))$)", std::regex::icase);
+      if (str.empty()) return;
+      std::match_results<std::string_view::const_iterator> match;
+      if (std::regex_match(str.begin(), str.end(), match, re)) {
+        exists = true;
+        k = std::stoull(std::string(match[1].str()), nullptr, 16);
+        if (match[2].matched) v = std::stoull(std::string(match[2].str()), nullptr, 16);
+      } else {
+        throw ApiError(fmt::format("Invalid cursor: {}", str), 400);
+      }
+    }
+
+    operator bool() const noexcept { return exists; }
+    auto to_string() const noexcept -> std::string {
+      if (!exists) return "";
+      if (!v) return fmt::format("{:x}", k);
+      return fmt::format("{:x}_{:x}", k, v);
+    }
+
+    using OptKV = std::optional<std::pair<Cursor, uint64_t>>;
+
+    inline auto next_cursor_desc() -> OptKV {
+      if (!exists) return {};
+      return {{Cursor(k), v ? v - 1 : v}};
+    }
+    inline auto next_cursor_asc() -> OptKV {
+      if (!exists) return {};
+      return {{Cursor(k), v ? v + 1 : ID_MAX}};
+    }
+    inline auto next_cursor_desc(uint64_t prefix) -> OptKV {
+      if (!exists) return {};
+      return {{Cursor(prefix, k), v ? v - 1 : v}};
+    }
+    inline auto next_cursor_asc(uint64_t prefix) -> OptKV {
+      if (!exists) return {};
+      return {{Cursor(prefix, k), v ? v + 1 : ID_MAX}};
+    }
+  };
+
   template <typename T> struct PageOf {
     stlpb::static_vector<T, ITEMS_PER_PAGE> entries;
     bool is_first;
-    std::optional<uint64_t> next;
+    PageCursor next;
   };
 
   struct CommentTree {
-    std::unordered_map<uint64_t, uint64_t> continued;
+    std::unordered_map<uint64_t, PageCursor> continued;
     std::multimap<uint64_t, CommentListEntry> comments;
 
     inline auto size() const -> size_t {
@@ -116,31 +171,16 @@ namespace Ludwig {
     inline auto emplace(uint64_t parent, CommentListEntry e) -> void {
       comments.emplace(parent, e);
     }
-    inline auto mark_continued(uint64_t parent, uint64_t from = 0) {
+    inline auto mark_continued(uint64_t parent, PageCursor from = {}) {
       continued.emplace(parent, from);
     }
   };
 
-  struct UserDetailResponse : UserListEntry {
-    std::reference_wrapper<const UserStats> _stats;
-
-    inline auto stats() const -> const UserStats& { return _stats; }
+  struct LocalUserDetailResponse : UserListEntry {
+    inline auto local_user() const -> const LocalUser& { return _local_user->get(); }
   };
 
-  struct LocalUserDetailResponse : UserDetailResponse {
-    std::reference_wrapper<const LocalUser> _local_user;
-
-    inline auto local_user() const -> const LocalUser& { return _local_user; }
-  };
-
-  struct BoardDetailResponse : BoardListEntry {
-    std::reference_wrapper<const BoardStats> _stats;
-    bool subscribed;
-
-    inline auto stats() const -> const BoardStats& { return _stats; }
-  };
-
-  struct LocalBoardDetailResponse : BoardDetailResponse {
+  struct LocalBoardDetailResponse : BoardListEntry {
     std::reference_wrapper<const LocalBoard> _local_board;
 
     inline auto local_board() const -> const LocalBoard& { return _local_board; }
@@ -195,12 +235,11 @@ namespace Ludwig {
     BoardStatsUpdate,
     LocalBoardUpdate,
     BoardDelete,
-    PageUpdate,
-    PageStatsUpdate,
+    ThreadUpdate,
     ThreadDelete,
     CommentUpdate,
-    CommentStatsUpdate,
     CommentDelete,
+    PostStatsUpdate,
     MaxEvent
   };
 
@@ -236,6 +275,8 @@ namespace Ludwig {
       std::optional<uint64_t> invite
     ) -> uint64_t;
     virtual auto dispatch_event(Event, uint64_t = 0) -> void {}
+
+    class SearchFunctor;
   public:
     InstanceController(
       std::shared_ptr<DB> db,
@@ -245,10 +286,12 @@ namespace Ludwig {
     virtual ~InstanceController() = default;
 
     using SearchResultListEntry = std::variant<UserListEntry, BoardListEntry, ThreadListEntry, CommentListEntry>;
-    using SearchCallback = uWS::MoveOnlyFunction<void (ReadTxn&, std::vector<SearchResultListEntry>)>;
+    using SearchCallback = std::move_only_function<void (ReadTxnBase&, std::vector<SearchResultListEntry>)>;
+    using Login = const std::optional<LocalUserDetailResponse>&;
 
-    static auto parse_sort_type(std::string_view str) -> SortType {
-      if (str.empty() || str == "Hot") return SortType::Hot;
+    static auto parse_sort_type(std::string_view str, Login login = {}) -> SortType {
+      if (str.empty()) return login ? login->local_user().default_sort_type() : SortType::Active;
+      if (str == "Hot") return SortType::Hot;
       if (str == "Active") return SortType::Active;
       if (str == "New") return SortType::New;
       if (str == "Old") return SortType::Old;
@@ -267,8 +310,9 @@ namespace Ludwig {
       throw ApiError("Bad sort type", 400);
     }
 
-    static auto parse_comment_sort_type(std::string_view str) -> CommentSortType {
-      if (str.empty() || str == "Hot") return CommentSortType::Hot;
+    static auto parse_comment_sort_type(std::string_view str, Login login = {}) -> CommentSortType {
+      if (str.empty()) return login ? login->local_user().default_comment_sort_type() : CommentSortType::Hot;
+      if (str == "Hot") return CommentSortType::Hot;
       if (str == "New") return CommentSortType::New;
       if (str == "Old") return CommentSortType::Old;
       if (str == "Top") return CommentSortType::Top;
@@ -282,18 +326,37 @@ namespace Ludwig {
       throw ApiError("Bad post sort type", 400);
     }
 
-    static auto parse_hex_id(std::string hex_id) -> std::optional<uint64_t> {
-      if (hex_id.empty()) return {};
-      auto n = std::stoull(hex_id, nullptr, 16);
-      if (!n && hex_id != "0") throw ApiError("Bad hexadecimal ID", 400);
-      return { n };
+    static auto parse_user_sort_type(std::string_view str) -> UserSortType {
+      if (str.empty() || str == "NewPosts") return UserSortType::NewPosts;
+      if (str == "MostPosts") return UserSortType::MostPosts;
+      if (str == "New") return UserSortType::New;
+      if (str == "Old") return UserSortType::Old;
+      throw ApiError("Bad user sort type", 400);
     }
 
-    using Login = const std::optional<LocalUserDetailResponse>&;
+    static auto parse_board_sort_type(std::string_view str) -> BoardSortType {
+      if (str.empty() || str == "MostSubscribers") return BoardSortType::MostSubscribers;
+      if (str == "NewPosts") return BoardSortType::NewPosts;
+      if (str == "MostPosts") return BoardSortType::MostPosts;
+      if (str == "New") return BoardSortType::New;
+      if (str == "Old") return BoardSortType::Old;
+      throw ApiError("Bad board sort type", 400);
+    }
 
-    static auto should_show(const ThreadListEntry& thread, Login login, bool hide_cw = false) -> bool;
-    static auto should_show(const CommentListEntry& comment, Login login, bool hide_cw = false) -> bool;
-    static auto should_show(const BoardListEntry& board, Login login, bool hide_cw = false) -> bool;
+    static auto parse_hex_id(std::string hex_id) -> std::optional<uint64_t> {
+      if (hex_id.empty()) return {};
+      try { return std::stoull(hex_id, nullptr, 16); }
+      catch (...) { throw ApiError("Bad hexadecimal ID", 400); }
+    }
+
+    static auto can_view(const ThreadListEntry& thread, Login login) -> bool;
+    static auto can_view(const CommentListEntry& comment, Login login) -> bool;
+    static auto can_view(const UserListEntry& user, Login login) -> bool;
+    static auto can_view(const BoardListEntry& board, Login login) -> bool;
+    static auto should_show(const ThreadListEntry& thread, Login login) -> bool;
+    static auto should_show(const CommentListEntry& comment, Login login) -> bool;
+    static auto should_show(const UserListEntry& user, Login login) -> bool;
+    static auto should_show(const BoardListEntry& board, Login login) -> bool;
     static auto can_create_thread(const BoardListEntry& board, Login login) -> bool;
     static auto can_reply_to(const ThreadListEntry& thread, Login login) -> bool;
     static auto can_reply_to(const CommentListEntry& comment, Login login) -> bool;
@@ -330,7 +393,7 @@ namespace Ludwig {
       bool is_board_hidden = false
     ) -> CommentListEntry;
 
-    inline auto open_read_txn() -> ReadTxn {
+    inline auto open_read_txn() -> ReadTxnImpl {
       return db->open_read_txn();
     }
 
@@ -342,7 +405,7 @@ namespace Ludwig {
       return {};
     }
     auto validate_or_regenerate_session(
-      ReadTxn& txn,
+      ReadTxnBase& txn,
       uint64_t session_id,
       std::string_view ip,
       std::string_view user_agent
@@ -362,55 +425,63 @@ namespace Ludwig {
       uint64_t id,
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
-      std::optional<uint64_t> from = {}
+      PageCursor from = {}
     ) -> ThreadDetailResponse;
     auto comment_detail(
       ReadTxnBase& txn,
       uint64_t id,
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
-      std::optional<uint64_t> from = {}
+      PageCursor from = {}
     ) -> CommentDetailResponse;
-    auto user_detail(ReadTxnBase& txn, uint64_t id) -> UserDetailResponse;
+    auto user_detail(ReadTxnBase& txn, uint64_t id, Login login) -> UserListEntry;
     auto local_user_detail(ReadTxnBase& txn, uint64_t id) -> LocalUserDetailResponse;
-    auto board_detail(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> logged_in_user) -> BoardDetailResponse;
-    auto local_board_detail(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> logged_in_user) -> LocalBoardDetailResponse;
-    auto list_local_users(ReadTxnBase& txn, std::optional<uint64_t> from = {}) -> PageOf<UserListEntry>;
-    auto list_local_boards(ReadTxnBase& txn, std::optional<uint64_t> from = {}) -> PageOf<BoardListEntry>;
+    auto board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> BoardListEntry;
+    auto local_board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> LocalBoardDetailResponse;
+    auto list_users(
+      ReadTxnBase& txn,
+      UserSortType sort,
+      bool local_only,
+      Login login = {},
+      PageCursor from = {}
+    ) -> PageOf<UserListEntry>;
+    auto list_boards(
+      ReadTxnBase& txn,
+      BoardSortType sort,
+      bool local_only,
+      bool subscribed_only,
+      Login login = {},
+      PageCursor from = {}
+    ) -> PageOf<BoardListEntry>;
     auto list_board_threads(
       ReadTxnBase& txn,
       uint64_t board_id,
-      SortType sort = SortType::Hot,
+      SortType sort = SortType::Active,
       Login login = {},
-      std::optional<uint64_t> from = {}
+      PageCursor from = {}
     ) -> PageOf<ThreadListEntry>;
     auto list_board_comments(
       ReadTxnBase& txn,
       uint64_t board_id,
-      SortType sort = SortType::Hot,
+      SortType sort = SortType::Active,
       Login login = {},
-      std::optional<uint64_t> from = {}
+      PageCursor from = {}
     ) -> PageOf<CommentListEntry>;
     auto list_user_threads(
       ReadTxnBase& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
-      std::optional<uint64_t> from = {}
+      PageCursor from = {}
     ) -> PageOf<ThreadListEntry>;
     auto list_user_comments(
       ReadTxnBase& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
-      std::optional<uint64_t> from = {}
+      PageCursor from = {}
     ) -> PageOf<CommentListEntry>;
-    auto search(
-      SearchQuery query,
-      Login login,
-      size_t offset,
-      SearchCallback callback
-    ) -> void;
+    auto search(SearchQuery query, Login login, SearchCallback callback) -> void;
 
     auto register_local_user(
       std::string_view username,

@@ -186,7 +186,7 @@ namespace Ludwig {
     ) requires std::same_as<M, std::monostate> && std::same_as<E, std::monostate>
       : Router(app, [](auto*, auto*){return std::monostate();}, [](auto*, auto*){return std::monostate();}, error_handler) {}
 
-    Router &&get(std::string pattern, uWS::MoveOnlyFunction<void (uWS::HttpResponse<SSL>*, uWS::HttpRequest*, M&)> &&handler) {
+    Router &&get(std::string pattern, std::move_only_function<void (uWS::HttpResponse<SSL>*, uWS::HttpRequest*, M&)> &&handler) {
       app.get(pattern, [impl = impl, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
         const auto url = req->getUrl();
         try {
@@ -202,11 +202,11 @@ namespace Ludwig {
 
     Router &&get_async(
       std::string pattern,
-      uWS::MoveOnlyFunction<void (
+      std::move_only_function<void (
         uWS::HttpResponse<SSL>*,
         uWS::HttpRequest*,
         std::unique_ptr<M>,
-        uWS::MoveOnlyFunction<void (std::function<void ()>)>
+        std::move_only_function<void (std::function<void ()>)>
       )> &&handler
     ) {
       app.get(pattern, [impl = impl, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
@@ -236,7 +236,7 @@ namespace Ludwig {
 
     Router &&post_form(
       std::string pattern,
-      uWS::MoveOnlyFunction<uWS::MoveOnlyFunction<void (QueryString)> (
+      std::move_only_function<std::move_only_function<void (QueryString)> (
         uWS::HttpResponse<SSL>*,
         uWS::HttpRequest*,
         std::unique_ptr<M>

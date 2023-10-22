@@ -1,12 +1,14 @@
 #include "instance.h++"
-#include "util/web.h++"
 #include <mutex>
 #include <regex>
 #include <duthomhas/csprng.hpp>
 #include <openssl/evp.h>
+#include "util/web.h++"
+#include "util/lambda_macros.h++"
 
 using std::function, std::nullopt, std::regex, std::regex_match, std::optional,
-      std::shared_ptr, std::string, std::string_view, flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot;
+    std::pair, std::prev, std::shared_ptr, std::string, std::string_view,
+    flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot;
 
 namespace Ludwig {
   // PBKDF2-HMAC-SHA256 iteration count, as suggested by
@@ -63,11 +65,11 @@ namespace Ludwig {
     return fbb;
   }
 
-  FlatBufferBuilder ThreadListEntry::null_board = make_null_board();
-  FlatBufferBuilder ThreadListEntry::null_user = make_null_user();
-  FlatBufferBuilder CommentListEntry::null_board = make_null_board();
-  FlatBufferBuilder CommentListEntry::null_user = make_null_user();
-  FlatBufferBuilder CommentListEntry::null_thread = make_null_thread();
+  const FlatBufferBuilder ThreadListEntry::null_board = make_null_board();
+  const FlatBufferBuilder ThreadListEntry::null_user = make_null_user();
+  const FlatBufferBuilder CommentListEntry::null_board = make_null_board();
+  const FlatBufferBuilder CommentListEntry::null_user = make_null_user();
+  const FlatBufferBuilder CommentListEntry::null_thread = make_null_thread();
 
   static inline auto rank_numerator(int64_t karma) -> double {
     return std::log(std::max<int64_t>(1, 3 + karma));
@@ -81,30 +83,6 @@ namespace Ludwig {
   }
   template <typename T> static auto latest_comment_cmp(const T& a, const T& b) -> bool {
     return a.stats().latest_comment() > b.stats().latest_comment();
-  }
-  static inline auto next_cursor_new(uint64_t prefix, optional<uint64_t> from) -> optional<Cursor> {
-    if (!from) return {};
-    return Cursor(prefix, *from - 1, ID_MAX);
-  }
-  static inline auto next_cursor_old(uint64_t prefix, optional<uint64_t> from) -> optional<Cursor> {
-    if (!from) return {};
-    return Cursor(prefix, *from + 1, 0);
-  }
-  static inline auto next_cursor_top(ReadTxnBase& txn, uint64_t prefix, optional<uint64_t> from_id) -> optional<Cursor> {
-    if (!from_id) return {};
-    const auto stats = txn.get_post_stats(*from_id);
-    if (!stats) return Cursor(prefix, 0, 0);
-    return Cursor(prefix, karma_uint(stats->get().karma()), (*from_id) - 1);
-  }
-  static inline auto next_cursor_new_comments(uint64_t prefix, optional<uint64_t> from) -> optional<Cursor> {
-    if (!from) return {};
-    return Cursor(prefix, *from + ACTIVE_COMMENT_MAX_AGE, ID_MAX);
-  }
-  static inline auto next_cursor_most_comments(ReadTxnBase& txn, uint64_t prefix, optional<uint64_t> from_id) -> optional<Cursor> {
-    if (!from_id) return {};
-    const auto stats = txn.get_post_stats(*from_id);
-    if (!stats) return Cursor(prefix, 0, 0);
-    return Cursor(prefix, stats->get().descendant_count(), (*from_id) - 1);
   }
   auto InstanceController::get_thread_entry(
     ReadTxnBase& txn,
@@ -206,12 +184,12 @@ namespace Ludwig {
 
   template <typename T> struct RankedPage {
     std::set<T, decltype(rank_cmp<T>)*> page;
-    optional<uint64_t> next;
+    PageCursor next;
   };
-  template <typename T> static auto ranked_page(
+  template <typename T> static inline auto ranked_page(
     ReadTxnBase& txn,
-    DBIter<uint64_t> iter_by_new,
-    DBIter<uint64_t> iter_by_top,
+    DBIter iter_by_new,
+    DBIter iter_by_top,
     InstanceController::Login login,
     function<T (uint64_t)> get_entry,
     function<uint64_t (const T&)> get_timestamp,
@@ -231,7 +209,6 @@ namespace Ludwig {
     const auto now = now_s();
     bool skipped_any = false;
     std::set<T, decltype(rank_cmp<T>)*> sorted_entries(rank_cmp<T>);
-    // TODO: Make this more performant by iterating pairs of <id, timestamp>
     for (auto id : iter_by_new) {
       try {
         auto entry = get_entry(id);
@@ -240,8 +217,7 @@ namespace Ludwig {
         const auto denominator = rank_denominator(timestamp < now ? now - timestamp : 0);
         entry.rank = rank_numerator(entry.stats().karma()) / denominator;
         if (entry.rank >= max_rank) continue;
-        if (sorted_entries.size() > page_size) {
-          skipped_any = true;
+        if (sorted_entries.size() >= page_size) {
           double max_possible_rank;
           if (get_latest_possible_timestamp) {
             const auto latest_possible_timestamp = (*get_latest_possible_timestamp)(entry);
@@ -249,8 +225,9 @@ namespace Ludwig {
               rank_denominator(latest_possible_timestamp < now ? now - latest_possible_timestamp : 0);
             max_possible_rank = max_possible_numerator / min_possible_denominator;
           } else max_possible_rank = max_possible_numerator / denominator;
-          auto last = std::prev(sorted_entries.end());
+          auto last = prev(sorted_entries.end());
           if (max_possible_rank <= last->rank) break;
+          skipped_any = true;
           sorted_entries.erase(last);
         }
         sorted_entries.insert(entry);
@@ -258,12 +235,13 @@ namespace Ludwig {
         continue;
       }
     }
-    return {
-      sorted_entries,
-      skipped_any
-        ? optional(reinterpret_cast<const uint64_t&>(std::prev(sorted_entries.end())->rank))
-        : nullopt
-    };
+    if (skipped_any) {
+      const auto last = prev(sorted_entries.end());
+      return {
+        sorted_entries,
+        PageCursor(reinterpret_cast<const uint64_t&>(last->rank), last->id)
+      };
+    } else return { sorted_entries, {} };
   }
 
   static auto comment_tree(
@@ -276,8 +254,8 @@ namespace Ludwig {
     bool is_thread_hidden = false,
     OptRef<Board> board = {},
     bool is_board_hidden = false,
-    optional<uint64_t> from = {},
-    size_t max_comments = ITEMS_PER_PAGE * 4,
+    PageCursor from = {},
+    size_t max_comments = ITEMS_PER_PAGE,
     size_t max_depth = 5
   ) -> void {
     if (!max_depth) {
@@ -285,7 +263,7 @@ namespace Ludwig {
       return;
     }
     if (tree.size() >= max_comments) return;
-    optional<DBIter<uint64_t>> iter;
+    optional<DBIter> iter;
     switch (sort) {
       case CommentSortType::Hot: {
         auto ranked = ranked_page<CommentListEntry>(
@@ -293,48 +271,69 @@ namespace Ludwig {
           txn.list_comments_of_post_new(parent),
           txn.list_comments_of_post_top(parent),
           login,
-          [&](uint64_t id) { return InstanceController::get_comment_entry(txn, id, login, {}, false, thread, is_thread_hidden, board, is_board_hidden); },
+          [&](uint64_t id) {
+            return InstanceController::get_comment_entry(
+              txn, id, login, {}, false, thread, is_thread_hidden, board, is_board_hidden
+            );
+          },
           [&](auto& e) { return e.comment().created_at(); },
           {},
-          from,
+          from ? optional(from.k) : nullopt,
           max_comments - tree.size()
         );
         for (auto entry : ranked.page) {
           if (tree.size() >= max_comments) {
-            tree.mark_continued(parent, entry.id);
+            tree.mark_continued(parent, PageCursor(
+              reinterpret_cast<const uint64_t&>(entry.rank),
+              entry.id
+            ));
             return;
           }
           const auto id = entry.id, children = entry.stats().child_count();
           tree.emplace(parent, entry);
-          if (children) comment_tree(txn, tree, id, sort, login, thread, is_thread_hidden, board, is_board_hidden, {}, max_comments, max_depth - 1);
+          if (children) {
+            comment_tree(
+              txn, tree, id, sort, login,
+              thread, is_thread_hidden, board, is_board_hidden,
+              {}, max_comments, max_depth - 1
+            );
+          }
         }
-        if (ranked.next) tree.mark_continued(parent, *ranked.next);
+        if (ranked.next) tree.mark_continued(parent, ranked.next);
         return;
       }
       case CommentSortType::New:
-        iter.emplace(txn.list_comments_of_post_new(parent, next_cursor_new(parent, from)));
+        iter.emplace(txn.list_comments_of_post_new(parent, from.next_cursor_desc(parent)));
         break;
       case CommentSortType::Old:
-        iter.emplace(txn.list_comments_of_post_old(parent, next_cursor_old(parent, from)));
+        iter.emplace(txn.list_comments_of_post_old(parent, from.next_cursor_asc(parent)));
         break;
       case CommentSortType::Top:
-        iter.emplace(txn.list_comments_of_post_top(parent, next_cursor_top(txn, parent, from)));
+        iter.emplace(txn.list_comments_of_post_top(parent, from.next_cursor_desc(parent)));
         break;
     }
     assert(!!iter);
     for (auto id : *iter) {
       if (tree.size() >= max_comments) {
-        tree.mark_continued(parent, id);
+        tree.mark_continued(parent, PageCursor(iter->get_cursor()->int_field_1(), id));
         return;
       }
-      auto entry = InstanceController::get_comment_entry(txn, id, login, {}, false, thread, is_thread_hidden, board, is_board_hidden);
+      auto entry = InstanceController::get_comment_entry(
+        txn, id, login, {}, false, thread, is_thread_hidden, board, is_board_hidden
+      );
       if (!InstanceController::should_show(entry, login)) continue;
       const auto children = entry.stats().child_count();
       tree.emplace(parent, entry);
-      if (children) comment_tree(txn, tree, id, sort, login, thread, is_thread_hidden, board, is_board_hidden, {}, max_comments, max_depth - 1);
+      if (children) {
+        comment_tree(
+          txn, tree, id, sort, login,
+          thread, is_thread_hidden, board, is_board_hidden,
+          {}, max_comments, max_depth - 1
+        );
+      }
     }
     if (!iter->is_done()) {
-      tree.mark_continued(parent, sort == CommentSortType::Top ? iter->get_cursor()->int_field_2() : iter->get_cursor()->int_field_1());
+      tree.mark_continued(parent, PageCursor(iter->get_cursor()->int_field_1(), **iter));
     }
   }
 
@@ -369,84 +368,127 @@ namespace Ludwig {
     }
   }
 
-  auto InstanceController::should_show(const ThreadListEntry& thread, Login login, bool hide_cw) -> bool {
-    if (thread.thread().mod_state() >= ModState::Removed) {
+  auto InstanceController::can_view(const ThreadListEntry& thread, Login login) -> bool {
+    if (
+      thread.thread().mod_state() >= ModState::Removed ||
+      thread.board().mod_state() >= ModState::Removed ||
+      thread.author().mod_state() >= ModState::Removed
+    ) {
       if (!login || (login->id != thread.thread().author() && !login->local_user().admin())) return false;
     }
-    if (thread.thread().content_warning() || thread.board().content_warning()) {
-      if (hide_cw || (login && login->local_user().hide_cw_posts())) return false;
-    }
-    // TODO: Check if hidden
     return true;
   }
-  auto InstanceController::should_show(const CommentListEntry& comment, Login login, bool hide_cw) -> bool {
-    if (comment.comment().mod_state() >= ModState::Removed) {
+  auto InstanceController::can_view(const CommentListEntry& comment, Login login) -> bool {
+    if (
+      comment.comment().mod_state() >= ModState::Removed ||
+      comment.thread().mod_state() >= ModState::Removed ||
+      comment.board().mod_state() >= ModState::Removed ||
+      comment.author().mod_state() >= ModState::Removed
+    ) {
       if (!login || (login->id != comment.comment().author() && !login->local_user().admin())) return false;
     }
-    if (comment.thread().mod_state() >= ModState::Removed) {
-      if (!login || (login->id != comment.thread().author() && !login->local_user().admin())) return false;
-    }
-    if (comment.comment().content_warning() || comment.thread().content_warning() ||
-        comment.board().content_warning()) {
-      if (hide_cw || (login && login->local_user().hide_cw_posts())) return false;
-    }
     // TODO: Check parent comments
-    // TODO: Check if hidden
     return true;
   }
-  auto InstanceController::should_show(const BoardListEntry& board, Login login, bool hide_cw) -> bool {
-    if (board.board().content_warning()) {
-      if (hide_cw || (login && login->local_user().hide_cw_posts())) return false;
+  auto InstanceController::can_view(const UserListEntry& user, Login login) -> bool {
+    if (login && login->id == user.id) return true;
+    if (user.user().mod_state() >= ModState::Removed || (user.maybe_local_user() && !user.maybe_local_user()->get().approved())) {
+      if (!login || !login->local_user().admin()) return false;
     }
-    // TODO: Check if hidden
+    return true;
+  }
+  auto InstanceController::can_view(const BoardListEntry& board, Login login) -> bool {
+    if (board.board().mod_state() >= ModState::Removed) {
+      if (!login || !login->local_user().admin()) return false;
+    }
+    // TODO: Handle private boards
+    return true;
+  }
+  auto InstanceController::should_show(const ThreadListEntry& thread, Login login) -> bool {
+    if (thread.hidden || thread.user_hidden || thread.board_hidden || !can_view(thread, login)) return false;
+    if (login) {
+      if (thread.thread().content_warning() || thread.board().content_warning()) {
+        if (login->local_user().hide_cw_posts()) return false;
+      }
+      if (thread.author().bot() && !login->local_user().show_bot_accounts()) {
+        return false;
+      }
+      // TODO: Hide read posts
+    }
+    return true;
+  }
+  auto InstanceController::should_show(const CommentListEntry& comment, Login login) -> bool {
+    if (comment.hidden || comment.user_hidden || comment.thread_hidden || comment.board_hidden || !can_view(comment, login)) return false;
+    if (login) {
+      if (comment.comment().content_warning() || comment.thread().content_warning() || comment.board().content_warning()) {
+        if (login->local_user().hide_cw_posts()) return false;
+      }
+      if (comment.author().bot() && !login->local_user().show_bot_accounts()) {
+        return false;
+      }
+      // TODO: Hide read posts
+    }
+    // TODO: Check parent comments
+    return true;
+  }
+  auto InstanceController::should_show(const UserListEntry& user, Login login) -> bool {
+    if (user.hidden || (login && user.user().bot() && !login->local_user().show_bot_accounts()) || !can_view(user, login)) return false;
+    return true;
+  }
+  auto InstanceController::should_show(const BoardListEntry& board, Login login) -> bool {
+    if (board.hidden || !can_view(board, login)) return false;
+    if (login) {
+      if (board.board().content_warning() && login->local_user().hide_cw_posts()) return false;
+    }
     return true;
   }
   auto InstanceController::can_create_thread(const BoardListEntry& board, Login login) -> bool {
-    if (!login) return false;
-    return !board.board().restricted_posting() ||login->local_user().admin();
+    if (!login || login->user().mod_state() >= ModState::Locked) return false;
+    return !board.board().restricted_posting() || login->local_user().admin();
   }
   auto InstanceController::can_reply_to(const ThreadListEntry& thread, Login login) -> bool {
-    if (!login) return false;
+    if (!login || login->user().mod_state() >= ModState::Locked) return false;
     if (login->local_user().admin()) return true;
     return thread.thread().mod_state() < ModState::Locked;
   }
   auto InstanceController::can_reply_to(const CommentListEntry& comment, Login login) -> bool {
-    if (!login) return false;
+    if (!login || login->user().mod_state() >= ModState::Locked) return false;
     if (login->local_user().admin()) return true;
     return comment.comment().mod_state() < ModState::Locked &&
       comment.thread().mod_state() < ModState::Locked;
   }
   auto InstanceController::can_edit(const ThreadListEntry& thread, Login login) -> bool {
-    if (!login || thread.thread().instance()) return false;
+    if (!login || login->user().mod_state() >= ModState::Locked || thread.thread().instance()) return false;
     return login->id == thread.thread().author() || login->local_user().admin();
   }
   auto InstanceController::can_edit(const CommentListEntry& comment, Login login) -> bool {
-    if (!login || comment.comment().instance()) return false;
+    if (!login || login->user().mod_state() >= ModState::Locked || comment.comment().instance()) return false;
     return login->id == comment.comment().author() || login->local_user().admin();
   }
   auto InstanceController::can_delete(const ThreadListEntry& thread, Login login) -> bool {
-    if (!login || thread.thread().instance()) return false;
+    if (!login || login->user().mod_state() >= ModState::Locked || thread.thread().instance()) return false;
     return login->id == thread.thread().author() || login->local_user().admin();
   }
   auto InstanceController::can_delete(const CommentListEntry& comment, Login login) -> bool {
-    if (!login || comment.comment().instance()) return false;
+    if (!login || login->user().mod_state() >= ModState::Locked || comment.comment().instance()) return false;
     return login->id == comment.comment().author() || login->local_user().admin();
   }
   auto InstanceController::can_upvote(const ThreadListEntry& thread, Login login) -> bool {
-    return login && thread.thread().mod_state() < ModState::Locked &&
-      thread.board().can_upvote();
+    return login && can_view(thread, login) && thread.thread().mod_state() < ModState::Locked &&
+     login->user().mod_state() < ModState::Locked && thread.board().can_upvote();
   }
   auto InstanceController::can_upvote(const CommentListEntry& comment, Login login) -> bool {
-    return login && comment.comment().mod_state() < ModState::Locked &&
-      comment.thread().mod_state() < ModState::Locked && comment.board().can_upvote();
+    return login && can_view(comment, login) && comment.comment().mod_state() < ModState::Locked &&
+      comment.thread().mod_state() < ModState::Locked && login->user().mod_state() < ModState::Locked &&
+      comment.board().can_upvote();
   }
   auto InstanceController::can_downvote(const ThreadListEntry& thread, Login login) -> bool {
-    return login && thread.thread().mod_state() < ModState::Locked &&
-      thread.board().can_downvote();
+    return login && can_view(thread, login) && thread.thread().mod_state() < ModState::Locked &&
+      login->user().mod_state() < ModState::Locked && thread.board().can_downvote();
   }
   auto InstanceController::can_downvote(const CommentListEntry& comment, Login login) -> bool {
-    return login && comment.comment().mod_state() < ModState::Locked &&
-      comment.thread().mod_state() < ModState::Locked &&
+    return login && can_view(comment, login) && comment.comment().mod_state() < ModState::Locked &&
+      comment.thread().mod_state() < ModState::Locked && login->user().mod_state() < ModState::Locked &&
       comment.board().can_downvote();
   }
   auto InstanceController::can_change_board_settings(const LocalBoardDetailResponse& board, Login login) -> bool {
@@ -457,7 +499,7 @@ namespace Ludwig {
   }
 
   auto InstanceController::validate_or_regenerate_session(
-    ReadTxn& txn,
+    ReadTxnBase& txn,
     uint64_t session_id,
     string_view ip,
     string_view user_agent
@@ -466,9 +508,7 @@ namespace Ludwig {
     if (!session_opt) return {};
     const auto& session = session_opt->get();
     const auto user = session.user();
-    // TODO: Change session lifetime to 1 day
-    // Currently sessions regenerate every 5 minutes for testing purposes
-    if (session.remember() &&  now_s() - session.created_at() >= 60 * 5) {
+    if (session.remember() &&  now_s() - session.created_at() >= 86400) {
       auto txn = db->open_write_txn();
       auto new_session = txn.create_session(
         user,
@@ -507,7 +547,7 @@ namespace Ludwig {
     }
     hash_password(std::move(password), local_user->get().password_salt()->bytes()->Data(), hash);
 
-    // Comment that this returns 0 on success, 1 on failure!
+    // Note that this returns 0 on success, 1 on failure!
     if (CRYPTO_memcmp(hash, local_user->get().password_hash()->bytes()->Data(), 32)) {
       // TODO: Lock users out after repeated failures
       spdlog::debug("Tried to login with wrong password for user {}", username_or_email);
@@ -529,9 +569,10 @@ namespace Ludwig {
     uint64_t id,
     CommentSortType sort,
     Login login,
-    optional<uint64_t> from
+    PageCursor from
   ) -> ThreadDetailResponse {
     ThreadDetailResponse rsp { get_thread_entry(txn, id, login), {} };
+    if (!can_view(rsp, login)) throw ApiError("Cannot view this thread", 403);
     comment_tree(txn, rsp.comments, id, sort, login, rsp.thread(), rsp.hidden, rsp.board(), rsp.board_hidden, from);
     return rsp;
   }
@@ -540,70 +581,141 @@ namespace Ludwig {
     uint64_t id,
     CommentSortType sort,
     Login login,
-    optional<uint64_t> from
+    PageCursor from
   ) -> CommentDetailResponse {
     CommentDetailResponse rsp { get_comment_entry(txn, id, login), {} };
+    if (!can_view(rsp, login)) throw ApiError("Cannot view this comment", 403);
     comment_tree(txn, rsp.comments, id, sort, login, rsp.thread(), rsp.thread_hidden, rsp.board(), rsp.board_hidden, from);
     return rsp;
   }
-  auto InstanceController::user_detail(ReadTxnBase& txn, uint64_t id) -> UserDetailResponse {
-    auto user = txn.get_user(id);
-    auto user_stats = txn.get_user_stats(id);
-    if (!user || !user_stats) throw ApiError("User not found", 404);
-    return { { id, *user, }, *user_stats };
-  }
-  auto InstanceController::local_user_detail(ReadTxnBase& txn, uint64_t id) -> LocalUserDetailResponse {
+  auto InstanceController::user_detail(ReadTxnBase& txn, uint64_t id, Login login) -> UserListEntry {
     const auto user = txn.get_user(id);
     const auto user_stats = txn.get_user_stats(id);
     if (!user || !user_stats) throw ApiError("User not found", 404);
     const auto local_user = txn.get_local_user(id);
-    if (!local_user) throw ApiError("Local user not found", 404);
-    return { { { id, *user }, *user_stats, }, *local_user };
+    const auto hidden = login && txn.has_user_hidden_user(login->id, id);
+    const UserListEntry detail{ id, *user, local_user, *user_stats, hidden };
+    if (!can_view(detail, login)) throw ApiError("Cannot view this user", 403);
+    return detail;
   }
-  auto InstanceController::board_detail(ReadTxnBase& txn, uint64_t id, optional<uint64_t> logged_in_user) -> BoardDetailResponse {
+  auto InstanceController::local_user_detail(ReadTxnBase& txn, uint64_t id) -> LocalUserDetailResponse {
+    const auto user = txn.get_user(id);
+    const auto user_stats = txn.get_user_stats(id);
+    const auto local_user = txn.get_local_user(id);
+    if (!user || !user_stats || !local_user) throw ApiError("Local user not found", 404);
+    const LocalUserDetailResponse detail{ id, *user, local_user, *user_stats, false };
+    return detail;
+  }
+  auto InstanceController::board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> BoardListEntry {
     const auto board = txn.get_board(id);
     const auto board_stats = txn.get_board_stats(id);
     if (!board || !board_stats) throw ApiError("Board not found", 404);
-    const auto subscribed = logged_in_user ? txn.is_user_subscribed_to_board(*logged_in_user, id) : false;
-    return { { id, *board }, *board_stats, subscribed };
+    const auto hidden = login && txn.has_user_hidden_board(login->id, id);
+    const auto subscribed = login && txn.is_user_subscribed_to_board(login->id, id);
+    const BoardListEntry detail{ id, *board, *board_stats, hidden, subscribed };
+    if (!can_view(detail, login)) throw ApiError("Cannot view this board", 403);
+    return detail;
   }
-  auto InstanceController::local_board_detail(ReadTxnBase& txn, uint64_t id, optional<uint64_t> logged_in_user) -> LocalBoardDetailResponse {
-    const auto board = txn.get_board(id);
-    const auto board_stats = txn.get_board_stats(id);
-    if (!board || !board_stats) throw ApiError("Board not found", 404);
+  auto InstanceController::local_board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> LocalBoardDetailResponse {
+    const auto detail = board_detail(txn, id, login);
     const auto local_board = txn.get_local_board(id);
     if (!local_board) throw ApiError("Local board not found", 404);
-    const auto subscribed = logged_in_user ? txn.is_user_subscribed_to_board(*logged_in_user, id) : false;
-    return { { { id, *board }, *board_stats, subscribed }, *local_board };
+    return { std::move(detail), *local_board };
   }
-  auto InstanceController::list_local_users(ReadTxnBase& txn, optional<uint64_t> from_id) -> PageOf<UserListEntry> {
-    PageOf<UserListEntry> out { {}, !from_id, {} };
-    auto iter = txn.list_local_users(from_id ? optional(Cursor(*from_id)) : nullopt);
-    for (auto id : iter) {
+  auto InstanceController::list_users(
+    ReadTxnBase& txn,
+    UserSortType sort,
+    bool local_only,
+    Login login,
+    PageCursor from
+  ) -> PageOf<UserListEntry> {
+    PageOf<UserListEntry> out { {}, !from, {} };
+    optional<DBIter> iter;
+    switch (sort) {
+      case UserSortType::New:
+        iter.emplace(txn.list_users_new(from.next_cursor_desc()));
+        break;
+      case UserSortType::Old:
+        iter.emplace(txn.list_users_old(from.next_cursor_asc()));
+        break;
+      case UserSortType::NewPosts:
+        iter.emplace(txn.list_users_new_posts(from.next_cursor_desc()));
+        break;
+      case UserSortType::MostPosts:
+        iter.emplace(txn.list_users_most_posts(from.next_cursor_desc()));
+        break;
+    }
+    assert(!!iter);
+    for (const auto id : *iter) {
       const auto user = txn.get_user(id);
-      if (!user) {
-        spdlog::warn("Local user {:x} has no corresponding user entry (database is inconsistent!)", id);
+      const auto stats = txn.get_user_stats(id);
+      if (!user || !stats) {
+        spdlog::warn("User list entry {:x} has no corresponding user (database is inconsistent!)", id);
         continue;
       }
-      out.entries.push_back({ id, *user });
+      if (local_only && user->get().instance()) continue;
+      const UserListEntry entry{
+        id, *user, txn.get_local_user(id), *stats,
+        login && txn.has_user_hidden_user(login->id, id)
+      };
+      if (!should_show(entry, login)) continue;
+      out.entries.push_back(entry);
       if (out.entries.size() >= ITEMS_PER_PAGE) break;
     }
-    if (!iter.is_done()) out.next = iter.get_cursor()->int_field_0();
+    if (!iter->is_done()) {
+      out.next = PageCursor(iter->get_cursor()->int_field_0(), **iter);
+    }
     return out;
   }
-  auto InstanceController::list_local_boards(ReadTxnBase& txn, optional<uint64_t> from_id) -> PageOf<BoardListEntry> {
-    PageOf<BoardListEntry> out { {}, !from_id, {} };
-    auto iter = txn.list_local_boards(from_id ? optional(Cursor(*from_id)) : nullopt);
-    for (auto id : iter) {
+  auto InstanceController::list_boards(
+    ReadTxnBase& txn,
+    BoardSortType sort,
+    bool local_only,
+    bool subscribed_only,
+    Login login,
+    PageCursor from
+  ) -> PageOf<BoardListEntry> {
+    PageOf<BoardListEntry> out { {}, !from, {} };
+    optional<DBIter> iter;
+    switch (sort) {
+      case BoardSortType::New:
+        iter.emplace(txn.list_boards_new(from.next_cursor_desc()));
+        break;
+      case BoardSortType::Old:
+        iter.emplace(txn.list_boards_old(from.next_cursor_asc()));
+        break;
+      case BoardSortType::NewPosts:
+        iter.emplace(txn.list_boards_new_posts(from.next_cursor_desc()));
+        break;
+      case BoardSortType::MostPosts:
+        iter.emplace(txn.list_boards_most_posts(from.next_cursor_desc()));
+        break;
+      case BoardSortType::MostSubscribers:
+        iter.emplace(txn.list_boards_most_subscribers(from.next_cursor_desc()));
+        break;
+    }
+    assert(!!iter);
+    for (const auto id : *iter) {
       const auto board = txn.get_board(id);
+      const auto stats = txn.get_board_stats(id);
       if (!board) {
-        spdlog::warn("Local board {:x} has no corresponding board entry (database is inconsistent!)", id);
+        spdlog::warn("Board list entry {:x} has no corresponding board (database is inconsistent!)", id);
         continue;
       }
-      out.entries.push_back({ id, *board });
+      if (local_only && board->get().instance()) continue;
+      if (subscribed_only && !(login && txn.is_user_subscribed_to_board(login->id, id))) continue;
+      const BoardListEntry entry{
+        id, *board, *stats,
+        login && txn.has_user_hidden_board(login->id, id),
+        login && txn.is_user_subscribed_to_board(login->id, id)
+      };
+      if (!should_show(entry, login)) continue;
+      out.entries.push_back(entry);
       if (out.entries.size() >= ITEMS_PER_PAGE) break;
     }
-    if (!iter.is_done()) out.next = iter.get_cursor()->int_field_0();
+    if (!iter->is_done()) {
+      out.next = PageCursor(iter->get_cursor()->int_field_0(), **iter);
+    }
     return out;
   }
   static inline auto earliest_time(SortType sort) -> uint64_t {
@@ -625,12 +737,12 @@ namespace Ludwig {
     uint64_t board_id,
     SortType sort,
     Login login,
-    optional<uint64_t> from
+    PageCursor from
   ) -> PageOf<ThreadListEntry> {
     PageOf<ThreadListEntry> out { {}, !from, {} };
     const auto board = txn.get_board(board_id);
     if (!board) throw ApiError("Board does not exist", 404);
-    optional<DBIter<uint64_t>> iter;
+    optional<DBIter> iter;
     switch (sort) {
       case SortType::Active: {
         const auto now = now_s();
@@ -640,9 +752,9 @@ namespace Ludwig {
           txn.list_threads_of_board_top(board_id),
           login,
           [&](uint64_t id) { return get_thread_entry(txn, id, login, {}, false, board, false); },
-          [&](auto& e) { return e.stats().latest_comment(); },
-          [&](auto& e) { return std::min(now, e.thread().created_at() + ACTIVE_COMMENT_MAX_AGE); },
-          from
+          [](auto& e) { return e.stats().latest_comment(); },
+          [now](auto& e) { return std::min(now, e.thread().created_at() + ACTIVE_COMMENT_MAX_AGE); },
+          from ? optional(from.k) : nullopt
         );
         for (auto entry : ranked.page) {
           out.entries.push_back(std::move(entry));
@@ -658,9 +770,9 @@ namespace Ludwig {
           txn.list_threads_of_board_top(board_id),
           login,
           [&](uint64_t id) { return get_thread_entry(txn, id, login, {}, false, board, false); },
-          [&](auto& e) { return e.thread().created_at(); },
+          [](auto& e) { return e.thread().created_at(); },
           {},
-          from
+          from ? optional(from.k) : nullopt
         );
         for (auto entry : ranked.page) {
           out.entries.push_back(std::move(entry));
@@ -672,33 +784,36 @@ namespace Ludwig {
       case SortType::NewComments: {
         std::set<ThreadListEntry, decltype(latest_comment_cmp<ThreadListEntry>)*> page(latest_comment_cmp);
         bool has_more;
-        for (uint64_t thread_id : txn.list_threads_of_board_new(board_id, next_cursor_new_comments(board_id, from))) {
+        for (uint64_t thread_id : txn.list_threads_of_board_new(board_id, from.next_cursor_desc(board_id))) {
           const auto entry = get_thread_entry(txn, thread_id, login, {}, false, board, false);
           if (from && entry.stats().latest_comment() > from) continue;
           const bool full = has_more = page.size() >= ITEMS_PER_PAGE;
           if (full) {
-            const auto last = std::prev(page.end())->stats().latest_comment();
+            const auto last = prev(page.end())->stats().latest_comment();
             if (entry.stats().latest_comment() + ACTIVE_COMMENT_MAX_AGE < last) break;
           }
           if (!should_show(entry, login)) continue;
           page.emplace(entry);
-          if (full) page.erase(std::prev(page.end()));
+          if (full) page.erase(prev(page.end()));
         }
         for (auto entry : page) {
           out.entries.push_back(std::move(entry));
           if (out.entries.size() >= ITEMS_PER_PAGE) break;
         }
-        if (has_more) out.next = std::prev(page.end())->stats().latest_comment();
+        if (has_more) {
+          auto last = prev(page.end());
+          out.next = PageCursor(last->stats().latest_comment(), last->id);
+        }
         return out;
       }
       case SortType::New:
-        iter.emplace(txn.list_threads_of_board_new(board_id, next_cursor_new(board_id, from)));
+        iter.emplace(txn.list_threads_of_board_new(board_id, from.next_cursor_desc(board_id)));
         break;
       case SortType::Old:
-        iter.emplace(txn.list_threads_of_board_old(board_id, next_cursor_old(board_id, from)));
+        iter.emplace(txn.list_threads_of_board_old(board_id, from.next_cursor_asc(board_id)));
         break;
       case SortType::MostComments:
-        iter.emplace(txn.list_threads_of_board_most_comments(board_id, next_cursor_most_comments(txn, board_id, from)));
+        iter.emplace(txn.list_threads_of_board_most_comments(board_id, from.next_cursor_desc(board_id)));
         break;
       case SortType::TopAll:
       case SortType::TopYear:
@@ -710,7 +825,7 @@ namespace Ludwig {
       case SortType::TopTwelveHour:
       case SortType::TopSixHour:
       case SortType::TopHour:
-        iter.emplace(txn.list_threads_of_board_top(board_id, next_cursor_top(txn, board_id, from)));
+        iter.emplace(txn.list_threads_of_board_top(board_id, from.next_cursor_desc(board_id)));
         break;
     }
     assert(!!iter);
@@ -722,11 +837,7 @@ namespace Ludwig {
       if (out.entries.size() >= ITEMS_PER_PAGE) break;
     }
     if (!iter->is_done()) {
-      if (sort == SortType::New || sort == SortType::Old) {
-        out.next = iter->get_cursor()->int_field_1();
-      } else {
-        out.next = iter->get_cursor()->int_field_2();
-      }
+      out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
     }
     return out;
   }
@@ -735,12 +846,12 @@ namespace Ludwig {
     uint64_t board_id,
     SortType sort,
     Login login,
-    optional<uint64_t> from
+    PageCursor from
   ) -> PageOf<CommentListEntry> {
     PageOf<CommentListEntry> out { {}, !from, {} };
     const auto board = txn.get_board(board_id);
     if (!board) throw ApiError("Board does not exist", 404);
-    optional<DBIter<uint64_t>> iter;
+    optional<DBIter> iter;
     switch (sort) {
       case SortType::Active: {
         const auto now = now_s();
@@ -749,10 +860,14 @@ namespace Ludwig {
           txn.list_comments_of_board_new(board_id),
           txn.list_comments_of_board_top(board_id),
           login,
-          [&](uint64_t id) { return get_comment_entry(txn, id, login, {}, false, {}, false, board, false); },
-          [&](auto& e) { return e.stats().latest_comment(); },
-          [&](auto& e) { return std::min(now, e.comment().created_at() + ACTIVE_COMMENT_MAX_AGE); },
-          from
+          [&](uint64_t id) {
+            return get_comment_entry(txn, id, login, {}, false, {}, false, board, false);
+          },
+          [](auto& e) { return e.stats().latest_comment(); },
+          [now](auto& e) {
+            return std::min(now, e.comment().created_at() + ACTIVE_COMMENT_MAX_AGE);
+          },
+          from ? optional(from.k) : nullopt
         );
         for (auto entry : ranked.page) {
           out.entries.push_back(std::move(entry));
@@ -767,10 +882,12 @@ namespace Ludwig {
           txn.list_comments_of_board_new(board_id),
           txn.list_comments_of_board_top(board_id),
           login,
-          [&](uint64_t id) { return get_comment_entry(txn, id, login, {}, false, {}, false, board, false); },
+          [&](uint64_t id) {
+            return get_comment_entry(txn, id, login, {}, false, {}, false, board, false);
+          },
           [&](auto& e) { return e.comment().created_at(); },
           {},
-          from
+          from ? optional(from.k) : nullopt
         );
         for (auto entry : ranked.page) {
           out.entries.push_back(std::move(entry));
@@ -782,33 +899,36 @@ namespace Ludwig {
       case SortType::NewComments: {
         std::set<CommentListEntry, decltype(latest_comment_cmp<CommentListEntry>)*> page(latest_comment_cmp);
         bool has_more;
-        for (uint64_t comment_id : txn.list_comments_of_board_new(board_id, next_cursor_new_comments(board_id, from))) {
+        for (uint64_t comment_id : txn.list_comments_of_board_new(board_id, from.next_cursor_desc(board_id))) {
           const auto entry = get_comment_entry(txn, comment_id, login, {}, false, {}, false, board, false);
           if (from && entry.stats().latest_comment() > from) continue;
           const bool full = has_more = page.size() >= ITEMS_PER_PAGE;
           if (full) {
-            const auto last = std::prev(page.end())->stats().latest_comment();
+            const auto last = prev(page.end())->stats().latest_comment();
             if (entry.stats().latest_comment() + ACTIVE_COMMENT_MAX_AGE < last) break;
           }
           if (!should_show(entry, login)) continue;
           page.emplace(entry);
-          if (full) page.erase(std::prev(page.end()));
+          if (full) page.erase(prev(page.end()));
         }
         for (auto entry : page) {
           out.entries.push_back(std::move(entry));
           if (out.entries.size() >= ITEMS_PER_PAGE) break;
         }
-        if (has_more) out.next = std::prev(page.end())->stats().latest_comment();
+        if (has_more) {
+          auto last = prev(page.end());
+          out.next = PageCursor(last->stats().latest_comment(), last->id);
+        }
         return out;
       }
       case SortType::New:
-        iter.emplace(txn.list_comments_of_board_new(board_id, next_cursor_new(board_id, from)));
+        iter.emplace(txn.list_comments_of_board_new(board_id, from.next_cursor_desc(board_id)));
         break;
       case SortType::Old:
-        iter.emplace(txn.list_comments_of_board_old(board_id, next_cursor_old(board_id, from)));
+        iter.emplace(txn.list_comments_of_board_old(board_id, from.next_cursor_asc(board_id)));
         break;
       case SortType::MostComments:
-        iter.emplace(txn.list_comments_of_board_most_comments(board_id, next_cursor_most_comments(txn, board_id, from)));
+        iter.emplace(txn.list_comments_of_board_most_comments(board_id, from.next_cursor_desc(board_id)));
         break;
       case SortType::TopAll:
       case SortType::TopYear:
@@ -820,7 +940,7 @@ namespace Ludwig {
       case SortType::TopTwelveHour:
       case SortType::TopSixHour:
       case SortType::TopHour:
-        iter.emplace(txn.list_comments_of_board_top(board_id, next_cursor_top(txn, board_id, from)));
+        iter.emplace(txn.list_comments_of_board_top(board_id, from.next_cursor_desc(board_id)));
         break;
     }
     assert(!!iter);
@@ -832,11 +952,7 @@ namespace Ludwig {
       if (out.entries.size() >= ITEMS_PER_PAGE) break;
     }
     if (!iter->is_done()) {
-      if (sort == SortType::New || sort == SortType::Old) {
-        out.next = iter->get_cursor()->int_field_1();
-      } else {
-        out.next = iter->get_cursor()->int_field_2();
-      }
+      out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
     }
     return out;
   }
@@ -845,21 +961,21 @@ namespace Ludwig {
     uint64_t user_id,
     UserPostSortType sort,
     Login login,
-    optional<uint64_t> from
+    PageCursor from
   ) -> PageOf<ThreadListEntry> {
     PageOf<ThreadListEntry> out { {}, !from, {} };
     const auto user = txn.get_user(user_id);
     if (!user) throw ApiError("User does not exist", 404);
-    optional<DBIter<uint64_t>> iter;
+    optional<DBIter> iter;
     switch (sort) {
       case UserPostSortType::New:
-        iter.emplace(txn.list_threads_of_user_new(user_id, from.transform([&](auto i){return Cursor(user_id, i);})));
+        iter.emplace(txn.list_threads_of_user_new(user_id, from.next_cursor_desc(user_id)));
         break;
       case UserPostSortType::Old:
-        iter.emplace(txn.list_threads_of_user_old(user_id, from.transform([&](auto i){return Cursor(user_id, i);})));
+        iter.emplace(txn.list_threads_of_user_old(user_id, from.next_cursor_asc(user_id)));
         break;
       case UserPostSortType::Top:
-        iter.emplace(txn.list_threads_of_user_top(user_id, next_cursor_top(txn, user_id, from)));
+        iter.emplace(txn.list_threads_of_user_top(user_id, from.next_cursor_desc(user_id)));
         break;
     }
     assert(!!iter);
@@ -869,9 +985,9 @@ namespace Ludwig {
       out.entries.push_back(std::move(entry));
       if (out.entries.size() >= ITEMS_PER_PAGE) break;
     }
-    if (!iter->is_done()) out.next = {
-      sort == UserPostSortType::Top ? iter->get_cursor()->int_field_2() : iter->get_cursor()->int_field_1()
-    };
+    if (!iter->is_done()) {
+      out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
+    }
     return out;
   }
   auto InstanceController::list_user_comments(
@@ -879,19 +995,19 @@ namespace Ludwig {
     uint64_t user_id,
     UserPostSortType sort,
     Login login,
-    optional<uint64_t> from
+    PageCursor from
   ) -> PageOf<CommentListEntry> {
     PageOf<CommentListEntry> out { {}, !from, {} };
-    optional<DBIter<uint64_t>> iter;
+    optional<DBIter> iter;
     switch (sort) {
       case UserPostSortType::New:
-        iter.emplace(txn.list_comments_of_user_new(user_id, from.transform([&](auto i){return Cursor(user_id, i);})));
+        iter.emplace(txn.list_comments_of_user_new(user_id, from.next_cursor_desc(user_id)));
         break;
       case UserPostSortType::Old:
-        iter.emplace(txn.list_comments_of_user_old(user_id, from.transform([&](auto i){return Cursor(user_id, i);})));
+        iter.emplace(txn.list_comments_of_user_old(user_id, from.next_cursor_asc(user_id)));
         break;
       case UserPostSortType::Top:
-        iter.emplace(txn.list_comments_of_user_top(user_id, next_cursor_top(txn, user_id, from)));
+        iter.emplace(txn.list_comments_of_user_top(user_id, from.next_cursor_desc(user_id)));
         break;
     }
     assert(!!iter);
@@ -901,49 +1017,98 @@ namespace Ludwig {
       out.entries.push_back(std::move(entry));
       if (out.entries.size() >= ITEMS_PER_PAGE) break;
     }
-    if (!iter->is_done()) out.next = {
-      sort == UserPostSortType::Top ? iter->get_cursor()->int_field_2() : iter->get_cursor()->int_field_1()
-    };
+    if (!iter->is_done()) {
+      out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
+    }
     return out;
   }
-  auto InstanceController::search(
-    SearchQuery query,
-    Login login,
-    size_t offset,
-    SearchCallback callback
-  ) -> void {
-    if (!search_engine) throw ApiError("Search is not enabled on this server", 403);
-    const auto limit = query.limit ? query.limit : ITEMS_PER_PAGE;
-    query.limit = limit + offset;
-    (*search_engine)->search(query, [self = this->shared_from_this(), offset, limit, login, callback = std::move(callback)](auto results) mutable {
-      auto txn = self->open_read_txn();
-      std::vector<SearchResultListEntry> entries;
+  class InstanceController::SearchFunctor : public std::enable_shared_from_this<InstanceController::SearchFunctor> {
+    std::vector<SearchResultListEntry> entries;
+    shared_ptr<InstanceController> controller;
+    SearchQuery query;
+    Login login;
+    SearchCallback callback;
+    uint64_t limit;
+  public:
+    SearchFunctor(
+      shared_ptr<InstanceController> controller,
+      SearchQuery&& query,
+      Login login,
+      SearchCallback&& callback
+    ) : controller(controller), query(std::move(query)), login(login),
+        callback(std::move(callback)), limit(query.limit ? query.limit : ITEMS_PER_PAGE) {
       entries.reserve(limit);
-      for (size_t i = offset; i < results.size(); i++) {
-        const auto id = results[i].id;
-        switch (results[i].type) {
-        case SearchResultType::User:
-          if (auto user = txn.get_user(id)) entries.emplace_back(UserListEntry{id, *user});
+      query.limit = limit + limit / 2;
+    }
+    SearchFunctor(const SearchFunctor&) = delete;
+    auto operator=(const SearchFunctor&) = delete;
+
+    inline auto search() -> void {
+      (*controller->search_engine)->search(query, [self = shared_from_this()](auto page){self->call(page);});
+    }
+
+  private:
+    inline auto call(std::vector<SearchResult> page) -> void {
+      auto txn = controller->open_read_txn();
+      for (size_t i = query.offset; i < page.size() && entries.size() < limit; i++) {
+        const auto id = page[i].id;
+        switch (page[i].type) {
+        case SearchResultType::User: {
+          const auto user = txn.get_user(id);
+          const auto stats = txn.get_user_stats(id);
+          if (user && stats) {
+            const UserListEntry entry{
+              id, *user, txn.get_local_user(id), *stats,
+              login && txn.has_user_hidden_user(login->id, id)
+            };
+            if (controller->should_show(entry, login)) entries.emplace_back(entry);
+          }
           break;
-        case SearchResultType::Board:
-          if (auto board = txn.get_board(id)) entries.emplace_back(BoardListEntry{id, *board});
+        }
+        case SearchResultType::Board: {
+          const auto board = txn.get_board(id);
+          const auto stats = txn.get_board_stats(id);
+          if (board && stats) {
+            const BoardListEntry entry{
+              id, *board, *stats,
+              login && txn.has_user_hidden_board(login->id, id),
+              login && txn.is_user_subscribed_to_board(login->id, id)
+            };
+            if (controller->should_show(entry, login)) entries.emplace_back(entry);
+          }
           break;
+        }
         case SearchResultType::Thread:
           try {
-            entries.emplace_back(get_thread_entry(txn, id, login));
+            const auto entry = get_thread_entry(txn, id, login);
+            if (controller->should_show(entry, login)) entries.emplace_back(entry);
           } catch (...) {}
           break;
         case SearchResultType::Comment:
           try {
-            entries.emplace_back(get_comment_entry(txn, id, login));
+            const auto entry = get_comment_entry(txn, id, login);
+            if (controller->should_show(entry, login)) entries.emplace_back(entry);
           } catch (...) {}
           break;
         }
       }
-      callback(txn, entries);
-    });
+      if (entries.size() >= limit || page.size() < query.limit) {
+        callback(txn, entries);
+      } else {
+        query.offset += query.limit;
+        search();
+      }
+    }
+  };
+  auto InstanceController::search(
+    SearchQuery query,
+    Login login,
+    SearchCallback callback
+  ) -> void {
+    if (!search_engine) throw ApiError("Search is not enabled on this server", 403);
+    auto sf = std::make_shared<SearchFunctor>(this->shared_from_this(), std::move(query), login, std::move(callback));
+    sf->search();
   }
-
 
   auto InstanceController::create_local_user_internal(
     WriteTxn& txn,
@@ -1253,8 +1418,8 @@ namespace Ludwig {
     }
     dispatch_event(Event::UserStatsUpdate, author);
     dispatch_event(Event::BoardStatsUpdate, board_id);
-    dispatch_event(Event::PageStatsUpdate, thread_id);
-    if (parent != thread_id) dispatch_event(Event::CommentStatsUpdate, parent);
+    dispatch_event(Event::PostStatsUpdate, thread_id);
+    if (parent != thread_id) dispatch_event(Event::PostStatsUpdate, parent);
     return comment_id;
   }
   auto InstanceController::vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void {
@@ -1272,8 +1437,7 @@ namespace Ludwig {
     txn.commit();
 
     dispatch_event(Event::UserStatsUpdate, op);
-    if (thread) dispatch_event(Event::PageStatsUpdate, post_id);
-    if (comment) dispatch_event(Event::CommentStatsUpdate, post_id);
+    dispatch_event(Event::PostStatsUpdate, post_id);
   }
   auto InstanceController::subscribe(uint64_t user_id, uint64_t board_id, bool subscribed) -> void {
     auto txn = db->open_write_txn();

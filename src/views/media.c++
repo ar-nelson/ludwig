@@ -1,21 +1,21 @@
 #include "media.h++"
 #include "util/web.h++"
 
-using std::function, std::shared_ptr, std::stoull, std::string;
+using std::function, std::move_only_function, std::shared_ptr, std::stoull, std::string;
 
 namespace Ludwig {
   template <bool SSL> static inline auto webp_route(
     uWS::HttpRequest* req,
     uWS::HttpResponse<SSL>* rsp,
-    uWS::MoveOnlyFunction<void (function<void ()>)> wrap,
-    function<void (ThumbnailCache::Callback)> fn
+    move_only_function<void (function<void ()>)>&& wrap,
+    move_only_function<void (ThumbnailCache::Callback)>&& fn
   ) -> void {
     const string if_none_match(req->getHeader("if-none-match"));
     fn([rsp, wrap = std::move(wrap), if_none_match](ThumbnailCache::Image img) mutable {
       wrap([&]{
         if (!*img) throw ApiError("No thumbnail available", 404);
         const auto& [data, hash] = **img;
-        const auto hash_hex = fmt::format("{:016x}", hash);
+        const auto hash_hex = fmt::format("\"{:016x}\"", hash);
         if (if_none_match == hash_hex) {
           rsp->writeStatus(http_status(304))->end();
         } else {

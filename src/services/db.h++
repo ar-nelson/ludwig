@@ -55,7 +55,7 @@ namespace Ludwig {
   };
 
   class ReadTxnBase;
-  class ReadTxn;
+  class ReadTxnImpl;
   class WriteTxn;
 
   class DBError : public std::runtime_error {
@@ -69,20 +69,23 @@ namespace Ludwig {
     size_t map_size;
     MDB_env* env;
     MDB_dbi dbis[128];
-    uint8_t session_counter;
+    std::atomic<uint8_t> session_counter;
     auto init_env(const char* filename, MDB_txn** txn) -> int;
   public:
-    uint64_t seed;
     uint8_t jwt_secret[JWT_SECRET_SIZE];
     DB(const char* filename, size_t map_size_mb = 1024);
     DB(const char* filename, std::istream& dump_stream, std::optional<std::shared_ptr<SearchEngine>> search = {}, size_t map_size_mb = 1024);
+    DB(const DB&) = delete;
+    auto operator=(const DB&) = delete;
+    DB(DB&&);
+    auto operator=(DB&&) -> DB&;
     ~DB();
 
-    auto open_read_txn() -> ReadTxn;
+    auto open_read_txn() -> ReadTxnImpl;
     auto open_write_txn() -> WriteTxn;
 
     friend class ReadTxnBase;
-    friend class ReadTxn;
+    friend class ReadTxnImpl;
     friend class WriteTxn;
   };
 
@@ -93,14 +96,15 @@ namespace Ludwig {
     DB& db;
     MDB_txn* txn;
     ReadTxnBase(DB& db) : db(db) {}
-    ReadTxnBase(const ReadTxnBase& from) : db(from.db), txn(from.txn) {}
   public:
-    ReadTxnBase(ReadTxnBase&& from) : db(from.db), txn(from.txn) {}
+    ReadTxnBase(const ReadTxnBase& from) = delete;
+    auto operator=(const ReadTxnBase&) = delete;
+    ReadTxnBase(ReadTxnBase&& from) : db(from.db), txn(from.txn) { from.txn = nullptr; }
+    ReadTxnBase& operator=(ReadTxnBase&& from) = delete;
     virtual ~ReadTxnBase() {};
 
-    ReadTxnBase& operator= (const ReadTxnBase&) = delete;
-
     using OptCursor = const std::optional<Cursor>&;
+    using OptKV = const std::optional<std::pair<Cursor, uint64_t>>&;
 
     auto get_setting_str(std::string_view key) -> std::string_view;
     auto get_setting_int(std::string_view key) -> uint64_t;
@@ -113,9 +117,12 @@ namespace Ludwig {
     auto get_user_stats(uint64_t id) -> OptRef<UserStats>;
     auto get_local_user(uint64_t id) -> OptRef<LocalUser>;
     auto count_local_users() -> uint64_t;
-    auto list_users(OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_local_users(OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_subscribers(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_users_alphabetical(std::optional<std::string_view> cursor = {}) -> DBIter;
+    auto list_users_new(OptKV cursor = {}) -> DBIter;
+    auto list_users_old(OptKV cursor = {}) -> DBIter;
+    auto list_users_new_posts(OptKV cursor = {}) -> DBIter;
+    auto list_users_most_posts(OptKV cursor = {}) -> DBIter;
+    auto list_subscribers(uint64_t board_id, OptCursor cursor = {}) -> DBIter;
     auto is_user_subscribed_to_board(uint64_t user_id, uint64_t board_id) -> bool;
 
     auto get_board_id_by_name(std::string_view name) -> std::optional<uint64_t>;
@@ -123,37 +130,41 @@ namespace Ludwig {
     auto get_board_stats(uint64_t id) -> OptRef<BoardStats>;
     auto get_local_board(uint64_t name) -> OptRef<LocalBoard>;
     auto count_local_boards() -> uint64_t;
-    auto list_boards(OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_local_boards(OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_subscribed_boards(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_created_boards(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_boards_alphabetical(std::optional<std::string_view> cursor = {}) -> DBIter;
+    auto list_boards_new(OptKV cursor = {}) -> DBIter;
+    auto list_boards_old(OptKV cursor = {}) -> DBIter;
+    auto list_boards_new_posts(OptKV cursor = {}) -> DBIter;
+    auto list_boards_most_posts(OptKV cursor = {}) -> DBIter;
+    auto list_boards_most_subscribers(OptKV cursor = {}) -> DBIter;
+    auto list_subscribed_boards(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
+    auto list_created_boards(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
 
     auto get_thread(uint64_t id) -> OptRef<Thread>;
     auto get_post_stats(uint64_t id) -> OptRef<PostStats>;
-    auto list_threads_of_board_new(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_threads_of_board_old(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_threads_of_board_top(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_threads_of_board_most_comments(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_threads_of_user_new(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_threads_of_user_old(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_threads_of_user_top(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_threads_of_board_new(uint64_t board_id, OptKV cursor = {}) -> DBIter;
+    auto list_threads_of_board_old(uint64_t board_id, OptKV cursor = {}) -> DBIter;
+    auto list_threads_of_board_top(uint64_t board_id, OptKV cursor = {}) -> DBIter;
+    auto list_threads_of_board_most_comments(uint64_t board_id, OptKV cursor = {}) -> DBIter;
+    auto list_threads_of_user_new(uint64_t user_id, OptKV cursor = {}) -> DBIter;
+    auto list_threads_of_user_old(uint64_t user_id, OptKV cursor = {}) -> DBIter;
+    auto list_threads_of_user_top(uint64_t user_id, OptKV cursor = {}) -> DBIter;
 
     auto get_comment(uint64_t id) -> OptRef<Comment>;
-    auto list_comments_of_post_new(uint64_t post_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_comments_of_post_old(uint64_t post_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_comments_of_post_top(uint64_t post_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_comments_of_board_new(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_comments_of_board_old(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_comments_of_board_top(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_comments_of_board_most_comments(uint64_t board_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_comments_of_user_new(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_comments_of_user_old(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    auto list_comments_of_user_top(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_comments_of_post_new(uint64_t post_id, OptKV cursor = {}) -> DBIter;
+    auto list_comments_of_post_old(uint64_t post_id, OptKV cursor = {}) -> DBIter;
+    auto list_comments_of_post_top(uint64_t post_id, OptKV cursor = {}) -> DBIter;
+    auto list_comments_of_board_new(uint64_t board_id, OptKV cursor = {}) -> DBIter;
+    auto list_comments_of_board_old(uint64_t board_id, OptKV cursor = {}) -> DBIter;
+    auto list_comments_of_board_top(uint64_t board_id, OptKV cursor = {}) -> DBIter;
+    auto list_comments_of_board_most_comments(uint64_t board_id, OptKV cursor = {}) -> DBIter;
+    auto list_comments_of_user_new(uint64_t user_id, OptKV cursor = {}) -> DBIter;
+    auto list_comments_of_user_old(uint64_t user_id, OptKV cursor = {}) -> DBIter;
+    auto list_comments_of_user_top(uint64_t user_id, OptKV cursor = {}) -> DBIter;
 
     auto get_vote_of_user_for_post(uint64_t user_id, uint64_t post_id) -> Vote;
-    //auto list_upvoted_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    //auto list_downvoted_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
-    //auto list_saved_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    //auto list_upvoted_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
+    //auto list_downvoted_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
+    //auto list_saved_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
 
     auto has_user_saved_post(uint64_t user_id, uint64_t post_id) -> bool;
     auto has_user_hidden_post(uint64_t user_id, uint64_t post_id) -> bool;
@@ -161,27 +172,27 @@ namespace Ludwig {
     auto has_user_hidden_board(uint64_t user_id, uint64_t board_id) -> bool;
 
     auto get_application(uint64_t user_id) -> OptRef<Application>;
-    auto list_applications(OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_applications(OptCursor cursor = {}) -> DBIter;
 
     auto get_invite(uint64_t invite_id) -> OptRef<Invite>;
-    auto list_invites_from_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter<uint64_t>;
+    auto list_invites_from_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
 
     // TODO: Feeds, DMs, Blocks, Admins/Mods, Mod Actions
 
-    friend class ReadTxn;
+    friend class ReadTxnImpl;
   };
 
-  class ReadTxn : public ReadTxnBase {
+  class ReadTxnImpl : public ReadTxnBase {
   protected:
-    ReadTxn(DB& db) : ReadTxnBase(db) {
+    ReadTxnImpl(DB& db) : ReadTxnBase(db) {
       if (auto err = mdb_txn_begin(db.env, nullptr, MDB_RDONLY, &txn)) {
         throw DBError("Failed to open read transaction", err);
       }
     }
   public:
-    ReadTxn(ReadTxn&& from) : ReadTxnBase(from) {};
-    ~ReadTxn() {
-      mdb_txn_abort(txn);
+    ReadTxnImpl(ReadTxnImpl&& from) : ReadTxnBase(std::move(from)) {};
+    ~ReadTxnImpl() {
+      if (txn != nullptr) mdb_txn_abort(txn);
     }
 
     friend class DB;
@@ -190,7 +201,6 @@ namespace Ludwig {
   class WriteTxn : public ReadTxnBase {
   protected:
     bool committed = false;
-    std::atomic<uint8_t> session_counter;
     auto delete_child_comment(uint64_t id, uint64_t board_id) -> uint64_t;
 
     WriteTxn(DB& db): ReadTxnBase(db) {
@@ -199,11 +209,11 @@ namespace Ludwig {
       }
     };
   public:
-    WriteTxn(WriteTxn&& from) : ReadTxnBase(from) { committed = from.committed; };
+    WriteTxn(WriteTxn&& from) : ReadTxnBase(std::move(from)), committed(from.committed) {}
     ~WriteTxn() {
       if (!committed) {
         spdlog::warn("Aborting uncommitted write transaction");
-        mdb_txn_abort(txn);
+        if (txn != nullptr) mdb_txn_abort(txn);
       }
     }
 
@@ -259,8 +269,8 @@ namespace Ludwig {
     friend class DB;
   };
 
-  inline auto DB::open_read_txn() -> ReadTxn {
-    return ReadTxn(*this);
+  inline auto DB::open_read_txn() -> ReadTxnImpl {
+    return ReadTxnImpl(*this);
   }
 
   inline auto DB::open_write_txn() -> WriteTxn {

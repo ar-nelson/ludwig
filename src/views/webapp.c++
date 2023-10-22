@@ -7,6 +7,7 @@
 #include <regex>
 #include <spdlog/fmt/chrono.h>
 #include "xxhash.h"
+#include "util/lambda_macros.h++"
 
 using std::bind, std::match_results, std::nullopt, std::optional, std::regex,
     std::regex_search, std::shared_ptr, std::stoull, std::string,
@@ -210,7 +211,7 @@ namespace Ludwig {
       }
       return {
         .start = start,
-        .logged_in_user_id = new_session.transform([](auto r){return r.user_id;}),
+        .logged_in_user_id = new_session.transform(λx(x.user_id)),
         .session_cookie = session_cookie,
         .is_htmx = !req->getHeader("hx-request").empty() && req->getHeader("hx-boosted").empty(),
       };
@@ -298,14 +299,15 @@ namespace Ludwig {
         R"(</head><body><script>document.body.classList.add("has-js")</script>)"
         R"(<nav class="topbar"><div class="site-name">🎹 {}</div><ul class="quick-boards">)"
         R"(<li><a href="/">Home</a>)"
-        R"(<li><a href="/feed/local">Local</a>)"
-        R"(<li><a href="/feed/federated">All</a>)"
-        R"(<li><a href="/boards">Boards</a>)",
+        R"(<li><a href="/local">Local</a>)"
+        R"(<li><a href="/all">All</a>)"
+        R"(<li><a href="/boards">Boards</a>)"
+        R"(<li><a href="/users">Users</a>)",
         Escape{m.site->name}
       );
       if (m.login) {
         write_fmt(rsp,
-          R"(<li><a href="/subscriptions">Subscriptions</a></ul><ul>)"
+          R"(</ul><ul>)"
           R"(<li id="topbar-user"><a href="/u/{}">{}</a> ({:d}))"
           R"(<li><a href="/settings">Settings</a>{}<li><a href="/logout">Logout</a></ul></nav>)",
           Escape(m.login->user().name()),
@@ -370,7 +372,7 @@ namespace Ludwig {
     auto write_sidebar(
       Response rsp,
       const Meta& m,
-      const optional<BoardDetailResponse>& board = {}
+      const optional<BoardListEntry>& board = {}
     ) noexcept -> void {
       rsp->write(
         R"(<label id="sidebar-toggle-label" for="sidebar-toggle"><svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#menu"></svg> Menu</label>)"
@@ -475,14 +477,14 @@ namespace Ludwig {
         fmt::gmtime((time_t)timestamp), fmt::localtime((time_t)timestamp), relative_time(timestamp));
     }
 
-    auto write_user_link(Response rsp, OptRef<User> user_opt) noexcept -> void {
-      if (!user_opt) {
+    auto write_user_link(Response rsp, OptRef<User> user_opt, InstanceController::Login login) noexcept -> void {
+      if (!user_opt || user_opt->get().deleted_at()) {
         rsp->write("<em>[deleted]</em>");
         return;
       }
       const auto& user = user_opt->get();
       write_fmt(rsp, R"(<a class="user-link" href="/u/{}">)", Escape(user.name()));
-      if (user.avatar_url()) {
+      if (user.avatar_url() && (!login || login->local_user().show_avatars())) {
         write_fmt(rsp, R"(<img aria-hidden="true" class="avatar" loading="lazy" src="/media/user/{}/avatar.webp">)",
           Escape{user.name()}
         );
@@ -501,6 +503,11 @@ namespace Ludwig {
         if (suffix_ix != string::npos) {
           write_fmt(rsp, R"(<span class="at-domain">@{}</span>)", Escape{name.substr(suffix_ix + 1)});
         }
+      }
+      if (user.bot()) rsp->write(R"( <span class="tag">Bot</span>)");
+      if (user.mod_state() > ModState::Visible) {
+        write_fmt(rsp, R"( <abbr class="tag mod-warning-tag" title="{0} by Moderator: {1}">{0}</abbr>)",
+          describe_mod_state(user.mod_state()), Escape(user.mod_reason()));
       }
       rsp->write("</a>");
     }
@@ -534,7 +541,7 @@ namespace Ludwig {
       }
       rsp->write("</a>");
       if (board.content_warning()) {
-        write_fmt(rsp, R"(<abbr class="content-warning-label" title="Content Warning: {}">CW</abbr>)",
+        write_fmt(rsp, R"(<abbr class="tag content-warning-tag" title="Content Warning: {}">CW</abbr>)",
           Escape(board.content_warning())
         );
       }
@@ -542,87 +549,199 @@ namespace Ludwig {
 
     auto write_board_list(
       Response rsp,
-      const PageOf<BoardListEntry>& list
+      const PageOf<BoardListEntry>& list,
+      string_view base_url,
+      bool include_ol = true
     ) noexcept -> void {
-      // TODO: Pagination
-      rsp->write(R"(<ol class="board-list" id="top-level-list">)");
+      if (include_ol) rsp->write(R"(<ol class="board-list" id="top-level-list">)");
       for (auto& entry : list.entries) {
         rsp->write(R"(<li class="board-list-entry"><h2 class="board-title">)");
-        write_board_link(rsp, entry._board);
+        write_board_link(rsp, entry.board());
         rsp->write("</h2></li>");
       }
-      rsp->write("</ol>");
+      if (include_ol) rsp->write("</ol>");
+      write_pagination(rsp, base_url, list.is_first, list.next);
     }
 
-    auto write_sort_options(
+    auto write_user_list(
       Response rsp,
-      SortFormType type,
+      const PageOf<UserListEntry>& list,
       string_view base_url,
-      string_view sort_name,
-      bool show_threads,
-      bool show_images,
-      string_view hx_target = "#top-level-list"
+      InstanceController::Login login = {},
+      bool include_ol = true
     ) noexcept -> void {
+      if (include_ol) rsp->write(R"(<ol class="user-list" id="top-level-list">)");
+      for (auto& entry : list.entries) {
+        rsp->write(R"(<li class="user-list-entry">)");
+        write_user_link(rsp, entry.user(), login);
+      }
+      if (include_ol) rsp->write("</ol>");
+      write_pagination(rsp, base_url, list.is_first, list.next);
+    }
+
+    template <typename T> auto write_sort_select(Response, string_view, T) noexcept -> void;
+
+    template <> auto write_sort_select<SortType>(Response rsp, string_view name, SortType value) noexcept -> void {
+      write_fmt(rsp,
+        R"(<select name="{}" id="{}" autocomplete="off">)"
+        R"(<option value="Active"{}>Active)"
+        R"(<option value="Hot"{}>Hot)"
+        R"(<option value="New"{}>New)"
+        R"(<option value="Old"{}>Old)"
+        R"(<option value="MostComments"{}>Most Comments)"
+        R"(<option value="NewComments"{}>New Comments)"
+        R"(<option value="TopAll"{}>Top All)"
+        R"(<option value="TopYear"{}>Top Year)"
+        R"(<option value="TopSixMonths"{}>Top Six Months)"
+        R"(<option value="TopThreeMonths"{}>Top Three Months)"
+        R"(<option value="TopMonth"{}>Top Month)"
+        R"(<option value="TopWeek"{}>Top Week)"
+        R"(<option value="TopDay"{}>Top Day)"
+        R"(<option value="TopTwelveHour"{}>Top Twelve Hour)"
+        R"(<option value="TopSixHour"{}>Top Six Hour)"
+        R"(<option value="TopHour"{}>Top Hour)"
+        "</select>",
+        name, name,
+        value == SortType::Active ? " selected" : "",
+        value == SortType::Hot ? " selected" : "",
+        value == SortType::New ? " selected" : "",
+        value == SortType::Old ? " selected" : "",
+        value == SortType::MostComments ? " selected" : "",
+        value == SortType::NewComments ? " selected" : "",
+        value == SortType::TopAll ? " selected" : "",
+        value == SortType::TopYear ? " selected" : "",
+        value == SortType::TopSixMonths ? " selected" : "",
+        value == SortType::TopThreeMonths ? " selected" : "",
+        value == SortType::TopMonth ? " selected" : "",
+        value == SortType::TopWeek ? " selected" : "",
+        value == SortType::TopDay ? " selected" : "",
+        value == SortType::TopTwelveHour ? " selected" : "",
+        value == SortType::TopSixHour ? " selected" : "",
+        value == SortType::TopHour ? " selected" : ""
+      );
+    }
+
+    template <> auto write_sort_select<CommentSortType>(Response rsp, string_view name, CommentSortType value) noexcept -> void {
+      write_fmt(rsp,
+        R"(<select name="{}" id="{}" autocomplete="off">)"
+        R"(<option value="Hot"{}>Hot)"
+        R"(<option value="New"{}>New)"
+        R"(<option value="Old"{}>Old)"
+        R"(<option value="Top"{}>Top)"
+        "</select>",
+        name, name,
+        value == CommentSortType::Hot ? " selected" : "",
+        value == CommentSortType::New ? " selected" : "",
+        value == CommentSortType::Old ? " selected" : "",
+        value == CommentSortType::Top ? " selected" : ""
+      );
+    }
+
+    template <> auto write_sort_select<UserPostSortType>(Response rsp, string_view name, UserPostSortType value) noexcept -> void {
+      write_fmt(rsp,
+        R"(<select name="{}" id="{}" autocomplete="off">)"
+        R"(<option value="New"{}>New)"
+        R"(<option value="Old"{}>Old)"
+        R"(<option value="Top"{}>Top)"
+        "</select>",
+        name, name,
+        value == UserPostSortType::New ? " selected" : "",
+        value == UserPostSortType::Old ? " selected" : "",
+        value == UserPostSortType::Top ? " selected" : ""
+      );
+    }
+
+    template <> auto write_sort_select<UserSortType>(Response rsp, string_view name, UserSortType value) noexcept -> void {
+      write_fmt(rsp,
+        R"(<select name="{}" id="{}" autocomplete="off">)"
+        R"(<option value="New"{}>New)"
+        R"(<option value="Old"{}>Old)"
+        R"(<option value="MostPosts"{}>Most Posts)"
+        R"(<option value="NewPosts"{}>New Posts)"
+        "</select>",
+        name, name,
+        value == UserSortType::New ? " selected" : "",
+        value == UserSortType::Old ? " selected" : "",
+        value == UserSortType::MostPosts ? " selected" : "",
+        value == UserSortType::NewPosts ? " selected" : ""
+      );
+    }
+
+    template <> auto write_sort_select<BoardSortType>(Response rsp, string_view name, BoardSortType value) noexcept -> void {
+      write_fmt(rsp,
+        R"(<select name="{}" id="{}" autocomplete="off">)"
+        R"(<option value="New"{}>New)"
+        R"(<option value="Old"{}>Old)"
+        R"(<option value="MostPosts"{}>Most Posts)"
+        R"(<option value="NewPosts"{}>New Posts)"
+        R"(<option value="MostSubscribers"{}>Most Subscribers)"
+        "</select>",
+        name, name,
+        value == BoardSortType::New ? " selected" : "",
+        value == BoardSortType::Old ? " selected" : "",
+        value == BoardSortType::MostPosts ? " selected" : "",
+        value == BoardSortType::NewPosts ? " selected" : "",
+        value == BoardSortType::MostSubscribers ? " selected" : ""
+      );
+    }
+
+    inline auto write_show_threads_toggle(Response rsp, bool show_threads) noexcept -> void {
+      write_fmt(rsp,
+        R"(<fieldset class="toggle-buttons"><legend class="a11y">Show</legend>)"
+        R"(<input class="a11y" name="type" type="radio" value="threads" id="type-threads"{}><label for="type-threads" class="toggle-button">Threads</label>)"
+        R"(<input class="a11y" name="type" type="radio" value="comments" id="type-comments"{}><label for="type-comments" class="toggle-button">Comments</label></fieldset>)",
+        show_threads ? " checked" : "", show_threads ? "" : " checked"
+      );
+    }
+
+    inline auto write_local_toggle(Response rsp, bool local_only) noexcept -> void {
+      write_fmt(rsp,
+        R"(<fieldset class="toggle-buttons"><legend class="a11y">Show</legend>)"
+        R"(<input class="a11y" name="local" type="radio" value="1" id="local-1"{}><label for="local-1" class="toggle-button">Local</label>)"
+        R"(<input class="a11y" name="local" type="radio" value="0" id="local-0"{}><label for="local-0" class="toggle-button">All</label></fieldset>)",
+        local_only ? " checked" : "", local_only ? "" : " checked"
+      );
+    }
+
+    inline auto write_show_images_toggle(Response rsp, bool show_images) noexcept -> void {
+      write_fmt(rsp,
+        R"(</label><label for="images"><input class="a11y" name="images" id="images" type="checkbox" value="1"{}><div class="toggle-switch"></div> Images</label>)"
+        R"(<input class="no-js" type="submit" value="Apply"></form>)",
+        show_images ? " checked" : ""
+      );
+    }
+
+    inline auto write_subscribed_toggle(Response rsp, bool show_images) noexcept -> void {
+      write_fmt(rsp,
+        R"(</label><label for="sub"><input class="a11y" name="sub" id="sub" type="checkbox" value="1"{}><div class="toggle-switch"></div> Subscribed Only</label>)"
+        R"(<input class="no-js" type="submit" value="Apply"></form>)",
+        show_images ? " checked" : ""
+      );
+    }
+
+    template <typename T> inline auto write_toggle_1(Response, bool) noexcept -> void {}
+    template <> inline auto write_toggle_1<SortType>(Response rsp, bool t) noexcept -> void { write_show_threads_toggle(rsp, t); }
+    template <> inline auto write_toggle_1<UserPostSortType>(Response rsp, bool t) noexcept -> void { write_show_threads_toggle(rsp, t); }
+    template <> inline auto write_toggle_1<UserSortType>(Response rsp, bool t) noexcept -> void { write_local_toggle(rsp, t); }
+    template <> inline auto write_toggle_1<BoardSortType>(Response rsp, bool t) noexcept -> void { write_local_toggle(rsp, t); }
+
+    template <typename T> inline auto write_toggle_2(Response rsp, bool) noexcept -> void {
+      rsp->write(R"(</label><input class="no-js" type="submit" value="Apply"></form>)");
+    };
+    template <> inline auto write_toggle_2<SortType>(Response rsp, bool t) noexcept -> void { write_show_images_toggle(rsp, t); }
+    template <> inline auto write_toggle_2<CommentSortType>(Response rsp, bool t) noexcept -> void { write_show_images_toggle(rsp, t); }
+    template <> inline auto write_toggle_2<UserPostSortType>(Response rsp, bool t) noexcept -> void { write_show_images_toggle(rsp, t); }
+    template <> inline auto write_toggle_2<BoardSortType>(Response rsp, bool t) noexcept -> void { write_subscribed_toggle(rsp, t); }
+
+    template <typename T> auto write_sort_options(Response rsp, string_view base_url, T sort, bool toggle_1, bool toggle_2, string_view hx_target = "#top-level-list") noexcept -> void {
       write_fmt(rsp,
         R"(<form class="sort-form" method="get" action="{0}" hx-get="{0}" hx-trigger="change" hx-target="{1}" hx-push-url="true">)",
         Escape{base_url}, Escape{hx_target}
       );
-      if (type != SortFormType::Comments) {
-        write_fmt(rsp,
-          R"(<fieldset class="toggle-buttons"><legend class="a11y">Show</legend>)"
-          R"(<input class="a11y" name="type" type="radio" value="threads" id="type-threads"{}><label for="type-threads" class="toggle-button">Threads</label>)"
-          R"(<input class="a11y" name="type" type="radio" value="comments" id="type-comments"{}><label for="type-comments" class="toggle-button">Comments</label></fieldset>)",
-          show_threads ? " checked" : "", show_threads ? "" : " checked"
-        );
-      }
-      rsp->write(R"(<label for="sort"><span class="a11y">Sort</span><select name="sort">)");
-      if (type == SortFormType::Board) {
-        write_fmt(rsp, R"(<option value="Active"{}>Active)", sort_name == "Active" ? " selected" : "");
-      }
-      if (type != SortFormType::User) {
-        write_fmt(rsp, R"(<option value="Hot"{}>Hot)", sort_name == "Hot" ? " selected" : "");
-      }
-      write_fmt(rsp,
-        R"(<option value="New"{}>New)"
-        R"(<option value="Old"{}>Old)",
-        sort_name == "New" ? " selected" : "",
-        sort_name == "Old" ? " selected" : ""
-      );
-      if (type == SortFormType::Board) {
-        write_fmt(rsp,
-          R"(<option value="MostComments"{}>Most Comments)"
-          R"(<option value="NewComments"{}>New Comments)"
-          R"(<option value="TopAll"{}>Top All)"
-          R"(<option value="TopYear"{}>Top Year)"
-          R"(<option value="TopSixMonths"{}>Top Six Months)"
-          R"(<option value="TopThreeMonths"{}>Top Three Months)"
-          R"(<option value="TopMonth"{}>Top Month)"
-          R"(<option value="TopWeek"{}>Top Week)"
-          R"(<option value="TopDay"{}>Top Day)"
-          R"(<option value="TopTwelveHour"{}>Top Twelve Hour)"
-          R"(<option value="TopSixHour"{}>Top Six Hour)"
-          R"(<option value="TopHour"{}>Top Hour)",
-          sort_name == "MostComments" ? " selected" : "",
-          sort_name == "NewComments" ? " selected" : "",
-          sort_name == "TopAll" ? " selected" : "",
-          sort_name == "TopYear" ? " selected" : "",
-          sort_name == "TopSixMonths" ? " selected" : "",
-          sort_name == "TopThreeMonths" ? " selected" : "",
-          sort_name == "TopMonth" ? " selected" : "",
-          sort_name == "TopWeek" ? " selected" : "",
-          sort_name == "TopDay" ? " selected" : "",
-          sort_name == "TopTwelveHour" ? " selected" : "",
-          sort_name == "TopSixHour" ? " selected" : "",
-          sort_name == "TopHour" ? " selected" : ""
-        );
-      } else {
-        write_fmt(rsp, R"(<option value="Top"{}>Top)", sort_name == "Top" ? " selected" : "");
-      }
-      write_fmt(rsp,
-        R"(</select></label><label for="images"><input class="a11y" name="images" id="images" type="checkbox" value="1"{}><div class="toggle-switch"></div> Images</label>)"
-        R"(<input class="no-js" type="submit" value="Apply"></form>)",
-        show_images ? " checked" : ""
-      );
+      write_toggle_1<T>(rsp, toggle_1);
+      rsp->write(R"(<label for="sort"><span class="a11y">Sort</span>)");
+      write_sort_select(rsp, "sort", sort);
+      write_toggle_2<T>(rsp, toggle_2);
     }
 
     template <typename T> auto write_vote_buttons(
@@ -658,20 +777,25 @@ namespace Ludwig {
       Response rsp,
       string_view base_url,
       bool is_first,
-      optional<uint64_t> next,
+      PageCursor next,
       bool infinite_scroll_enabled = true
     ) noexcept -> void {
       const auto sep = base_url.find('?') == string_view::npos ? "?" : "&amp;";
-      rsp->write(R"(<div class="pagination" id="pagination" hx-swap-oob="true">)");
+      rsp->write(R"(<div class="pagination" id="pagination" hx-swap-oob="true")");
+      if (next && infinite_scroll_enabled) {
+        write_fmt(rsp,
+          R"( hx-get="{}{}from={}" hx-target="#top-level-list" hx-swap="beforeend" hx-trigger="revealed">)",
+          Escape{base_url}, sep, next.to_string()
+        );
+      } else rsp->write(">");
       if (!is_first) {
         write_fmt(rsp, R"(<a class="big-button no-js" href="{}">← First</a>)", Escape{base_url});
       }
       if (next) {
         write_fmt(rsp,
-          R"(<a class="big-button no-js" href="{0}{1}from={2:x}">Next →</a>)"
-          R"(<a class="more-link js" href="{0}{1}from={2:x}" hx-get="{0}{1}from={2:x}" hx-target="#top-level-list" hx-swap="beforeend"{3}>Load more…</a>)",
-          Escape{base_url}, sep, *next,
-          infinite_scroll_enabled ? R"( hx-trigger="revealed")" : ""
+          R"(<a class="big-button no-js" href="{0}{1}from={2}">Next →</a>)"
+          R"(<a class="more-link js" href="{0}{1}from={2}" hx-get="{0}{1}from={2}" hx-target="#top-level-list" hx-swap="beforeend">Load more…</a>)",
+          Escape{base_url}, sep, next.to_string()
         );
       }
       rsp->write(R"(<div class="spinner">Loading…</div></div>)");
@@ -786,7 +910,7 @@ namespace Ludwig {
           );
         } else {
           write_fmt(rsp,
-            R"(<p class="content-warning"><span class="mod-warning-label">{}{} by Moderator</span></p>)",
+            R"(<p class="content-warning"><span class="tag mod-warning-tag">{}{} by Moderator</span></p>)",
             prefix, describe_mod_state(thing.mod_state())
           );
         }
@@ -798,11 +922,11 @@ namespace Ludwig {
 
     template <typename T> auto write_short_warnings(Response rsp, const T& thing) noexcept -> void {
       if (thing.mod_state() > ModState::Visible) {
-        write_fmt(rsp, R"( <abbr class="mod-warning-label" title="{0} by Moderator: {1}">{0}</abbr>)",
+        write_fmt(rsp, R"( <abbr class="tag mod-warning-tag" title="{0} by Moderator: {1}">{0}</abbr>)",
           describe_mod_state(thing.mod_state()), Escape(thing.mod_reason()));
       }
       if (thing.content_warning()) {
-        write_fmt(rsp, R"( <abbr class="content-warning-label" title="Content Warning: {}">CW</abbr>)",
+        write_fmt(rsp, R"( <abbr class="tag content-warning-tag" title="Content Warning: {}">CW</abbr>)",
           Escape(thing.content_warning()));
       }
     }
@@ -849,7 +973,7 @@ namespace Ludwig {
       write_datetime(rsp, thread.thread().created_at());
       if (show_user) {
         rsp->write("</span><span>by ");
-        write_user_link(rsp, thread._author);
+        write_user_link(rsp, thread._author, login);
       }
       if (show_board) {
         rsp->write("</span><span>to ");
@@ -904,7 +1028,7 @@ namespace Ludwig {
         is_tree_item ? "h3" : "h2"
       );
       if (show_user) {
-        write_user_link(rsp, comment._author);
+        write_user_link(rsp, comment._author, login);
         rsp->write("</span><span>");
       }
       rsp->write("commented ");
@@ -979,11 +1103,11 @@ namespace Ludwig {
         std::visit(overload{
           [&](const UserListEntry& user) {
             rsp->write("<li>");
-            write_user_link(rsp, { user.user() });
+            write_user_link(rsp, user.user(), login);
           },
           [&](const BoardListEntry& board) {
             rsp->write("<li>");
-            write_board_link(rsp, { board.board() });
+            write_board_link(rsp, board.board());
           },
           [&](const ThreadListEntry& thread) {
             write_thread_entry(rsp, thread, login, true, true, true, true);
@@ -1000,7 +1124,8 @@ namespace Ludwig {
       Response rsp,
       const CommentTree& comments,
       uint64_t root,
-      string_view sort_str,
+      CommentSortType sort,
+      const SiteDetail* site,
       InstanceController::Login login,
       bool show_images,
       bool is_thread,
@@ -1013,32 +1138,44 @@ namespace Ludwig {
         if (is_thread) rsp->write(R"(<div class="no-comments">No comments</div>)");
         return;
       }
+      const bool infinite_scroll_enabled =
+        site->infinite_scroll_enabled && (!login || login->local_user().infinite_scroll_enabled());
       if (include_ol) write_fmt(rsp, R"(<ol class="comment-list comment-tree" id="comments-{:x}">)", root);
       for (auto iter = range.first; iter != range.second; iter++) {
         const auto& comment = iter->second;
         write_fmt(rsp,
-          R"(<li><article class="comment-with-comments {}">)",
+          R"(<li><article class="comment-with-comments{}">)",
           is_alt ? " odd-depth" : "", comment.id
         );
         write_comment_entry(rsp, comment, login, false, true, true, false, show_images);
         const auto cont = comments.continued.find(comment.id);
-        if (cont != comments.continued.end() && cont->second == 0) {
+        if (cont != comments.continued.end() && !cont->second) {
           write_fmt(rsp,
-            R"(<div class="comments-continued" id="continue-{0:x}"><a href="/comment/{0:x}">More comments…</a></div>)",
-            comment.id
+            R"(<a class="more-link{0}" id="continue-{1:x}" href="/comment/{1:x}">More comments…</a>)",
+            is_alt ? "" : " odd-depth", comment.id
           );
         } else if (comment.stats().child_count()) {
           rsp->write(R"(<section class="comments" aria-title="Replies">)");
-          write_comment_tree(rsp, comments, comment.id, sort_str, login, show_images, false, true, !is_alt);
+          write_comment_tree(rsp, comments, comment.id, sort, site, login, show_images, false, true, !is_alt);
           rsp->write("</section>");
         }
         rsp->write("</article>");
       }
       const auto cont = comments.continued.find(root);
       if (cont != comments.continued.end()) {
+        write_fmt(rsp, R"(<li id="comment-replace-{:x}")", root);
+        if (infinite_scroll_enabled) {
+          write_fmt(rsp,
+            R"( hx-get="/{0}/{1:x}?sort={2}&from={3}" hx-swap="outerHTML" hx-trigger="revealed")",
+            is_thread ? "thread" : "comment", root,
+            EnumNamesCommentSortType()[(size_t)sort], cont->second.to_string()
+          );
+        }
         write_fmt(rsp,
-          R"(<li><div class="comments-continued" id="continue-{0:x}"><a href="/{1}/{0:x}?sort={2}&from={3:x}">More comments…</a></div>)",
-          root, is_thread ? "thread" : "comment", sort_str, cont->second
+          R"(><a class="more-link{0}" id="continue-{1:x}" href="/{2}/{1:x}?sort={3}&from={4}")"
+          R"( hx-get="/{2}/{1:x}?sort={3}&from={4}" hx-target="#comment-replace-{1:x}" hx-swap="outerHTML">More comments…</a>)",
+          is_alt ? " odd-depth" : "", root, is_thread ? "thread" : "comment",
+          EnumNamesCommentSortType()[(size_t)sort], cont->second.to_string()
         );
       }
       if (include_ol) rsp->write("</ol>");
@@ -1063,7 +1200,7 @@ namespace Ludwig {
 
     auto write_content_warning(Response rsp, string_view label, bool is_mod, string_view content, string_view prefix = "") noexcept -> void {
       write_fmt(rsp,
-        R"(<p class="content-warning"><strong class="{}-warning-label">{}{}<span class="a11y">:</span></strong> {}</p>)",
+        R"(<p class="tag content-warning content-warning-tag"><strong class="{}-warning-label">{}{}<span class="a11y">:</span></strong> {}</p>)",
         is_mod ? "mod" : "content", prefix, label, Escape{content}
       );
     }
@@ -1083,8 +1220,9 @@ namespace Ludwig {
     auto write_thread_view(
       Response rsp,
       const ThreadDetailResponse& thread,
+      const SiteDetail* site,
       InstanceController::Login login,
-      string_view sort_str = "Hot",
+      CommentSortType sort,
       bool show_images = false
     ) noexcept -> void {
       rsp->write(R"(<article class="thread-with-comments">)");
@@ -1099,19 +1237,20 @@ namespace Ludwig {
         }
       }
       write_fmt(rsp, R"(<section class="comments" id="comments"><h2>{:d} comments</h2>)", thread.stats().descendant_count());
-      write_sort_options(rsp, SortFormType::Comments, fmt::format("/thread/{:x}", thread.id), sort_str, false, show_images, fmt::format("#comments-{:x}", thread.id));
+      write_sort_options(rsp, fmt::format("/thread/{:x}", thread.id), sort, false, show_images, fmt::format("#comments-{:x}", thread.id));
       if (InstanceController::can_reply_to(thread, login)) {
         write_reply_form(rsp, thread);
       }
-      write_comment_tree(rsp, thread.comments, thread.id, sort_str, login, show_images, true, true);
+      write_comment_tree(rsp, thread.comments, thread.id, sort, site, login, show_images, true, true);
       rsp->write("</section></article>");
     }
 
     auto write_comment_view(
       Response rsp,
       const CommentDetailResponse& comment,
+      const SiteDetail* site,
       InstanceController::Login login,
-      string_view sort_str = "Hot",
+      CommentSortType sort,
       bool show_images = false
     ) noexcept -> void {
       rsp->write(R"(<article class="comment-with-comments">)");
@@ -1121,11 +1260,11 @@ namespace Ludwig {
         true, true, show_images
       );
       write_fmt(rsp, R"(<section class="comments" id="comments"><h2>{:d} replies</h2>)", comment.stats().descendant_count());
-      write_sort_options(rsp, SortFormType::Comments, fmt::format("/comment/{:x}", comment.id), sort_str, false, show_images, fmt::format("#comments-{:x}", comment.id));
+      write_sort_options(rsp, fmt::format("/comment/{:x}", comment.id), sort, false, show_images, fmt::format("#comments-{:x}", comment.id));
       if (InstanceController::can_reply_to(comment, login)) {
         write_reply_form(rsp, comment);
       }
-      write_comment_tree(rsp, comment.comments, comment.id, sort_str, login, show_images, true, true);
+      write_comment_tree(rsp, comment.comments, comment.id, sort, site, login, show_images, false, true);
       rsp->write("</section></article>");
     }
 
@@ -1189,7 +1328,7 @@ namespace Ludwig {
     auto write_create_thread_form(
       Response rsp,
       bool show_url,
-      const BoardDetailResponse board,
+      const BoardListEntry board,
       const LocalUserDetailResponse login,
       optional<string_view> error = {}
     ) noexcept -> void {
@@ -1198,7 +1337,7 @@ namespace Ludwig {
         R"(<p class="thread-info"><span>Posting as )",
         Escape(board.board().name()), error_banner(error)
       );
-      write_user_link(rsp, login._user);
+      write_user_link(rsp, login._user, login);
       rsp->write("</span><span>to ");
       write_board_link(rsp, board._board);
       rsp->write("</span></p><br>" HTML_FIELD("title", "Title", "text", R"( autocomplete="off" required)"));
@@ -1223,7 +1362,7 @@ namespace Ludwig {
         R"(<p class="thread-info"><span>Posting as )",
         thread.id, error_banner(error)
       );
-      write_user_link(rsp, login._user);
+      write_user_link(rsp, login._user, login);
       rsp->write("</span><span>to ");
       write_board_link(rsp, thread._board);
       write_fmt(rsp,
@@ -1235,6 +1374,17 @@ namespace Ludwig {
       );
       write_content_warning_field(rsp, thread.thread().content_warning() ? thread.thread().content_warning()->string_view() : "");
       rsp->write(R"(<input type="submit" value="Submit"></form></main>)");
+    }
+
+    auto write_site_admin_tabs(Response rsp, const SiteDetail* site, uint8_t selected) noexcept -> void {
+      write_fmt(rsp,
+        R"(<ul class="tabs"><li>{}<li>{}{}</ul>)",
+        selected == 0 ? R"(<a href="/site_admin">Settings</a>)" : "<div>Settings</div>",
+        selected == 1 ? R"(<a href="/site_admin/importexport">Import/Export</a>)" : "<div>Import/Export</div>",
+        site->registration_invite_required
+          ? (selected == 2 ? R"(<li><a href="/site_admin/invites">Invites</a>)" : "<li><div>Invites</div>")
+          : ""
+      );
     }
 
     auto write_site_admin_form(
@@ -1266,10 +1416,22 @@ namespace Ludwig {
       );
     }
 
+    auto write_user_settings_tabs(Response rsp, const SiteDetail* site, uint8_t selected) noexcept -> void {
+      write_fmt(rsp,
+        R"(<ul class="tabs"><li>{}<li>{}<li>{}{}</ul>)",
+        selected == 0 ? R"(<a href="/settings">Settings</a>)" : "<div>Settings</div>",
+        selected == 1 ? R"(<a href="/settings/profile">Profile</a>)" : "<div>Profile</div>",
+        selected == 2 ? R"(<a href="/settings/account">Account</a>)" : "<div>Account</div>",
+        site->registration_invite_required && !site->invite_admin_only
+          ? (selected == 3 ? R"(<li><a href="/settings/invites">Invites</a>)" : "<li><div>Invites</div>")
+          : ""
+      );
+    }
+
     auto write_user_settings_form(
       Response rsp,
       const SiteDetail* site,
-      const LocalUserDetailResponse login,
+      const LocalUserDetailResponse& login,
       optional<string_view> error = {}
     ) noexcept -> void {
       uint8_t cw_mode = 1;
@@ -1278,13 +1440,10 @@ namespace Ludwig {
       else if (login.local_user().expand_cw_posts()) cw_mode = 2;
       write_fmt(rsp,
         R"(<form class="form form-page" method="post" action="/settings"><h2>User settings</h2>{})"
-        HTML_FIELD("display_name", "Display name", "text", R"( value="{}")")
-        HTML_FIELD("email", "Email address", "email", R"( required value="{}")")
-        HTML_TEXTAREA("bio", "Bio", "", "{}")
-        HTML_FIELD("avatar_url", "Avatar URL", "text", R"( value="{}")")
-        HTML_FIELD("banner_url", "Banner URL", "text", R"( value="{}")")
         HTML_CHECKBOX("open_links_in_new_tab", "Open links in new tab", "{}")
         HTML_CHECKBOX("show_avatars", "Show avatars", "{}")
+        HTML_CHECKBOX("show_images_threads", "Show images on threads by default", "{}")
+        HTML_CHECKBOX("show_images_comments", "Show inline images in comments by default", "{}")
         HTML_CHECKBOX("show_bot_accounts", "Show bot accounts", "{}")
         HTML_CHECKBOX("show_karma", "Show karma", "{}")
         R"(<fieldset><legend>Content warnings</legend>)"
@@ -1294,13 +1453,10 @@ namespace Ludwig {
           R"(<label for="cw_show_images"><input type="radio" id="cw_show_images" name="content_warnings" value="3"{}> Always expand text and images with content warnings</label>)"
         R"(</fieldset>)",
         error_banner(error),
-        Escape(login.user().display_name()),
-        Escape(login.local_user().email()),
-        Escape(login.user().bio_raw()),
-        Escape(login.user().avatar_url()),
-        Escape(login.user().banner_url()),
         login.local_user().open_links_in_new_tab() ? " checked" : "",
         login.local_user().show_avatars() ? " checked" : "",
+        login.local_user().show_images_threads() ? " checked" : "",
+        login.local_user().show_images_comments() ? " checked" : "",
         login.local_user().show_bot_accounts() ? " checked" : "",
         login.local_user().show_karma() ? " checked" : "",
         cw_mode == 0 ? " checked" : "", cw_mode == 1 ? " checked" : "", cw_mode == 2 ? " checked" : "", cw_mode == 3 ? " checked" : ""
@@ -1311,9 +1467,61 @@ namespace Ludwig {
           login.local_user().javascript_enabled() ? " checked" : ""
         );
       }
+      if (site->infinite_scroll_enabled) {
+        write_fmt(rsp,
+          HTML_CHECKBOX("infinite_scroll_enabled", "Infinite scroll enabled", "{}"),
+          login.local_user().infinite_scroll_enabled() ? " checked" : ""
+        );
+      }
       // TODO: Default sort, default comment sort
-      // TODO: Change password
       rsp->write(R"(<input type="submit" value="Submit"></form>)");
+    }
+
+    auto write_user_profile_form(
+      Response rsp,
+      const SiteDetail* site,
+      const LocalUserDetailResponse login,
+      optional<string_view> error = {}
+    ) noexcept -> void {
+      write_fmt(rsp,
+        R"(<form class="form form-page" method="post" action="/settings/profile"><h2>Profile</h2>{})"
+        R"(<label for="name"><span>Username</span><output name="name" id="name">{}</output></label>)"
+        HTML_FIELD("display_name", "Display name", "text", R"( value="{}")")
+        HTML_FIELD("email", "Email address", "email", R"( required value="{}")")
+        HTML_TEXTAREA("bio", "Bio", "", "{}")
+        HTML_FIELD("avatar_url", "Avatar URL", "text", R"( value="{}")")
+        HTML_FIELD("banner_url", "Banner URL", "text", R"( value="{}")")
+        R"(<input type="submit" value="Submit"></form>)",
+        error_banner(error),
+        Escape(login.user().name()),
+        Escape(login.user().display_name()),
+        Escape(login.local_user().email()),
+        Escape(login.user().bio_raw()),
+        Escape(login.user().avatar_url()),
+        Escape(login.user().banner_url())
+      );
+    }
+
+    auto write_user_account_forms(
+      Response rsp,
+      const SiteDetail* site,
+      const LocalUserDetailResponse login,
+      optional<string_view> error = {}
+    ) noexcept -> void {
+      write_fmt(rsp,
+        R"(<form class="form form-page" method="post" action="/settings/account"><h2>Change password</h2>{})"
+        HTML_FIELD("old_password", "Old password", "password", R"( required autocomplete="off")")
+        HTML_FIELD("password", "New password", "password", R"( required autocomplete="off")")
+        HTML_FIELD("confirm_password", "Confirm new password", "password", R"( required autocomplete="off")")
+        R"(<input type="submit" value="Submit"></form><br>)"
+        R"(<form class="form form-page" method="post" action="/settings/delete_account"><h2>Delete account</h2>)"
+        R"(<p>Warning: this cannot be undone!</p>)"
+        HTML_FIELD("delete_password", "Type your password here", "password", R"( required autocomplete="off")")
+        HTML_FIELD("delete_confirm", R"(Type "delete" here to confirm)", "text", R"( required autocomplete="off")")
+        HTML_CHECKBOX("delete_posts", "Also delete all of my posts", R"( autocomplete="off")"),
+        R"(<input type="submit" value="Delete Account"></form>)",
+        error_banner(error)
+      );
     }
 
     auto write_board_settings_form(
@@ -1381,7 +1589,7 @@ namespace Ludwig {
       string_view mimetype,
       string_view src
     ) noexcept -> void {
-      const auto hash = fmt::format("{:016x}", XXH3_64bits(src.data(), src.length()));
+      const auto hash = fmt::format("\"{:016x}\"", XXH3_64bits(src.data(), src.length()));
       app.get(fmt::format("/static/{}", filename), [src, mimetype, hash](auto* res, auto* req) {
         if (req->getHeader("if-none-match") == hash) {
           res->writeStatus(http_status(304))->end();
@@ -1440,7 +1648,7 @@ namespace Ludwig {
       .get("/", [self](auto* rsp, auto*, Meta& m) {
         auto txn = self->controller->open_read_txn();
         m.populate(self, txn);
-        const auto boards = self->controller->list_local_boards(txn);
+        const auto boards = self->controller->list_boards(txn, BoardSortType::MostPosts, true, false, m.login);
         // ---
         self->write_html_header(rsp, m, {
           .canonical_path = "/",
@@ -1450,30 +1658,95 @@ namespace Ludwig {
         rsp->write("<div>");
         self->write_sidebar(rsp, m);
         rsp->write("<main>");
-        self->write_board_list(rsp, boards);
+        self->write_board_list(rsp, boards, "/");
         rsp->write("</main></div>");
         end_with_html_footer(rsp, m);
+      })
+      .get("/boards", [self](auto* rsp, auto* req, Meta& m) {
+        auto txn = self->controller->open_read_txn();
+        m.populate(self, txn);
+        const auto local = req->getQuery("local") == "1";
+        const auto sort = InstanceController::parse_board_sort_type(req->getQuery("sort"));
+        const auto sub = req->getQuery("sub") == "1";
+        const auto boards = self->controller->list_boards(txn, sort, local, sub, m.login, req->getQuery("from"));
+        const auto base_url = fmt::format("/boards?local={}&sort={}&sub={}",
+          local ? "1" : "0",
+          EnumNameBoardSortType(sort),
+          sub ? "1" : "0"
+        );
+        // ---
+        if (m.is_htmx) {
+          rsp->writeHeader("Content-Type", TYPE_HTML);
+        } else {
+          self->write_html_header(rsp, m, {
+            .canonical_path = "/boards",
+            .banner_title = "Boards",
+            .banner_link = "/boards",
+          });
+          rsp->write("<div>");
+          self->write_sidebar(rsp, m);
+          rsp->write(R"(<section><h2 class="a11y">Sort and filter</h2>)");
+          self->write_sort_options(rsp, "/boards", sort, local, sub);
+          rsp->write(R"(</section><main>)");
+        }
+        self->write_board_list(rsp, boards, base_url);
+        if (m.is_htmx) {
+          rsp->end();
+        } else {
+          rsp->write("</main></div>");
+          end_with_html_footer(rsp, m);
+        }
+      })
+      .get("/users", [self](auto* rsp, auto* req, Meta& m) {
+        auto txn = self->controller->open_read_txn();
+        m.populate(self, txn);
+        const auto local = req->getQuery("local") == "1";
+        const auto sort = InstanceController::parse_user_sort_type(req->getQuery("sort"));
+        const auto users = self->controller->list_users(txn, sort, local, m.login, req->getQuery("from"));
+        const auto base_url = fmt::format("/users?local={}&sort={}",
+          local ? "1" : "0",
+          EnumNameUserSortType(sort)
+        );
+        // ---
+        if (m.is_htmx) {
+          rsp->writeHeader("Content-Type", TYPE_HTML);
+        } else {
+          self->write_html_header(rsp, m, {
+            .canonical_path = "/users",
+            .banner_title = "Users",
+            .banner_link = "/users",
+          });
+          rsp->write("<div>");
+          self->write_sidebar(rsp, m);
+          rsp->write(R"(<section><h2 class="a11y">Sort and filter</h2>)");
+          self->write_sort_options(rsp, "/users", sort, local, false);
+          rsp->write(R"(</section><main>)");
+        }
+        self->write_user_list(rsp, users, base_url, m.login, !m.is_htmx);
+        if (m.is_htmx) {
+          rsp->end();
+        } else {
+          rsp->write("</main></div>");
+          end_with_html_footer(rsp, m);
+        }
       })
       .get("/b/:name", [self](auto* rsp, auto* req, Meta& m) {
         auto txn = self->controller->open_read_txn();
         m.populate(self, txn);
         const auto board_id = board_name_param(txn, req, 0);
-        const auto board = self->controller->board_detail(txn, board_id, m.logged_in_user_id);
-        const auto original_sort_str = req->getQuery("sort"),
-          sort_str = original_sort_str.empty() ? "Hot" : original_sort_str;
-        const auto sort = InstanceController::parse_sort_type(sort_str);
-        const auto from = InstanceController::parse_hex_id(string(req->getQuery("from")));
+        const auto board = self->controller->board_detail(txn, board_id, m.login);
+        const auto sort = InstanceController::parse_sort_type(req->getQuery("sort"), m.login);
         const auto show_threads = req->getQuery("type") != "comments",
-          show_images = req->getQuery("images") == "1" || original_sort_str.empty();
+          show_images = req->getQuery("images") == "1" || (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_threads() : false);
         const auto base_url = fmt::format("/b/{}?type={}&sort={}&images={}",
           board.board().name()->string_view(),
           show_threads ? "threads" : "comments",
-          sort_str,
+          EnumNameSortType(sort),
           show_images ? 1 : 0
         );
         const auto list = show_threads
-          ? PostList(self->controller->list_board_threads(txn, board_id, sort, m.login, from))
-          : PostList(self->controller->list_board_comments(txn, board_id, sort, m.login, from));
+          ? PostList(self->controller->list_board_threads(txn, board_id, sort, m.login, req->getQuery("from")))
+          : PostList(self->controller->list_board_comments(txn, board_id, sort, m.login, req->getQuery("from")));
         // ---
         if (m.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
@@ -1489,7 +1762,7 @@ namespace Ludwig {
           rsp->write("<div>");
           self->write_sidebar(rsp, m, {board});
           rsp->write(R"(<section><h2 class="a11y">Sort and filter</h2>)");
-          self->write_sort_options(rsp, SortFormType::Board, req->getUrl(), sort_str, show_threads, show_images);
+          self->write_sort_options(rsp, req->getUrl(), sort, show_threads, show_images);
           rsp->write(R"(</section><main>)");
         }
         std::visit(overload{
@@ -1508,7 +1781,7 @@ namespace Ludwig {
         const auto board_id = board_name_param(txn, req, 0);
         const auto show_url = req->getQuery("text") != "1";
         const auto login = m.require_login(self, txn);
-        const auto board = self->controller->board_detail(txn, board_id, m.logged_in_user_id);
+        const auto board = self->controller->board_detail(txn, board_id, m.login);
         // ---
         self->write_html_header(rsp, m, {
           .canonical_path = fmt::format("/b/{}/create_thread", board.board().name()->string_view()),
@@ -1525,22 +1798,19 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         m.populate(self, txn);
         const auto user_id = user_name_param(txn, req, 0);
-        const auto user = self->controller->user_detail(txn, user_id);
-        const auto original_sort_str = req->getQuery("sort"),
-          sort_str = original_sort_str.empty() ? "New" : original_sort_str;
-        const auto sort = InstanceController::parse_user_post_sort_type(sort_str);
-        const auto from = InstanceController::parse_hex_id(string(req->getQuery("from")));
+        const auto user = self->controller->user_detail(txn, user_id, m.login);
+        const auto sort = InstanceController::parse_user_post_sort_type(req->getQuery("sort"));
         const auto show_threads = req->getQuery("type") != "comments",
-          show_images = req->getQuery("images") == "1" || original_sort_str.empty();
+          show_images = req->getQuery("images") == "1" || (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_threads() : false);
         const auto base_url = fmt::format("/u/{}?type={}&sort={}&images={}",
           user.user().name()->string_view(),
           show_threads ? "threads" : "comments",
-          sort_str,
+          EnumNamesUserPostSortType()[(size_t)sort],
           show_images ? 1 : 0
         );
         const auto list = show_threads
-          ? PostList(self->controller->list_user_threads(txn, user_id, sort, m.login, from))
-          : PostList(self->controller->list_user_comments(txn, user_id, sort, m.login, from));
+          ? PostList(self->controller->list_user_threads(txn, user_id, sort, m.login, req->getQuery("from")))
+          : PostList(self->controller->list_user_comments(txn, user_id, sort, m.login, req->getQuery("from")));
         // ---
         if (m.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
@@ -1556,7 +1826,7 @@ namespace Ludwig {
           rsp->write("<div>");
           self->write_sidebar(rsp, m);
           rsp->write(R"(<section><h2 class="a11y">Sort and filter</h2>)");
-          self->write_sort_options(rsp, SortFormType::User, req->getUrl(), sort_str, show_threads, show_images);
+          self->write_sort_options(rsp, req->getUrl(), sort, show_threads, show_images);
           rsp->write(R"(</section><main>)");
         }
         std::visit(overload{
@@ -1574,19 +1844,16 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         m.populate(self, txn);
         const auto id = hex_id_param(req, 0);
-        // TODO: Get sort and filter settings from user
-        const auto original_sort_str = req->getQuery("sort"),
-          sort_str = original_sort_str.empty() ? "Hot" : original_sort_str;
-        const auto sort = InstanceController::parse_comment_sort_type(sort_str);
-        const auto from = InstanceController::parse_hex_id(string(req->getQuery("from")));
-        const auto show_images = req->getQuery("images") == "1" || sort_str.empty();
-        const auto detail = self->controller->thread_detail(txn, id, sort, m.login, from);
-        const auto board = self->controller->board_detail(txn, detail.thread().board(), m.logged_in_user_id);
+        const auto sort = InstanceController::parse_comment_sort_type(req->getQuery("sort"), m.login);
+        const auto show_images = req->getQuery("images") == "1" ||
+          (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_comments() : false);
+        const auto detail = self->controller->thread_detail(txn, id, sort, m.login, req->getQuery("from"));
+        const auto board = self->controller->board_detail(txn, detail.thread().board(), m.login);
         // ---
         if (m.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
           m.write_cookie(rsp);
-          self->write_comment_tree(rsp, detail.comments, detail.id, sort_str, m.login, show_images, true, false);
+          self->write_comment_tree(rsp, detail.comments, detail.id, sort, m.site, m.login, show_images, true, false);
           rsp->end();
         } else {
           self->write_html_header(rsp, m, {
@@ -1599,7 +1866,7 @@ namespace Ludwig {
           rsp->write("<div>");
           self->write_sidebar(rsp, m, board);
           rsp->write("<main>");
-          self->write_thread_view(rsp, detail, m.login, sort_str, show_images);
+          self->write_thread_view(rsp, detail, m.site, m.login, sort, show_images);
           rsp->write("</main></div>");
           end_with_html_footer(rsp, m);
         }
@@ -1624,19 +1891,16 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         m.populate(self, txn);
         const auto id = hex_id_param(req, 0);
-        // TODO: Get sort and filter settings from user
-        const auto original_sort_str = req->getQuery("sort"),
-          sort_str = original_sort_str.empty() ? "Hot" : original_sort_str;
-        const auto sort = InstanceController::parse_comment_sort_type(sort_str);
-        const auto from = InstanceController::parse_hex_id(string(req->getQuery("from")));
-        const auto show_images = req->getQuery("images") == "1" || sort_str.empty();
-        const auto detail = self->controller->comment_detail(txn, id, sort, m.login, from);
-        const auto board = self->controller->board_detail(txn, detail.thread().board(), m.logged_in_user_id);
+        const auto sort = InstanceController::parse_comment_sort_type(req->getQuery("sort"), m.login);
+        const auto show_images = req->getQuery("images") == "1" ||
+          (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_comments() : false);
+        const auto detail = self->controller->comment_detail(txn, id, sort, m.login, req->getQuery("from"));
+        const auto board = self->controller->board_detail(txn, detail.thread().board(), m.login);
         // ----
         if (m.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
           m.write_cookie(rsp);
-          self->write_comment_tree(rsp, detail.comments, detail.id, sort_str, m.login, show_images, false, false);
+          self->write_comment_tree(rsp, detail.comments, detail.id, sort, m.site, m.login, show_images, false, false);
           rsp->end();
         } else {
           self->write_html_header(rsp, m, {
@@ -1649,7 +1913,7 @@ namespace Ludwig {
           rsp->write("<div>");
           self->write_sidebar(rsp, m, board);
           rsp->write("<main>");
-          self->write_comment_view(rsp, detail, m.login, sort_str, show_images);
+          self->write_comment_view(rsp, detail, m.site, m.login, sort, show_images);
           rsp->write("</main></div>");
           end_with_html_footer(rsp, m);
         }
@@ -1661,7 +1925,7 @@ namespace Ludwig {
           .include_threads = true,
           .include_comments = true
         };
-        self->controller->search(query, m->login, 0, [
+        self->controller->search(query, m->login, [
           self, rsp, m = std::move(m), wrap = std::move(wrap)
         ](auto& txn, auto results) mutable {
           wrap([&]{
@@ -1727,7 +1991,7 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         const auto board_id = board_name_param(txn, req, 0);
         const auto login = m.require_login(self, txn);
-        const auto board = self->controller->local_board_detail(txn, board_id, m.logged_in_user_id);
+        const auto board = self->controller->local_board_detail(txn, board_id, m.login);
         if (!login.local_user().admin() && login.id != board.local_board().owner()) {
           throw ApiError("Must be admin or board owner to view this page", 403);
         }

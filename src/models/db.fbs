@@ -21,9 +21,13 @@ enum SortType : ubyte {
   TopHour
 }
 
-enum CommentSortType : ubyte { Hot, Top, New, Old }
+enum CommentSortType : ubyte { Hot, New, Old, Top }
 
-enum UserPostSortType : ubyte { Top, New, Old }
+enum UserPostSortType : ubyte { New, Old, Top }
+
+enum BoardSortType : ubyte { New, Old, MostSubscribers, MostPosts, NewPosts }
+
+enum UserSortType : ubyte { New, Old, MostPosts, NewPosts }
 
 enum ModState : ubyte { Visible, Flagged, Locked, Removed }
 
@@ -55,10 +59,12 @@ table User {
 }
 
 table UserStats {
-  comment_count: uint64;
-  comment_karma: int64;
-  thread_count: uint64;
-  thread_karma: int64;
+  thread_count: uint64 = 0;
+  comment_count: uint64 = 0;
+  thread_karma: int64 = 0;
+  comment_karma: int64 = 0;
+  latest_post_time: uint64 = 0;
+  latest_post_id: uint64 = 0;
 }
 
 struct Hash {
@@ -74,12 +80,15 @@ table LocalUser {
   password_hash: Hash;
   password_salt: Salt;
   admin: bool = false;
+  approved: bool = false;
   accepted_application: bool = false;
   email_verified: bool = false;
   invite: uint64 = null;
   open_links_in_new_tab: bool = false;
   send_notifications_to_email: bool = false;
   show_avatars: bool = true;
+  show_images_threads: bool = true;
+  show_images_comments: bool = true;
   show_bot_accounts: bool = true;
   show_new_post_notifs: bool = true;
   hide_cw_posts: bool = false;
@@ -88,10 +97,11 @@ table LocalUser {
   show_read_posts: bool = true;
   show_karma: bool = true;
   javascript_enabled: bool = true;
+  infinite_scroll_enabled: bool = true;
   interface_language: string;
   theme: string;
-  default_sort_type: ubyte = 0;
-  default_comment_sort_type: ubyte = 0;
+  default_sort_type: SortType = Active;
+  default_comment_sort_type: CommentSortType = Hot;
 }
 
 table Application {
@@ -126,6 +136,8 @@ table Board {
 table BoardStats {
   thread_count: uint64 = 0;
   comment_count: uint64 = 0;
+  latest_post_time: uint64 = 0;
+  latest_post_id: uint64 = 0;
   subscriber_count: uint64 = 0;
   users_active_half_year: uint32 = 0;
   users_active_month: uint32 = 0;

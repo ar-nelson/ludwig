@@ -8,9 +8,10 @@
 #include <unistd.h>
 #include <duthomhas/csprng.hpp>
 #include <flatbuffers/idl.h>
+#include "util/lambda_macros.h++"
 
 using std::function, std::min, std::nullopt, std::regex, std::regex_match,
-    std::runtime_error, std::optional, std::shared_ptr, std::stoull,
+    std::runtime_error, std::optional, std::pair, std::shared_ptr, std::stoull,
     std::string, std::string_view, flatbuffers::FlatBufferBuilder,
     flatbuffers::GetRoot;
 
@@ -33,42 +34,54 @@ namespace Ludwig {
     UserStats_User,
     LocalUser_User,
     Application_User,
-    Owner_UserInvite,
-    Owner_UserBoard,
-    Owner_UserThread,
-    Owner_UserComment,
-    Vote_UserPost,
-    ThreadsTop_UserKarmaThread,
-    CommentsTop_UserKarmaComment,
-    Save_UserPost,
-    Hide_UserPost,
-    Hide_UserUser,
-    Hide_UserBoard,
-    Subscription_UserBoard,
-    Owner_UserMedia,
+    InviteByOwner_User,
+    BoardByOwner_User,
+    ThreadByOwner_User,
+    CommentByOwner_User,
+    ThreadsTop_UserKarma,
+    ThreadsNew_UserTime,
+    CommentsTop_UserKarma,
+    CommentsNew_UserTime,
+    UpvotePost_User,
+    DownvotePost_User,
+    SavePost_User,
+    HidePost_User,
+    HideUser_User,
+    HideBoard_User,
+    SubscribeBoard_User,
+    MediaByOwner_User,
+    UsersNew_Time,
+    UsersNewPosts_Time,
+    UsersMostPosts_Posts,
 
     Board_Board,
     Board_Name,
     BoardStats_Board,
     LocalBoard_Board,
-    ThreadsTop_BoardKarmaThread,
-    ThreadsNew_BoardTimeThread,
-    ThreadsMostComments_BoardCommentsThread,
-    CommentsTop_BoardKarmaComment,
-    CommentsNew_BoardTimeComment,
-    CommentsMostComments_BoardCommentsComment,
-    Subscription_BoardUser,
+    ThreadsTop_BoardKarma,
+    ThreadsNew_BoardTime,
+    ThreadsMostComments_BoardComments,
+    CommentsTop_BoardKarma,
+    CommentsNew_BoardTime,
+    CommentsMostComments_BoardComments,
+    SubscribeUser_Board,
+    BoardsNew_Time,
+    BoardsNewPosts_Time,
+    BoardsMostPosts_Posts,
+    BoardsMostSubscribers_Subscribers,
 
     Thread_Thread,
     Comment_Comment,
     PostStats_Post,
-    ChildrenNew_PostTimeComment,
-    ChildrenTop_PostKarmaComment,
-    Contains_PostMedia,
+    ChildrenNew_PostTime,
+    ChildrenTop_PostKarma,
+    MediaInPost_Post,
 
     Invite_Invite,
     Media_Media,
-    Contains_MediaPost,
+    PostContainingMedia_Media,
+
+    DBI_MAX
   };
 
   static inline auto db_get(MDB_txn* txn, MDB_dbi dbi, MDB_val& k, MDB_val& v) -> int {
@@ -90,36 +103,42 @@ namespace Ludwig {
     return mdb_get(txn, dbi, &kval, &v);
   }
 
+  static inline auto db_has(MDB_txn* txn, MDB_dbi dbi, Cursor k, uint64_t v) -> bool {
+    MDB_cursor* cur;
+    if (mdb_cursor_open(txn, dbi, &cur)) return false;
+    MDB_val kval = k.val(), vval{ sizeof(uint64_t), &v };
+    const bool exists = !mdb_cursor_get(cur, &kval, &vval, MDB_GET_BOTH);
+    mdb_cursor_close(cur);
+    return exists;
+  }
+
   static inline auto db_put(MDB_txn* txn, MDB_dbi dbi, MDB_val& k, MDB_val& v, unsigned flags = 0) -> void {
     if (auto err = mdb_put(txn, dbi, &k, &v, flags)) throw DBError("Write failed", err);
   }
 
   static inline auto db_put(MDB_txn* txn, MDB_dbi dbi, string_view k, MDB_val& v, unsigned flags = 0) -> void {
-    MDB_val kval { k.length(), const_cast<char*>(k.data()) };
+    MDB_val kval{ k.length(), const_cast<char*>(k.data()) };
     db_put(txn, dbi, kval, v, flags);
   }
 
   static inline auto db_put(MDB_txn* txn, MDB_dbi dbi, string_view k, string_view v, unsigned flags = 0) -> void {
-    MDB_val kval { k.length(), const_cast<char*>(k.data()) };
-    MDB_val vval { v.length(), const_cast<char*>(v.data()) };
+    MDB_val kval{ k.length(), const_cast<char*>(k.data()) };
+    MDB_val vval{ v.length(), const_cast<char*>(v.data()) };
     db_put(txn, dbi, kval, vval, flags);
   }
 
   static inline auto db_put(MDB_txn* txn, MDB_dbi dbi, string_view k, uint64_t v, unsigned flags = 0) -> void {
-    MDB_val kval { k.length(), const_cast<char*>(k.data()) };
-    MDB_val vval { sizeof(uint64_t), &v };
+    MDB_val kval{ k.length(), const_cast<char*>(k.data()) }, vval{ sizeof(uint64_t), &v };
     db_put(txn, dbi, kval, vval, flags);
   }
 
   static inline auto db_put(MDB_txn* txn, MDB_dbi dbi, Cursor k, uint64_t v, unsigned flags = 0) -> void {
-    MDB_val kval = k.val();
-    MDB_val vval { sizeof(uint64_t), &v };
+    MDB_val kval = k.val(), vval{ sizeof(uint64_t), &v };
     db_put(txn, dbi, kval, vval, flags);
   }
 
   static inline auto db_put(MDB_txn* txn, MDB_dbi dbi, uint64_t k, FlatBufferBuilder& fbb, unsigned flags = 0) -> void {
-    MDB_val kval { sizeof(uint64_t), &k };
-    MDB_val vval { fbb.GetSize(), fbb.GetBufferPointer() };
+    MDB_val kval{ sizeof(uint64_t), &k }, vval{ fbb.GetSize(), fbb.GetBufferPointer() };
     db_put(txn, dbi, kval, vval, flags);
   }
 
@@ -142,63 +161,18 @@ namespace Ludwig {
     }
   }
 
-  static auto db_set_has(MDB_txn* txn, MDB_dbi dbi, Cursor k, uint64_t v) -> bool {
-    MDB_val val;
-    if (db_get(txn, dbi, k, val)) return false;
-    assert(val.mv_size % sizeof(uint64_t) == 0);
-    const uint64_t* ptr = reinterpret_cast<uint64_t*>(val.mv_data);
-    if (val.mv_size == sizeof(uint64_t)) return v == *ptr;
-    const std::span sp(ptr, val.mv_size / sizeof(uint64_t));
-    return std::binary_search(sp.begin(), sp.end(), v);
+  static inline auto db_del(MDB_txn* txn, MDB_dbi dbi, string_view k) -> void {
+    MDB_val kval{ k.length(), const_cast<char*>(k.data()) };
+    if (auto err = mdb_del(txn, dbi, &kval, nullptr)) {
+      if (err != MDB_NOTFOUND) throw DBError("Delete failed", err);
+    }
   }
 
-  static inline auto db_set_disambiguate_hash(MDB_txn* txn, MDB_dbi dbi, Cursor k, function<bool (uint64_t)> matches) -> optional<uint64_t> {
-    MDB_val val;
-    if (db_get(txn, dbi, k, val)) return false;
-    assert(val.mv_size % sizeof(uint64_t) == 0);
-    const uint64_t* ptr = reinterpret_cast<uint64_t*>(val.mv_data);
-    if (val.mv_size == sizeof(uint64_t)) return val_as<uint64_t>(val);
-    const std::span sp(ptr, val.mv_size / sizeof(uint64_t));
-    for (uint64_t id : sp) {
-      if (matches(id)) return id;
+  static inline auto db_del(MDB_txn* txn, MDB_dbi dbi, Cursor k, uint64_t v) -> void {
+    MDB_val kval = k.val(), vval{ sizeof(uint64_t), &v };
+    if (auto err = mdb_del(txn, dbi, &kval, &vval)) {
+      if (err != MDB_NOTFOUND) throw DBError("Delete failed", err);
     }
-    return {};
-  }
-
-  static auto db_set_put(MDB_txn* txn, MDB_dbi dbi, Cursor k, uint64_t v) -> void {
-    MDB_val val;
-    if (int err = db_get(txn, dbi, k, val)) {
-      if (err != MDB_NOTFOUND) throw DBError("Read failed", err);
-      db_put(txn, dbi, k, v);
-      return;
-    }
-    assert(val.mv_size % sizeof(uint64_t) == 0);
-    const uint64_t* ptr = reinterpret_cast<uint64_t*>(val.mv_data);
-    std::vector vec(ptr, ptr + (val.mv_size / sizeof(uint64_t)));
-    const auto insert_at = std::lower_bound(vec.begin(), vec.end(), v);
-    if (insert_at != vec.end() && *insert_at == v) return;
-    vec.insert(insert_at, v);
-    val.mv_size = vec.size() * sizeof(uint64_t);
-    val.mv_data = &vec[0];
-    db_put(txn, dbi, k, val);
-  }
-
-  static auto db_set_del(MDB_txn* txn, MDB_dbi dbi, Cursor k, uint64_t v) -> void {
-    MDB_val val;
-    if (db_get(txn, dbi, k, val)) return;
-    assert(val.mv_size % sizeof(uint64_t) == 0);
-    const uint64_t* ptr = reinterpret_cast<uint64_t*>(val.mv_data);
-    if (val.mv_size == sizeof(uint64_t)) {
-      if (v == *ptr) db_del(txn, dbi, k);
-      return;
-    }
-    std::vector vec(ptr, ptr + (val.mv_size / sizeof(uint64_t)));
-    const auto remove_at = std::lower_bound(vec.begin(), vec.end(), v);
-    if (remove_at == vec.end() || *remove_at != v) return;
-    vec.erase(remove_at);
-    val.mv_size = vec.size() * sizeof(uint64_t);
-    val.mv_data = &vec[0];
-    db_put(txn, dbi, k, val);
   }
 
   struct MDBCursor {
@@ -231,47 +205,57 @@ namespace Ludwig {
     MK_DBI(Session_Session, MDB_INTEGERKEY)
 
     MK_DBI(User_User, MDB_INTEGERKEY)
-    MK_DBI(User_Name, MDB_INTEGERKEY)
-    MK_DBI(User_Email, MDB_INTEGERKEY)
+    MK_DBI(User_Name, 0)
+    MK_DBI(User_Email, 0)
     MK_DBI(UserStats_User, MDB_INTEGERKEY)
     MK_DBI(LocalUser_User, MDB_INTEGERKEY)
     MK_DBI(Application_User, MDB_INTEGERKEY)
-    MK_DBI(Owner_UserInvite, 0)
-    MK_DBI(Owner_UserBoard, 0)
-    MK_DBI(Owner_UserThread, 0)
-    MK_DBI(Owner_UserComment, 0)
-    MK_DBI(ThreadsTop_UserKarmaThread, 0)
-    MK_DBI(CommentsTop_UserKarmaComment, 0)
-    MK_DBI(Save_UserPost, 0)
-    MK_DBI(Hide_UserPost, 0)
-    MK_DBI(Hide_UserUser, 0)
-    MK_DBI(Hide_UserBoard, 0)
-    MK_DBI(Subscription_UserBoard, 0)
-    MK_DBI(Owner_UserMedia, 0)
-    MK_DBI(Vote_UserPost, 0)
+    MK_DBI(InviteByOwner_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(BoardByOwner_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(ThreadByOwner_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(CommentByOwner_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(ThreadsTop_UserKarma, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(ThreadsNew_UserTime, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(CommentsTop_UserKarma, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(CommentsNew_UserTime, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(UpvotePost_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(DownvotePost_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(SavePost_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(HidePost_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(HideUser_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(HideBoard_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(SubscribeBoard_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(MediaByOwner_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(UsersNew_Time, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(UsersNewPosts_Time, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(UsersMostPosts_Posts, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
 
     MK_DBI(Board_Board, MDB_INTEGERKEY)
-    MK_DBI(Board_Name, MDB_INTEGERKEY)
+    MK_DBI(Board_Name, 0)
     MK_DBI(BoardStats_Board, MDB_INTEGERKEY)
     MK_DBI(LocalBoard_Board, MDB_INTEGERKEY)
-    MK_DBI(ThreadsTop_BoardKarmaThread, 0)
-    MK_DBI(ThreadsNew_BoardTimeThread, 0)
-    MK_DBI(ThreadsMostComments_BoardCommentsThread, 0)
-    MK_DBI(CommentsTop_BoardKarmaComment, 0)
-    MK_DBI(CommentsNew_BoardTimeComment, 0)
-    MK_DBI(CommentsMostComments_BoardCommentsComment, 0)
-    MK_DBI(Subscription_BoardUser, 0)
+    MK_DBI(ThreadsTop_BoardKarma, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(ThreadsNew_BoardTime, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(ThreadsMostComments_BoardComments, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(CommentsTop_BoardKarma, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(CommentsNew_BoardTime, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(CommentsMostComments_BoardComments, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(SubscribeUser_Board, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(BoardsNew_Time, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(BoardsNewPosts_Time, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(BoardsMostPosts_Posts, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(BoardsMostSubscribers_Subscribers, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
 
     MK_DBI(Thread_Thread, MDB_INTEGERKEY)
     MK_DBI(Comment_Comment, MDB_INTEGERKEY)
     MK_DBI(PostStats_Post, MDB_INTEGERKEY)
-    MK_DBI(ChildrenNew_PostTimeComment, 0)
-    MK_DBI(ChildrenTop_PostKarmaComment, 0)
-    MK_DBI(Contains_PostMedia, 0)
+    MK_DBI(ChildrenNew_PostTime, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(ChildrenTop_PostKarma, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(MediaInPost_Post, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
 
     MK_DBI(Invite_Invite, MDB_INTEGERKEY)
     MK_DBI(Media_Media, MDB_INTEGERKEY)
-    MK_DBI(Contains_MediaPost, 0)
+    MK_DBI(PostContainingMedia_Media, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
 #   undef MK_DBI
 
     return 0;
@@ -287,14 +271,12 @@ namespace Ludwig {
 
     // Load the secrets, or generate them if missing
     MDB_val val;
-    if ((err = db_get(txn, dbis[Settings], SettingsKey::hash_seed, val))) {
+    if ((err = db_get(txn, dbis[Settings], SettingsKey::jwt_secret, val))) {
       spdlog::info("Opened database {} for the first time, generating secrets", filename);
       duthomhas::csprng rng;
-      rng(seed);
       rng(jwt_secret);
       const auto now = now_s();
       db_put(txn, dbis[Settings], SettingsKey::next_id, 1ULL);
-      db_put(txn, dbis[Settings], SettingsKey::hash_seed, seed);
       val = { JWT_SECRET_SIZE, jwt_secret };
       db_put(txn, dbis[Settings], SettingsKey::jwt_secret, val);
       db_put(txn, dbis[Settings], SettingsKey::domain, "http://localhost:2023");
@@ -309,8 +291,6 @@ namespace Ludwig {
       db_put(txn, dbis[Settings], SettingsKey::federate_cw_content, 1ULL);
     } else {
       spdlog::debug("Loaded existing database {}", filename);
-      seed = val_as<uint64_t>(val);
-      if ((err = db_get(txn, dbis[Settings], SettingsKey::jwt_secret, val))) goto die;
       assert_fmt(val.mv_size == JWT_SECRET_SIZE, "jwt_secret is wrong size: expected {}, got {}", JWT_SECRET_SIZE, val.mv_size);
       memcpy(jwt_secret, val.mv_data, JWT_SECRET_SIZE);
     }
@@ -360,7 +340,6 @@ namespace Ludwig {
     DeferDelete on_error{ env, filename };
     auto txn = open_write_txn();
     string line;
-    seed = 0;
     while (std::getline(dump_stream, line)) {
       if (line.empty()) continue;
       std::smatch match;
@@ -368,9 +347,6 @@ namespace Ludwig {
         const auto id = stoull(match[2]);
         switch (match[1].str()[0]) {
           case 'u':
-            if (seed == 0) {
-              spdlog::warn("hash_seed was not set before creating users, name lookup may be broken");
-            }
             parser.SetRootType("User");
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw runtime_error("Failed to parse User JSON: " + match[3].str());
@@ -386,9 +362,6 @@ namespace Ludwig {
             txn.set_local_user(id, parser.builder_);
             break;
           case 'b':
-            if (seed == 0) {
-              spdlog::warn("hash_seed was not set before creating boards, name lookup may be broken");
-            }
             parser.SetRootType("Board");
             if (!parser.ParseJson(match[3].str().c_str())) {
               throw runtime_error("Failed to parse Board JSON: " + match[3].str());
@@ -421,11 +394,6 @@ namespace Ludwig {
             break;
         }
       } else if (regex_match(line, match, setting_line)) {
-        if (match[1].str() == "hash_seed") {
-          const auto bin_str = Base64::decode(match[2]);
-          assert(bin_str.length() == 8);
-          seed = *reinterpret_cast<const uint64_t*>(bin_str.data());
-        }
         txn.set_setting(match[1].str(), Base64::decode(match[2]));
       } else if (regex_match(line, match, vote_line)) {
         txn.set_vote(stoull(match[1]), stoull(match[2]), static_cast<Vote>(std::stoi(match[3])));
@@ -439,22 +407,38 @@ namespace Ludwig {
     on_error.canceled = true;
   }
 
-  DB::~DB() {
-    mdb_env_close(env);
+  DB::DB(DB&& from) : map_size(from.map_size), env(from.env) {
+    memcpy(dbis, from.dbis, sizeof(dbis));
+    from.env = nullptr;
   }
 
-  static auto int_key(MDB_val& k, MDB_val&) -> uint64_t {
-    return val_as<uint64_t>(k);
+  auto DB::operator=(DB&& from) -> DB& {
+    map_size = from.map_size;
+    env = from.env;
+    from.env = nullptr;
+    memcpy(dbis, from.dbis, sizeof(dbis));
+    return *this;
+  }
+
+  DB::~DB() {
+    if (env != nullptr) mdb_env_close(env);
+  }
+
+  static auto int_key(std::pair<MDB_val, MDB_val>& kv) -> uint64_t {
+    return val_as<uint64_t>(kv.first);
   };
-  static auto second_key(MDB_val& k, MDB_val&) -> uint64_t {
-    return Cursor(k).int_field_1();
+  static auto int_val(std::pair<MDB_val, MDB_val>& kv) -> uint64_t {
+    return val_as<uint64_t>(kv.second);
   };
-  static auto third_key(MDB_val& k, MDB_val&) -> uint64_t {
-    return Cursor(k).int_field_2();
+  static auto second_key(std::pair<MDB_val, MDB_val>& kv) -> uint64_t {
+    return Cursor(kv.first).int_field_1();
+  };
+  static auto third_key(std::pair<MDB_val, MDB_val>& kv) -> uint64_t {
+    return Cursor(kv.first).int_field_2();
   };
 
   static inline auto count(MDB_dbi dbi, MDB_txn* txn, optional<Cursor> from = {}, optional<Cursor> to = {}) -> uint64_t {
-    DBIter<void> iter(dbi, txn, from, to, [](MDB_val&, MDB_val&){});
+    DBIter iter(dbi, txn, Dir::Asc, from, to);
     uint64_t n = 0;
     while (!iter.is_done()) {
       ++n;
@@ -488,17 +472,15 @@ namespace Ludwig {
 
   auto ReadTxnBase::get_user_id_by_name(string_view name) -> optional<uint64_t> {
     const auto name_lc = to_ascii_lowercase(name);
-    return db_set_disambiguate_hash(txn, db.dbis[User_Name], Cursor(name_lc, db.seed), [&](auto id) {
-      const auto user = get_user(id);
-      return user && user->get().name()->string_view() == name_lc;
-    });
+    MDB_val v;
+    if (db_get(txn, db.dbis[User_Name], name_lc, v)) return {};
+    return val_as<uint64_t>(v);
   }
   auto ReadTxnBase::get_user_id_by_email(string_view email) -> optional<uint64_t> {
     const auto email_lc = to_ascii_lowercase(email);
-    return db_set_disambiguate_hash(txn, db.dbis[User_Email], Cursor(email_lc, db.seed), [&](auto id) {
-      const auto user = get_local_user(id);
-      return user && user->get().email() && user->get().email()->string_view() == email_lc;
-    });
+    MDB_val v;
+    if (db_get(txn, db.dbis[User_Email], email_lc, v)) return {};
+    return val_as<uint64_t>(v);
   }
   auto ReadTxnBase::get_user(uint64_t id) -> OptRef<User> {
     MDB_val v;
@@ -518,32 +500,38 @@ namespace Ludwig {
   auto ReadTxnBase::count_local_users() -> uint64_t {
     return count(db.dbis[LocalUser_User], txn);
   }
-  auto ReadTxnBase::list_users(OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIter<uint64_t>(db.dbis[User_User], txn, cursor, {}, int_key);
+  auto ReadTxnBase::list_users_alphabetical(optional<string_view> cursor) -> DBIter {
+    return DBIter(db.dbis[User_Name], txn, Dir::Asc, cursor.transform(λx(MDB_val(x.length(),(void*)x.data()))));
   }
-  auto ReadTxnBase::list_local_users(OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIter<uint64_t>(db.dbis[LocalUser_User], txn, cursor, {}, int_key);
+  auto ReadTxnBase::list_users_new(OptKV cursor) -> DBIter {
+    if (cursor) return DBIter(db.dbis[UsersNew_Time], txn, Dir::Desc, *cursor);
+    return DBIter(db.dbis[UsersNew_Time], txn, Dir::Desc);
   }
-  auto ReadTxnBase::list_subscribers(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIter<uint64_t>(
-      db.dbis[Subscription_BoardUser],
-      txn,
-      cursor.value_or(Cursor(board_id, 0)),
-      Cursor(board_id, ID_MAX),
-      second_key
-    );
+  auto ReadTxnBase::list_users_old(OptKV cursor) -> DBIter {
+    if (cursor) return DBIter(db.dbis[UsersNew_Time], txn, Dir::Asc, *cursor);
+    return DBIter(db.dbis[UsersNew_Time], txn, Dir::Asc);
+  }
+  auto ReadTxnBase::list_users_new_posts(OptKV cursor) -> DBIter {
+    if (cursor) return DBIter(db.dbis[UsersNewPosts_Time], txn, Dir::Desc, *cursor);
+    return DBIter(db.dbis[UsersNewPosts_Time], txn, Dir::Desc);
+  }
+  auto ReadTxnBase::list_users_most_posts(OptKV cursor) -> DBIter {
+    if (cursor) return DBIter(db.dbis[UsersMostPosts_Posts], txn, Dir::Desc, *cursor);
+    return DBIter(db.dbis[UsersMostPosts_Posts], txn, Dir::Desc);
+  }
+  auto ReadTxnBase::list_subscribers(uint64_t board_id, OptCursor cursor) -> DBIter {
+    if (cursor) return DBIter(db.dbis[SubscribeUser_Board], txn, Dir::Asc, pair(Cursor(board_id), cursor->int_field_0()), Cursor(board_id+1));
+    return DBIter(db.dbis[SubscribeUser_Board], txn, Dir::Asc, optional<MDB_val>(), Cursor(board_id+1));
   }
   auto ReadTxnBase::is_user_subscribed_to_board(uint64_t user_id, uint64_t board_id) -> bool {
-    MDB_val v;
-    return !db_get(txn, db.dbis[Subscription_UserBoard], Cursor(user_id, board_id), v);
+    return db_has(txn, db.dbis[SubscribeUser_Board], board_id, user_id);
   }
 
   auto ReadTxnBase::get_board_id_by_name(string_view name) -> optional<uint64_t> {
     const auto name_lc = to_ascii_lowercase(name);
-    return db_set_disambiguate_hash(txn, db.dbis[Board_Name], Cursor(name_lc, db.seed), [&](auto id) {
-      const auto board = get_board(id);
-      return board && board->get().name()->string_view() == name_lc;
-    });
+    MDB_val v;
+    if (db_get(txn, db.dbis[Board_Name], name_lc, v)) return {};
+    return val_as<uint64_t>(v);
   }
   auto ReadTxnBase::get_board(uint64_t id) -> OptRef<Board> {
     MDB_val v;
@@ -563,28 +551,45 @@ namespace Ludwig {
   auto ReadTxnBase::count_local_boards() -> uint64_t {
     return count(db.dbis[LocalBoard_Board], txn);
   }
-  auto ReadTxnBase::list_boards(OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIter<uint64_t>(db.dbis[Board_Board], txn, cursor, {}, int_key);
+  auto ReadTxnBase::list_boards_alphabetical(optional<string_view> cursor) -> DBIter {
+    return DBIter(db.dbis[Board_Name], txn, Dir::Asc, cursor.transform(λx(MDB_val(x.length(),(void*)x.data()))));
   }
-  auto ReadTxnBase::list_local_boards(OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIter<uint64_t>(db.dbis[LocalBoard_Board], txn, cursor, {}, int_key);
+  auto ReadTxnBase::list_boards_new(OptKV cursor) -> DBIter {
+    if (cursor) DBIter(db.dbis[BoardsNew_Time], txn, Dir::Desc, *cursor);
+    return DBIter(db.dbis[BoardsNew_Time], txn, Dir::Desc);
   }
-  auto ReadTxnBase::list_subscribed_boards(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIter<uint64_t>(
-      db.dbis[Subscription_UserBoard],
+  auto ReadTxnBase::list_boards_old(OptKV cursor) -> DBIter {
+    if (cursor) return DBIter(db.dbis[BoardsNew_Time], txn, Dir::Asc, *cursor);
+    return DBIter(db.dbis[BoardsNew_Time], txn, Dir::Asc);
+  }
+  auto ReadTxnBase::list_boards_new_posts(OptKV cursor) -> DBIter {
+    if (cursor) return DBIter(db.dbis[BoardsNewPosts_Time], txn, Dir::Desc, *cursor);
+    return DBIter(db.dbis[BoardsNewPosts_Time], txn, Dir::Desc);
+  }
+  auto ReadTxnBase::list_boards_most_posts(OptKV cursor) -> DBIter {
+    if (cursor) return DBIter(db.dbis[BoardsMostPosts_Posts], txn, Dir::Desc, *cursor);
+    return DBIter(db.dbis[BoardsMostPosts_Posts], txn, Dir::Desc);
+  }
+  auto ReadTxnBase::list_boards_most_subscribers(OptKV cursor) -> DBIter {
+    if (cursor) return DBIter(db.dbis[BoardsMostSubscribers_Subscribers], txn, Dir::Desc, *cursor);
+    return DBIter(db.dbis[BoardsMostSubscribers_Subscribers], txn, Dir::Desc);
+  }
+  auto ReadTxnBase::list_subscribed_boards(uint64_t user_id, OptCursor cursor) -> DBIter {
+    return DBIter(
+      db.dbis[SubscribeBoard_User],
       txn,
-      cursor.value_or(Cursor(user_id, 0)),
-      Cursor(user_id, ID_MAX),
-      second_key
+      Dir::Asc,
+      pair(Cursor(user_id), cursor ? cursor->int_field_0() : 0),
+      Cursor(user_id + 1)
     );
   }
-  auto ReadTxnBase::list_created_boards(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIter<uint64_t>(
-      db.dbis[Owner_UserBoard],
+  auto ReadTxnBase::list_created_boards(uint64_t user_id, OptCursor cursor) -> DBIter {
+    return DBIter(
+      db.dbis[BoardByOwner_User],
       txn,
-      cursor.value_or(Cursor(user_id, 0)),
-      Cursor(user_id, ID_MAX),
-      second_key
+      Dir::Asc,
+      pair(Cursor(user_id), cursor ? cursor->int_field_0() : 0),
+      Cursor(user_id + 1)
     );
   }
 
@@ -598,62 +603,67 @@ namespace Ludwig {
     if (db_get(txn, db.dbis[Thread_Thread], id, v)) return {};
     return *GetRoot<Thread>(v.mv_data);
   }
-  auto ReadTxnBase::list_threads_of_board_new(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIterReverse<uint64_t>(
-      db.dbis[ThreadsNew_BoardTimeThread],
+  auto ReadTxnBase::list_threads_of_board_new(uint64_t board_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ThreadsNew_BoardTime],
       txn,
-      cursor.value_or(Cursor(board_id, ID_MAX, ID_MAX)),
-      Cursor(board_id, 0, 0)
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(board_id, ID_MAX), ID_MAX)),
+      Cursor(board_id, 0)
     );
   }
-  auto ReadTxnBase::list_threads_of_board_old(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIter<uint64_t>(
-      db.dbis[ThreadsNew_BoardTimeThread],
+  auto ReadTxnBase::list_threads_of_board_old(uint64_t board_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ThreadsNew_BoardTime],
       txn,
-      cursor.value_or(Cursor(board_id, 0, 0)),
-      Cursor(board_id, ID_MAX, ID_MAX)
+      Dir::Asc,
+      cursor.value_or(pair(Cursor(board_id, 0), 0)),
+      Cursor(board_id, ID_MAX)
     );
   }
-  auto ReadTxnBase::list_threads_of_board_top(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIterReverse<uint64_t>(
-      db.dbis[ThreadsTop_BoardKarmaThread],
+  auto ReadTxnBase::list_threads_of_board_top(uint64_t board_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ThreadsTop_BoardKarma],
       txn,
-      cursor.value_or(Cursor(board_id, ID_MAX, ID_MAX)),
-      Cursor(board_id, 0, 0)
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(board_id, ID_MAX), ID_MAX)),
+      Cursor(board_id, 0)
     );
   }
-  auto ReadTxnBase::list_threads_of_board_most_comments(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIterReverse<uint64_t>(
-      db.dbis[ThreadsMostComments_BoardCommentsThread],
+  auto ReadTxnBase::list_threads_of_board_most_comments(uint64_t board_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ThreadsMostComments_BoardComments],
       txn,
-      cursor.value_or(Cursor(board_id, ID_MAX, ID_MAX)),
-      Cursor(board_id, 0, 0)
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(board_id, ID_MAX), ID_MAX)),
+      Cursor(board_id, 0)
     );
   }
-  auto ReadTxnBase::list_threads_of_user_new(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIterReverse<uint64_t>(
-      db.dbis[Owner_UserThread],
+  auto ReadTxnBase::list_threads_of_user_new(uint64_t user_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ThreadsNew_UserTime],
       txn,
-      cursor.value_or(Cursor(user_id, ID_MAX)),
-      Cursor(user_id, 0),
-      second_key
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(user_id, ID_MAX), ID_MAX)),
+      Cursor(user_id, 0)
     );
   }
-  auto ReadTxnBase::list_threads_of_user_old(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIter<uint64_t>(
-      db.dbis[Owner_UserThread],
+  auto ReadTxnBase::list_threads_of_user_old(uint64_t user_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ThreadsNew_UserTime],
       txn,
-      cursor.value_or(Cursor(user_id, 0)),
-      Cursor(user_id, ID_MAX),
-      second_key
+      Dir::Asc,
+      cursor.value_or(pair(Cursor(user_id, 0), 0)),
+      Cursor(user_id, ID_MAX)
     );
   }
-  auto ReadTxnBase::list_threads_of_user_top(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIterReverse<uint64_t>(
-      db.dbis[ThreadsTop_UserKarmaThread],
+  auto ReadTxnBase::list_threads_of_user_top(uint64_t user_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ThreadsTop_UserKarma],
       txn,
-      cursor.value_or(Cursor(user_id, ID_MAX, ID_MAX)),
-      Cursor(user_id, 0, 0)
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(user_id, ID_MAX), ID_MAX)),
+      Cursor(user_id, 0)
     );
   }
 
@@ -662,110 +672,114 @@ namespace Ludwig {
     if (db_get(txn, db.dbis[Comment_Comment], id, v)) return {};
     return *GetRoot<Comment>(v.mv_data);
   }
-  auto ReadTxnBase::list_comments_of_post_new(uint64_t post_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIterReverse<uint64_t>(
-      db.dbis[ChildrenNew_PostTimeComment],
+  auto ReadTxnBase::list_comments_of_post_new(uint64_t post_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ChildrenNew_PostTime],
       txn,
-      cursor.value_or(Cursor(post_id, ID_MAX, ID_MAX)),
-      Cursor(post_id, 0, 0)
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(post_id, ID_MAX), ID_MAX)),
+      Cursor(post_id, 0)
     );
   }
-  auto ReadTxnBase::list_comments_of_post_old(uint64_t post_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIter<uint64_t>(
-      db.dbis[ChildrenNew_PostTimeComment],
+  auto ReadTxnBase::list_comments_of_post_old(uint64_t post_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ChildrenNew_PostTime],
       txn,
-      cursor.value_or(Cursor(post_id, 0, 0)),
-      Cursor(post_id, ID_MAX, ID_MAX)
+      Dir::Asc,
+      cursor.value_or(pair(Cursor(post_id, 0), 0)),
+      Cursor(post_id, ID_MAX)
     );
   }
-  auto ReadTxnBase::list_comments_of_post_top(uint64_t post_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIterReverse<uint64_t>(
-      db.dbis[ChildrenTop_PostKarmaComment],
+  auto ReadTxnBase::list_comments_of_post_top(uint64_t post_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ChildrenTop_PostKarma],
       txn,
-      cursor.value_or(Cursor(post_id, ID_MAX, ID_MAX)),
-      Cursor(post_id, 0, 0)
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(post_id, ID_MAX), ID_MAX)),
+      Cursor(post_id, 0)
     );
   }
-  auto ReadTxnBase::list_comments_of_board_new(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIterReverse<uint64_t>(
-      db.dbis[CommentsNew_BoardTimeComment],
+  auto ReadTxnBase::list_comments_of_board_new(uint64_t board_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[CommentsNew_BoardTime],
       txn,
-      cursor.value_or(Cursor(board_id, ID_MAX, ID_MAX)),
-      Cursor(board_id, 0, 0)
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(board_id, ID_MAX), ID_MAX)),
+      Cursor(board_id, 0)
     );
   }
-  auto ReadTxnBase::list_comments_of_board_old(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIter<uint64_t>(
-      db.dbis[CommentsNew_BoardTimeComment],
+  auto ReadTxnBase::list_comments_of_board_old(uint64_t board_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[CommentsNew_BoardTime],
       txn,
-      cursor.value_or(Cursor(board_id, 0, 0)),
-      Cursor(board_id, ID_MAX, ID_MAX)
+      Dir::Asc,
+      cursor.value_or(pair(Cursor(board_id, 0), 0)),
+      Cursor(board_id, ID_MAX)
     );
   }
-  auto ReadTxnBase::list_comments_of_board_top(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIterReverse<uint64_t>(
-      db.dbis[CommentsTop_BoardKarmaComment],
+  auto ReadTxnBase::list_comments_of_board_top(uint64_t board_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[CommentsTop_BoardKarma],
       txn,
-      cursor.value_or(Cursor(board_id, ID_MAX, ID_MAX)),
-      Cursor(board_id, 0, 0)
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(board_id, ID_MAX), ID_MAX)),
+      Cursor(board_id, 0)
     );
   }
-  auto ReadTxnBase::list_comments_of_board_most_comments(uint64_t board_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIterReverse<uint64_t>(
-      db.dbis[CommentsMostComments_BoardCommentsComment],
+  auto ReadTxnBase::list_comments_of_board_most_comments(uint64_t board_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[CommentsMostComments_BoardComments],
       txn,
-      cursor.value_or(Cursor(board_id, ID_MAX, ID_MAX)),
-      Cursor(board_id, 0, 0)
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(board_id, ID_MAX), ID_MAX)),
+      Cursor(board_id, 0)
     );
   }
-  auto ReadTxnBase::list_comments_of_user_new(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIterReverse<uint64_t>(
-      db.dbis[Owner_UserComment],
+  auto ReadTxnBase::list_comments_of_user_new(uint64_t user_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[CommentsNew_UserTime],
       txn,
-      cursor.value_or(Cursor(user_id, ID_MAX)),
-      Cursor(user_id, 0),
-      second_key
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(user_id, ID_MAX), ID_MAX)),
+      Cursor(user_id, 0)
     );
   }
-  auto ReadTxnBase::list_comments_of_user_old(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIter<uint64_t>(
-      db.dbis[Owner_UserComment],
+  auto ReadTxnBase::list_comments_of_user_old(uint64_t user_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[CommentsNew_UserTime],
       txn,
-      cursor.value_or(Cursor(user_id, 0)),
-      Cursor(user_id, ID_MAX),
-      second_key
+      Dir::Asc,
+      cursor.value_or(pair(Cursor(user_id, 0), 0)),
+      Cursor(user_id, ID_MAX)
     );
   }
-  auto ReadTxnBase::list_comments_of_user_top(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIterReverse<uint64_t>(
-      db.dbis[CommentsTop_UserKarmaComment],
+  auto ReadTxnBase::list_comments_of_user_top(uint64_t user_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[CommentsTop_UserKarma],
       txn,
-      cursor.value_or(Cursor(user_id, ID_MAX, ID_MAX)),
-      Cursor(user_id, 0, 0)
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(user_id, ID_MAX), ID_MAX)),
+      Cursor(user_id, 0)
     );
   }
 
   auto ReadTxnBase::get_vote_of_user_for_post(uint64_t user_id, uint64_t post_id) -> Vote {
-    MDB_val v;
-    if (db_get(txn, db.dbis[Vote_UserPost], Cursor(user_id, post_id), v)) return Vote::NoVote;
-    return (Vote)val_as<int8_t>(v);
+    if (db_has(txn, db.dbis[UpvotePost_User], user_id, post_id)) return Vote::Upvote;
+    if (db_has(txn, db.dbis[DownvotePost_User], user_id, post_id)) return Vote::Downvote;
+    return Vote::NoVote;
   }
 
   auto ReadTxnBase::has_user_saved_post(uint64_t user_id, uint64_t post_id) -> bool {
-    MDB_val v;
-    return !db_get(txn, db.dbis[Save_UserPost], Cursor(user_id, post_id), v);
+    return db_has(txn, db.dbis[SavePost_User], user_id, post_id);
   }
   auto ReadTxnBase::has_user_hidden_post(uint64_t user_id, uint64_t post_id) -> bool {
-    MDB_val v;
-    return !db_get(txn, db.dbis[Hide_UserPost], Cursor(user_id, post_id), v);
+    return db_has(txn, db.dbis[HidePost_User], user_id, post_id);
   }
   auto ReadTxnBase::has_user_hidden_user(uint64_t user_id, uint64_t hidden_user_id) -> bool {
-    MDB_val v;
-    return !db_get(txn, db.dbis[Hide_UserUser], Cursor(user_id, hidden_user_id), v);
+    return db_has(txn, db.dbis[HideUser_User], user_id, hidden_user_id);
   }
   auto ReadTxnBase::has_user_hidden_board(uint64_t user_id, uint64_t board_id) -> bool {
-    MDB_val v;
-    return !db_get(txn, db.dbis[Hide_UserBoard], Cursor(user_id, board_id), v);
+    return db_has(txn, db.dbis[HideBoard_User], user_id, board_id);
   }
 
   auto ReadTxnBase::get_application(uint64_t user_id) -> OptRef<Application> {
@@ -773,13 +787,14 @@ namespace Ludwig {
     if (db_get(txn, db.dbis[Application_User], user_id, v)) return {};
     return *GetRoot<Application>(v.mv_data);
   }
-  auto ReadTxnBase::list_applications(OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIter<uint64_t>(
+  auto ReadTxnBase::list_applications(OptCursor cursor) -> DBIter {
+    return DBIter(
       db.dbis[Application_User],
       txn,
+      Dir::Asc,
       cursor.value_or(Cursor(0)),
       Cursor(ID_MAX)
-    );
+      );
   }
 
   auto ReadTxnBase::get_invite(uint64_t invite_id) -> OptRef<Invite> {
@@ -787,10 +802,11 @@ namespace Ludwig {
     if (db_get(txn, db.dbis[Invite_Invite], invite_id, v)) return {};
     return *GetRoot<Invite>(v.mv_data);
   }
-  auto ReadTxnBase::list_invites_from_user(uint64_t user_id, OptCursor cursor) -> DBIter<uint64_t> {
-    return DBIterReverse<uint64_t>(
+  auto ReadTxnBase::list_invites_from_user(uint64_t user_id, OptCursor cursor) -> DBIter {
+    return DBIter(
       db.dbis[Application_User],
       txn,
+      Dir::Desc,
       cursor.value_or(Cursor(user_id, ID_MAX)),
       Cursor(user_id, 0)
     );
@@ -880,7 +896,7 @@ namespace Ludwig {
       spdlog::debug("Updating user {:x} (name {})", id, user.name()->string_view());
       const auto& old_user = old_user_opt->get();
       if (user.name()->string_view() != old_user.name()->string_view()) {
-        db_set_del(txn, db.dbis[User_Name], Cursor(old_user.name()->string_view(), db.seed), id);
+        db_del(txn, db.dbis[User_Name], old_user.name()->string_view());
       }
     } else {
       spdlog::debug("Creating user {:x} (name {})", id, user.name()->string_view());
@@ -889,8 +905,11 @@ namespace Ludwig {
       fbb.Finish(CreateUserStats(fbb));
       db_put(txn, db.dbis[UserStats_User], id, fbb);
     }
-    db_set_put(txn, db.dbis[User_Name], Cursor(user.name()->string_view(), db.seed), id);
+    db_put(txn, db.dbis[User_Name], user.name()->string_view(), id);
     db_put(txn, db.dbis[User_User], id, builder);
+    db_put(txn, db.dbis[UsersNew_Time], user.created_at(), id);
+    db_put(txn, db.dbis[UsersNewPosts_Time], Cursor(0), id);
+    db_put(txn, db.dbis[UsersMostPosts_Posts], Cursor(0), id);
   }
   auto WriteTxn::set_local_user(uint64_t id, FlatBufferBuilder& builder) -> void {
     const auto& user = *GetRoot<LocalUser>(builder.GetBufferPointer());
@@ -899,10 +918,10 @@ namespace Ludwig {
       if (old_user.email() &&
         (!user.email() || user.email()->string_view() != old_user.email()->string_view())
       ) {
-        db_set_del(txn, db.dbis[User_Email], Cursor(old_user.email()->string_view(), db.seed), id);
+        db_del(txn, db.dbis[User_Email], old_user.email()->string_view());
       }
     }
-    db_set_put(txn, db.dbis[User_Email], Cursor(user.email()->string_view(), db.seed), id);
+    db_put(txn, db.dbis[User_Email], user.email()->string_view(), id);
     db_put(txn, db.dbis[LocalUser_User], id, builder);
   }
   auto WriteTxn::delete_user(uint64_t id) -> bool {
@@ -913,48 +932,49 @@ namespace Ludwig {
     }
 
     spdlog::debug("Deleting user {:x}", id);
-    db_set_del(txn, db.dbis[User_Name], Cursor(user_opt->get().name()->string_view(), db.seed), id);
+    db_del(txn, db.dbis[User_Name], user_opt->get().name()->string_view());
     db_del(txn, db.dbis[User_User], id);
     db_del(txn, db.dbis[UserStats_User], id);
     db_del(txn, db.dbis[Application_User], id);
 
     if (const auto local_user_opt = get_local_user(id)) {
-      db_set_del(txn, db.dbis[User_Email], Cursor(local_user_opt->get().email()->string_view(), db.seed), id);
+      db_del(txn, db.dbis[User_Email], local_user_opt->get().email()->string_view());
       db_del(txn, db.dbis[LocalUser_User], id);
     }
 
-    delete_range(txn, db.dbis[Subscription_UserBoard], Cursor(id, 0), Cursor(id, ID_MAX),
-      [&](MDB_val& k, MDB_val&) {
-        Cursor c(k);
-        const auto board = c.int_field_1();
-        db_del(txn, db.dbis[Subscription_BoardUser], Cursor(board, c.int_field_0()));
-        if (const auto board_stats = get_board_stats(board)) {
-          const auto& s = board_stats->get();
-          FlatBufferBuilder fbb;
-          fbb.Finish(CreateBoardStats(fbb,
-            s.thread_count(),
-            s.comment_count(),
-            min(s.subscriber_count(), s.subscriber_count() - 1),
-            s.users_active_half_year(),
-            s.users_active_month(),
-            s.users_active_week(),
-            s.users_active_day()
-          ));
-          db_put(txn, db.dbis[BoardStats_Board], id, fbb);
-        }
+    for (const auto board_id : list_subscribed_boards(id)) {
+      db_del(txn, db.dbis[SubscribeUser_Board], board_id, id);
+      if (const auto board_stats = get_board_stats(board_id)) {
+        const auto& s = board_stats->get();
+        FlatBufferBuilder fbb;
+        fbb.Finish(CreateBoardStats(fbb,
+          s.thread_count(),
+          s.comment_count(),
+          s.latest_post_time(),
+          s.latest_post_id(),
+          min(s.subscriber_count(), s.subscriber_count() - 1),
+          s.users_active_half_year(),
+          s.users_active_month(),
+          s.users_active_week(),
+          s.users_active_day()
+        ));
+        db_put(txn, db.dbis[BoardStats_Board], id, fbb);
       }
-    );
-    delete_range(txn, db.dbis[Owner_UserInvite], Cursor(id, 0), Cursor(id, ID_MAX));
-    delete_range(txn, db.dbis[Owner_UserThread], Cursor(id, 0), Cursor(id, ID_MAX));
-    delete_range(txn, db.dbis[Owner_UserComment], Cursor(id, 0), Cursor(id, ID_MAX));
-    delete_range(txn, db.dbis[Owner_UserBoard], Cursor(id, 0), Cursor(id, ID_MAX));
-    delete_range(txn, db.dbis[Owner_UserMedia], Cursor(id, 0), Cursor(id, ID_MAX));
-    delete_range(txn, db.dbis[Hide_UserPost], Cursor(id, 0), Cursor(id, ID_MAX));
-    delete_range(txn, db.dbis[Hide_UserUser], Cursor(id, 0), Cursor(id, ID_MAX));
-    delete_range(txn, db.dbis[Hide_UserBoard], Cursor(id, 0), Cursor(id, ID_MAX));
-    delete_range(txn, db.dbis[ThreadsTop_UserKarmaThread], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
-    delete_range(txn, db.dbis[CommentsTop_UserKarmaComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
-    delete_range(txn, db.dbis[Vote_UserPost], Cursor(id, 0), Cursor(id, ID_MAX));
+    }
+    db_del(txn, db.dbis[SubscribeBoard_User], id);
+    db_del(txn, db.dbis[InviteByOwner_User], id);
+    db_del(txn, db.dbis[ThreadByOwner_User], id);
+    db_del(txn, db.dbis[CommentByOwner_User], id);
+    db_del(txn, db.dbis[UpvotePost_User], id);
+    db_del(txn, db.dbis[DownvotePost_User], id);
+    db_del(txn, db.dbis[SavePost_User], id);
+    db_del(txn, db.dbis[HidePost_User], id);
+    db_del(txn, db.dbis[HideUser_User], id);
+    db_del(txn, db.dbis[HideBoard_User], id);
+    delete_range(txn, db.dbis[ThreadsTop_UserKarma], Cursor(id, 0), Cursor(id, ID_MAX));
+    delete_range(txn, db.dbis[ThreadsNew_UserTime], Cursor(id, 0), Cursor(id, ID_MAX));
+    delete_range(txn, db.dbis[CommentsTop_UserKarma], Cursor(id, 0), Cursor(id, ID_MAX));
+    delete_range(txn, db.dbis[CommentsNew_UserTime], Cursor(id, 0), Cursor(id, ID_MAX));
 
     // TODO: Delete everything connected to the User
     // TODO: Does this delete owned posts and boards?
@@ -972,7 +992,7 @@ namespace Ludwig {
       spdlog::debug("Updating board {:x} (name {})", id, board.name()->string_view());
       const auto& old_board = old_board_opt->get();
       if (board.name() != old_board.name()) {
-        db_del(txn, db.dbis[Board_Name], Cursor(old_board.name()->string_view(), db.seed));
+        db_del(txn, db.dbis[Board_Name], old_board.name()->string_view());
       }
     } else {
       spdlog::debug("Creating board {:x} (name {})", id, board.name()->string_view());
@@ -982,7 +1002,11 @@ namespace Ludwig {
       db_put(txn, db.dbis[BoardStats_Board], id, fbb);
     }
     db_put(txn, db.dbis[Board_Board], id, builder);
-    db_put(txn, db.dbis[Board_Name], Cursor(board.name()->string_view(), db.seed), id);
+    db_put(txn, db.dbis[Board_Name], board.name()->string_view(), id);
+    db_put(txn, db.dbis[BoardsNew_Time], board.created_at(), id);
+    db_put(txn, db.dbis[BoardsNewPosts_Time], Cursor(0), id);
+    db_put(txn, db.dbis[BoardsMostPosts_Posts], Cursor(0), id);
+    db_put(txn, db.dbis[BoardsMostSubscribers_Subscribers], Cursor(0), id);
   }
   auto WriteTxn::set_local_board(uint64_t id, FlatBufferBuilder& builder) -> void {
     const auto& board = *GetRoot<LocalBoard>(builder.GetBufferPointer());
@@ -992,61 +1016,68 @@ namespace Ludwig {
       const auto& old_board = old_board_opt->get();
       if (board.owner() != old_board.owner()) {
         spdlog::info("Changing owner of local board {:x}: {:x} -> {:x}", id, old_board.owner(), board.owner());
-        db_del(txn, db.dbis[Owner_UserBoard], Cursor(old_board.owner(), id));
+        db_del(txn, db.dbis[BoardByOwner_User], old_board.owner(), id);
       }
     } else {
       spdlog::debug("Updating local board {:x}", id);
     }
-    db_put(txn, db.dbis[Owner_UserBoard], Cursor(board.owner(), id), board.owner());
+    db_put(txn, db.dbis[BoardByOwner_User], board.owner(), id);
     db_put(txn, db.dbis[LocalBoard_Board], id, builder);
   }
   auto WriteTxn::delete_board(uint64_t id) -> bool {
     const auto board_opt = get_board(id);
-    if (!board_opt) {
+    const auto stats_opt = get_board_stats(id);
+    if (!board_opt || !stats_opt) {
       spdlog::warn("Tried to delete nonexistent board {:x}", id);
       return false;
     }
+    const auto& board = board_opt->get();
+    const auto& stats = stats_opt->get();
 
     spdlog::debug("Deleting board {:x}", id);
-    MDB_val id_val{ sizeof(uint64_t), &id };
-    db_del(txn, db.dbis[Board_Board], id_val);
-    db_del(txn, db.dbis[Board_Name], Cursor(board_opt->get().name()->string_view(), db.seed));
-    db_del(txn, db.dbis[BoardStats_Board], id_val);
-    db_del(txn, db.dbis[LocalBoard_Board], id_val);
-    // TODO: Owner_UserBoard
 
-    delete_range(txn, db.dbis[Subscription_BoardUser], Cursor(id, 0), Cursor(id, ID_MAX),
-      [&](MDB_val& k, MDB_val&) {
-        Cursor c(k);
-        db_del(txn, db.dbis[Subscription_UserBoard], Cursor(c.int_field_1(), c.int_field_0()));
-      }
-    );
-    delete_range(txn, db.dbis[ThreadsNew_BoardTimeThread], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
-    delete_range(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
-    delete_range(txn, db.dbis[CommentsNew_BoardTimeComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
-    delete_range(txn, db.dbis[CommentsTop_BoardKarmaComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
+    db_del(txn, db.dbis[BoardsNew_Time], board.created_at(), id);
+    db_del(txn, db.dbis[BoardsNewPosts_Time], stats.latest_post_time(), id);
+    db_del(txn, db.dbis[BoardsMostPosts_Posts], stats.thread_count() + stats.comment_count(), id);
+    db_del(txn, db.dbis[BoardsMostSubscribers_Subscribers], stats.subscriber_count(), id);
+    db_del(txn, db.dbis[Board_Board], id);
+    db_del(txn, db.dbis[BoardStats_Board], id);
+
+    for (const auto user_id : list_subscribers(id)) {
+      db_del(txn, db.dbis[SubscribeBoard_User], user_id, id);
+    }
+    db_del(txn, db.dbis[SubscribeUser_Board], id);
+    delete_range(txn, db.dbis[ThreadsNew_BoardTime], Cursor(id, 0), Cursor(id, ID_MAX));
+    delete_range(txn, db.dbis[ThreadsTop_BoardKarma], Cursor(id, 0), Cursor(id, ID_MAX));
+    delete_range(txn, db.dbis[CommentsNew_BoardTime], Cursor(id, 0), Cursor(id, ID_MAX));
+    delete_range(txn, db.dbis[CommentsTop_BoardKarma], Cursor(id, 0), Cursor(id, ID_MAX));
+
+    if (const auto local_board = get_local_board(id)) {
+      spdlog::debug("Deleting local board {:x}", id);
+      db_del(txn, db.dbis[BoardByOwner_User], local_board->get().owner(), id);
+      db_del(txn, db.dbis[LocalBoard_Board], id);
+    }
 
     return true;
   }
   auto WriteTxn::set_subscription(uint64_t user_id, uint64_t board_id, bool subscribed) -> void {
-    MDB_val v;
-    const bool existing = !db_get(txn, db.dbis[Subscription_BoardUser], Cursor(board_id, user_id), v);
+    const bool existing = db_has(txn, db.dbis[SubscribeUser_Board], board_id, user_id);
     const auto board_stats = get_board_stats(board_id);
-    auto subscriber_count = board_stats ? board_stats->get().subscriber_count() : 0;
+    auto subscriber_count = board_stats ? board_stats->get().subscriber_count() : 0,
+      old_subscriber_count = subscriber_count;
     if (subscribed) {
       assert_fmt(!!get_user(user_id), "set_subscription: user {:x} does not exist", user_id);
       assert_fmt(!!board_stats, "set_subscription: board {:x} does not exist", board_id);
       if (!existing) {
         spdlog::debug("Subscribing user {:x} to board {:x}", user_id, board_id);
-        const auto now = now_s();
-        db_put(txn, db.dbis[Subscription_BoardUser], Cursor(board_id, user_id), now);
-        db_put(txn, db.dbis[Subscription_UserBoard], Cursor(user_id, board_id), now);
+        db_put(txn, db.dbis[SubscribeBoard_User], user_id, board_id);
+        db_put(txn, db.dbis[SubscribeUser_Board], board_id, user_id);
         subscriber_count++;
       }
     } else if (existing) {
       spdlog::debug("Unsubscribing user {:x} from board {:x}", user_id, board_id);
-      db_del(txn, db.dbis[Subscription_BoardUser], Cursor(board_id, user_id));
-      db_del(txn, db.dbis[Subscription_UserBoard], Cursor(user_id, board_id));
+      db_del(txn, db.dbis[SubscribeBoard_User], user_id, board_id);
+      db_del(txn, db.dbis[SubscribeUser_Board], board_id, user_id);
       subscriber_count = min(subscriber_count, subscriber_count - 1);
     }
     if (board_stats) {
@@ -1055,6 +1086,8 @@ namespace Ludwig {
       fbb.Finish(CreateBoardStats(fbb,
         s.thread_count(),
         s.comment_count(),
+        s.latest_post_time(),
+        s.latest_post_id(),
         subscriber_count,
         s.users_active_half_year(),
         s.users_active_month(),
@@ -1062,31 +1095,33 @@ namespace Ludwig {
         s.users_active_day()
       ));
       db_put(txn, db.dbis[BoardStats_Board], board_id, fbb);
+      db_del(txn, db.dbis[BoardsMostSubscribers_Subscribers], old_subscriber_count, board_id);
+      db_put(txn, db.dbis[BoardsMostSubscribers_Subscribers], subscriber_count, board_id);
     }
   }
   auto WriteTxn::set_save(uint64_t user_id, uint64_t post_id, bool saved) -> void {
     assert_fmt(!!get_local_user(user_id), "set_save: local user {:x} does not exist", user_id);
     assert_fmt(!!get_post_stats(post_id), "set_save: post {:x} does not exist", post_id);
-    if (saved) db_put(txn, db.dbis[Save_UserPost], Cursor(user_id, post_id), now_s());
-    else db_del(txn, db.dbis[Save_UserPost], Cursor(user_id, post_id));
+    if (saved) db_put(txn, db.dbis[SavePost_User], user_id, post_id);
+    else db_del(txn, db.dbis[SavePost_User], user_id, post_id);
   }
   auto WriteTxn::set_hide_post(uint64_t user_id, uint64_t post_id, bool hidden) -> void {
     assert_fmt(!!get_local_user(user_id), "set_hide_post: local user {:x} does not exist", user_id);
     assert_fmt(!!get_post_stats(post_id), "set_hide_post: post {:x} does not exist", post_id);
-    if (hidden) db_put(txn, db.dbis[Hide_UserPost], Cursor(user_id, post_id), now_s());
-    else db_del(txn, db.dbis[Hide_UserPost], Cursor(user_id, post_id));
+    if (hidden) db_put(txn, db.dbis[HidePost_User], user_id, post_id);
+    else db_del(txn, db.dbis[HidePost_User], user_id, post_id);
   }
   auto WriteTxn::set_hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden) -> void {
     assert_fmt(!!get_local_user(user_id), "set_hide_user: local user {:x} does not exist", user_id);
     assert_fmt(!!get_user(hidden_user_id), "set_hide_user: user {:x} does not exist", hidden_user_id);
-    if (hidden) db_put(txn, db.dbis[Hide_UserUser], Cursor(user_id, hidden_user_id), now_s());
-    else db_del(txn, db.dbis[Hide_UserUser], Cursor(user_id, hidden_user_id));
+    if (hidden) db_put(txn, db.dbis[HideUser_User], user_id, hidden_user_id);
+    else db_del(txn, db.dbis[HideUser_User], user_id, hidden_user_id);
   }
   auto WriteTxn::set_hide_board(uint64_t user_id, uint64_t board_id, bool hidden) -> void {
     assert_fmt(!!get_local_user(user_id), "set_hide_board: local user {:x} does not exist", user_id);
     assert_fmt(!!get_board_stats(board_id), "set_hide_board: board {:x} does not exist", board_id);
-    if (hidden) db_put(txn, db.dbis[Hide_UserBoard], Cursor(user_id, board_id), now_s());
-    else db_del(txn, db.dbis[Hide_UserBoard], Cursor(user_id, board_id));
+    if (hidden) db_put(txn, db.dbis[HideBoard_User], user_id, board_id);
+    else db_del(txn, db.dbis[HideBoard_User], user_id, board_id);
   }
 
   auto WriteTxn::create_thread(FlatBufferBuilder& builder) -> uint64_t {
@@ -1098,23 +1133,26 @@ namespace Ludwig {
     const auto& thread = *GetRoot<Thread>(builder.GetBufferPointer());
     FlatBufferBuilder fbb;
     int64_t karma = 0;
+    const auto author_id = thread.author(), board_id = thread.board(), created_at = thread.created_at();
     if (const auto old_thread_opt = get_thread(id)) {
       spdlog::debug("Updating top-level post {:x} (board {:x}, author {:x})", id, thread.board(), thread.author());
       const auto stats_opt = get_post_stats(id);
       assert_fmt(!!stats_opt, "set_thread: post_stats not in database for existing thread {:x}", id);
       karma = stats_opt->get().karma();
       const auto& old_thread = old_thread_opt->get();
-      assert_fmt(thread.author() == old_thread.author(), "set_thread: cannot change author of thread {:x}", id);
-      assert_fmt(thread.created_at() == old_thread.created_at(), "set_thread: cannot change created_at of thread {:x}", id);
-      if (thread.board() != old_thread.board()) {
-        db_del(txn, db.dbis[ThreadsNew_BoardTimeThread], Cursor(old_thread.board(), thread.created_at(), id));
-        db_del(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(old_thread.board(), karma_uint(karma), id));
+      assert_fmt(author_id == old_thread.author(), "set_thread: cannot change author of thread {:x}", id);
+      assert_fmt(created_at == old_thread.created_at(), "set_thread: cannot change created_at of thread {:x}", id);
+      if (board_id != old_thread.board()) {
+        db_del(txn, db.dbis[ThreadsNew_BoardTime], Cursor(old_thread.board(), created_at), id);
+        db_del(txn, db.dbis[ThreadsTop_BoardKarma], Cursor(old_thread.board(), karma_uint(karma)), id);
         if (const auto board_stats = get_board_stats(old_thread.board())) {
           const auto& s = board_stats->get();
           fbb.Finish(CreateBoardStats(fbb,
             min(s.thread_count(), s.thread_count() - 1),
             s.comment_count(),
             s.subscriber_count(),
+            s.latest_post_time(),
+            s.latest_post_id(),
             s.users_active_half_year(),
             s.users_active_month(),
             s.users_active_week(),
@@ -1124,39 +1162,56 @@ namespace Ludwig {
         }
       }
     } else {
-      spdlog::debug("Creating top-level post {:x} (board {:x}, author {:x})", id, thread.board(), thread.author());
-      db_put(txn, db.dbis[Owner_UserThread], Cursor(thread.author(), id), thread.author());
-      db_put(txn, db.dbis[ThreadsTop_UserKarmaThread], Cursor(thread.author(), 1, id), id);
-      db_put(txn, db.dbis[ThreadsNew_BoardTimeThread], Cursor(thread.board(), thread.created_at(), id), id);
-      db_put(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(thread.board(), karma_uint(karma), id), id);
-      db_put(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(thread.board(), 0, id), id);
+      spdlog::debug("Creating top-level post {:x} (board {:x}, author {:x})", id, board_id, author_id);
+      db_put(txn, db.dbis[ThreadByOwner_User], author_id, id);
+      db_put(txn, db.dbis[ThreadsNew_UserTime], Cursor(author_id, created_at), id);
+      db_put(txn, db.dbis[ThreadsTop_UserKarma], Cursor(author_id, 1), id);
+      db_put(txn, db.dbis[ThreadsNew_BoardTime], Cursor(board_id, created_at), id);
+      db_put(txn, db.dbis[ThreadsTop_BoardKarma], Cursor(board_id, karma_uint(karma)), id);
+      db_put(txn, db.dbis[ThreadsMostComments_BoardComments], Cursor(board_id, 0), id);
       fbb.ForceDefaults(true);
-      fbb.Finish(CreatePostStats(fbb, thread.created_at()));
+      fbb.Finish(CreatePostStats(fbb, created_at));
       db_put(txn, db.dbis[PostStats_Post], id, fbb);
-      if (const auto user_stats = get_user_stats(thread.author())) {
+      if (const auto user_stats = get_user_stats(author_id)) {
         const auto& s = user_stats->get();
+        const auto last_post_count = s.thread_count() + s.comment_count(),
+          last_new_post = s.latest_post_time();
         fbb.Clear();
         fbb.Finish(CreateUserStats(fbb,
-          s.comment_count(),
-          s.comment_karma(),
           s.thread_count() + 1,
-          s.thread_karma()
+          s.comment_count(),
+          s.thread_karma(),
+          s.comment_karma(),
+          created_at,
+          id
         ));
-        db_put(txn, db.dbis[UserStats_User], thread.author(), fbb);
+        db_put(txn, db.dbis[UserStats_User], author_id, fbb);
+        db_del(txn, db.dbis[UsersNewPosts_Time], last_new_post, author_id);
+        db_del(txn, db.dbis[UsersMostPosts_Posts], last_post_count, author_id);
+        db_put(txn, db.dbis[UsersNewPosts_Time], created_at, author_id);
+        db_put(txn, db.dbis[UsersMostPosts_Posts], last_post_count + 1, author_id);
       }
-      if (const auto board_stats = get_board_stats(thread.board())) {
+      if (const auto board_stats = get_board_stats(board_id)) {
         const auto& s = board_stats->get();
+        const auto last_post_count = s.thread_count() + s.comment_count(),
+          last_new_post = s.latest_post_time();
         fbb.Clear();
         fbb.Finish(CreateBoardStats(fbb,
           s.thread_count() + 1,
           s.comment_count(),
+          created_at,
+          id,
           s.subscriber_count(),
           s.users_active_half_year(),
           s.users_active_month(),
           s.users_active_week(),
           s.users_active_day()
         ));
-        db_put(txn, db.dbis[BoardStats_Board], thread.board(), fbb);
+        db_put(txn, db.dbis[BoardStats_Board], board_id, fbb);
+        db_del(txn, db.dbis[BoardsNewPosts_Time], last_new_post, board_id);
+        db_del(txn, db.dbis[BoardsMostPosts_Posts], last_post_count, board_id);
+        db_put(txn, db.dbis[BoardsNewPosts_Time], created_at, board_id);
+        db_put(txn, db.dbis[BoardsMostPosts_Posts], last_post_count + 1, board_id);
       }
     }
     db_put(txn, db.dbis[Thread_Thread], id, builder);
@@ -1179,32 +1234,40 @@ namespace Ludwig {
     spdlog::debug("Deleting comment {:x} (parent {:x}, author {:x}, board {:x})", id, parent, author, board_id);
     if (const auto user_stats = get_user_stats(author)) {
       const auto& s = user_stats->get();
+      const auto last_post_count = s.thread_count() + s.comment_count();
       FlatBufferBuilder fbb;
       fbb.Finish(CreateUserStats(fbb,
-        min(s.comment_count(), s.comment_count() - 1),
-        karma > 0 ? min(s.comment_karma(), s.comment_karma() - karma) : s.comment_karma() - karma,
         s.thread_count(),
-        s.thread_karma()
+        min(s.comment_count(), s.comment_count() - 1),
+        s.thread_karma(),
+        karma > 0 ? min(s.comment_karma(), s.comment_karma() - karma) : s.comment_karma() - karma,
+        s.latest_post_time(),
+        s.latest_post_id()
       ));
       db_put(txn, db.dbis[UserStats_User], comment.author(), fbb);
+      db_del(txn, db.dbis[UsersMostPosts_Posts], last_post_count, author);
+      db_put(txn, db.dbis[UsersMostPosts_Posts], min(last_post_count, last_post_count - 1), author);
     }
-    db_del(txn, db.dbis[CommentsNew_BoardTimeComment], Cursor(board_id, created_at, id));
-    db_del(txn, db.dbis[CommentsTop_BoardKarmaComment], Cursor(board_id, karma_uint(karma), id));
-    db_del(txn, db.dbis[CommentsMostComments_BoardCommentsComment], Cursor(board_id, descendant_count, id));
+    db_del(txn, db.dbis[CommentByOwner_User], author, id);
+    db_del(txn, db.dbis[CommentsNew_UserTime], Cursor(author, created_at), id);
+    db_del(txn, db.dbis[CommentsTop_UserKarma], Cursor(author, karma_uint(karma)), id);
+    db_del(txn, db.dbis[CommentsNew_BoardTime], Cursor(board_id, created_at), id);
+    db_del(txn, db.dbis[CommentsTop_BoardKarma], Cursor(board_id, karma_uint(karma)), id);
+    db_del(txn, db.dbis[CommentsMostComments_BoardComments], Cursor(board_id, descendant_count), id);
+
+    db_del(txn, db.dbis[ChildrenNew_PostTime], Cursor(parent, created_at), id);
+    db_del(txn, db.dbis[ChildrenTop_PostKarma], Cursor(parent, karma_uint(karma)), id);
 
     std::set<uint64_t> children;
-    delete_range(txn, db.dbis[ChildrenNew_PostTimeComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX),
+    delete_range(txn, db.dbis[ChildrenNew_PostTime], Cursor(id, 0), Cursor(id, ID_MAX),
       [&children](MDB_val&, MDB_val& v) {
         children.insert(val_as<uint64_t>(v));
       }
     );
-    delete_range(txn, db.dbis[ChildrenTop_PostKarmaComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
+    delete_range(txn, db.dbis[ChildrenTop_PostKarma], Cursor(id, 0), Cursor(id, ID_MAX));
 
     db_del(txn, db.dbis[Comment_Comment], id);
     db_del(txn, db.dbis[PostStats_Post], id);
-    db_del(txn, db.dbis[Owner_UserComment], Cursor(author, id));
-    db_del(txn, db.dbis[ChildrenNew_PostTimeComment], Cursor(parent, created_at, id));
-    db_del(txn, db.dbis[ChildrenTop_PostKarmaComment], Cursor(parent, karma_uint(karma), id));
 
     uint64_t n = 0;
     for (uint64_t child : children) {
@@ -1224,36 +1287,46 @@ namespace Ludwig {
     const auto& stats = stats_opt->get();
     const auto karma = stats.karma();
     const auto author = thread.author(),
-      board = thread.board(),
+      board_id = thread.board(),
       created_at = thread.created_at(),
       descendant_count = stats.descendant_count();
 
-    spdlog::debug("Deleting top-level post {:x} (board {:x}, author {:x})", id, board, author);
+    spdlog::debug("Deleting top-level post {:x} (board {:x}, author {:x})", id, board_id, author);
     FlatBufferBuilder fbb;
     if (const auto user_stats = get_user_stats(author)) {
       const auto& s = user_stats->get();
+      const auto last_post_count = s.thread_count() + s.comment_count();
       fbb.Finish(CreateUserStats(fbb,
-        s.comment_count(),
-        s.comment_karma(),
         min(s.thread_count(), s.thread_count() - 1),
-        karma > 0 ? min(s.thread_karma(), s.thread_karma() - karma) : s.thread_karma() - karma
+        s.comment_count(),
+        karma > 0 ? min(s.thread_karma(), s.thread_karma() - karma) : s.thread_karma() - karma,
+        s.comment_karma(),
+        s.latest_post_time(),
+        s.latest_post_id() == id ? 0 : s.latest_post_id()
       ));
       db_put(txn, db.dbis[UserStats_User], author, fbb);
       fbb.Clear();
+      db_del(txn, db.dbis[UsersMostPosts_Posts], last_post_count, author);
+      db_put(txn, db.dbis[UsersMostPosts_Posts], min(last_post_count, last_post_count - 1), author);
     }
-    if (const auto board_stats = get_board_stats(board)) {
+    if (const auto board_stats = get_board_stats(board_id)) {
       const auto& s = board_stats->get();
+      const auto last_post_count = s.thread_count() + s.comment_count();
       fbb.Finish(CreateBoardStats(fbb,
         min(s.thread_count(), s.thread_count() - 1),
         min(s.comment_count(), s.comment_count() - descendant_count),
+        s.latest_post_time(),
+        s.latest_post_id() == id ? 0 : s.latest_post_id(),
         s.subscriber_count(),
         s.users_active_half_year(),
         s.users_active_month(),
         s.users_active_week(),
         s.users_active_day()
       ));
-      db_put(txn, db.dbis[BoardStats_Board], board, fbb);
+      db_put(txn, db.dbis[BoardStats_Board], board_id, fbb);
       fbb.Clear();
+      db_del(txn, db.dbis[BoardsMostPosts_Posts], last_post_count, board_id);
+      db_put(txn, db.dbis[BoardsMostPosts_Posts], min(last_post_count, last_post_count - descendant_count - 1), board_id);
     }
 
     // TODO: Delete dangling votes?
@@ -1261,22 +1334,23 @@ namespace Ludwig {
     // but that almost doubled the size of the database.
 
     std::set<uint64_t> children;
-    delete_range(txn, db.dbis[ChildrenNew_PostTimeComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX),
+    delete_range(txn, db.dbis[ChildrenNew_PostTime], Cursor(id, 0), Cursor(id, ID_MAX),
       [&children](MDB_val&, MDB_val& v) {
         children.insert(val_as<uint64_t>(v));
       }
     );
-    delete_range(txn, db.dbis[ChildrenTop_PostKarmaComment], Cursor(id, 0, 0), Cursor(id, ID_MAX, ID_MAX));
+    delete_range(txn, db.dbis[ChildrenTop_PostKarma], Cursor(id, 0), Cursor(id, ID_MAX));
 
+    db_del(txn, db.dbis[ThreadByOwner_User], author);
+    db_del(txn, db.dbis[ThreadsNew_UserTime], Cursor(author, created_at), id);
+    db_del(txn, db.dbis[ThreadsTop_UserKarma], Cursor(author, karma_uint(karma)), id);
+    db_del(txn, db.dbis[ThreadsNew_BoardTime], Cursor(board_id, created_at), id);
+    db_del(txn, db.dbis[ThreadsTop_BoardKarma], Cursor(board_id, karma_uint(karma)), id);
+    db_del(txn, db.dbis[ThreadsMostComments_BoardComments], Cursor(board_id, descendant_count), id);
     db_del(txn, db.dbis[Thread_Thread], id);
     db_del(txn, db.dbis[PostStats_Post], id);
-    db_del(txn, db.dbis[Owner_UserThread], Cursor(author, id));
-    db_del(txn, db.dbis[ThreadsTop_UserKarmaThread], Cursor(author, karma_uint(karma), id));
-    db_del(txn, db.dbis[ThreadsNew_BoardTimeThread], Cursor(board, created_at, id));
-    db_del(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(board, karma_uint(karma), id));
-    db_del(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(board, descendant_count, id));
 
-    for (uint64_t child : children) delete_child_comment(child, board);
+    for (uint64_t child : children) delete_child_comment(child, board_id);
 
     return true;
   }
@@ -1293,7 +1367,7 @@ namespace Ludwig {
     int64_t karma = 0;
     assert_fmt(!!thread_opt, "set_comment: comment {:x} top-level ancestor thread {:x} does not exist", id, comment.thread());
     const auto& thread = thread_opt->get();
-    const auto author = comment.author(), board = thread.board();
+    const auto author_id = thread.author(), board_id = thread.board(), created_at = thread.created_at();
     if (const auto old_comment_opt = get_comment(id)) {
       spdlog::debug("Updating comment {:x} (parent {:x}, author {:x})", id, comment.parent(), comment.author());
       assert(!!stats_opt);
@@ -1306,12 +1380,13 @@ namespace Ludwig {
       assert(comment.created_at() == old_comment.created_at());
     } else {
       spdlog::debug("Creating comment {:x} (parent {:x}, author {:x})", id, comment.parent(), comment.author());
-      db_put(txn, db.dbis[Owner_UserComment], Cursor(author, id), author);
-      db_put(txn, db.dbis[CommentsTop_UserKarmaComment], Cursor(author, karma_uint(karma), id), id);
-      db_put(txn, db.dbis[CommentsNew_BoardTimeComment], Cursor(board, comment.created_at(), id), id);
-      db_put(txn, db.dbis[CommentsTop_BoardKarmaComment], Cursor(board, karma_uint(karma), id), id);
-      db_put(txn, db.dbis[ChildrenNew_PostTimeComment], Cursor(comment.parent(), comment.created_at(), id), id);
-      db_put(txn, db.dbis[ChildrenTop_PostKarmaComment], Cursor(comment.parent(), karma_uint(karma), id), id);
+      db_put(txn, db.dbis[CommentByOwner_User], author_id, id);
+      db_put(txn, db.dbis[CommentsNew_UserTime], Cursor(author_id, comment.created_at()), id);
+      db_put(txn, db.dbis[CommentsTop_UserKarma], Cursor(author_id, karma_uint(karma)), id);
+      db_put(txn, db.dbis[CommentsNew_BoardTime], Cursor(board_id, comment.created_at()), id);
+      db_put(txn, db.dbis[CommentsTop_BoardKarma], Cursor(board_id, karma_uint(karma)), id);
+      db_put(txn, db.dbis[ChildrenNew_PostTime], Cursor(comment.parent(), comment.created_at()), id);
+      db_put(txn, db.dbis[ChildrenTop_PostKarma], Cursor(comment.parent(), karma_uint(karma)), id);
       FlatBufferBuilder fbb;
       fbb.ForceDefaults(true);
       fbb.Finish(CreatePostStats(fbb, comment.created_at()));
@@ -1341,38 +1416,54 @@ namespace Ludwig {
           ));
           db_put(txn, db.dbis[PostStats_Post], parent, fbb);
           if (parent == comment.thread()) {
-            db_del(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(board, last_descendant_count, parent));
-            db_put(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(board, last_descendant_count + 1, parent), parent);
+            db_del(txn, db.dbis[ThreadsMostComments_BoardComments], Cursor(board_id, last_descendant_count), parent);
+            db_put(txn, db.dbis[ThreadsMostComments_BoardComments], Cursor(board_id, last_descendant_count + 1), parent);
           } else {
-            db_del(txn, db.dbis[CommentsMostComments_BoardCommentsComment], Cursor(board, last_descendant_count, parent));
-            db_put(txn, db.dbis[CommentsMostComments_BoardCommentsComment], Cursor(board, last_descendant_count + 1, parent), parent);
+            db_del(txn, db.dbis[CommentsMostComments_BoardComments], Cursor(board_id, last_descendant_count), parent);
+            db_put(txn, db.dbis[CommentsMostComments_BoardComments], Cursor(board_id, last_descendant_count + 1), parent);
           }
         }
       }
-      if (const auto user_stats = get_user_stats(author)) {
+      if (const auto user_stats = get_user_stats(author_id)) {
         const auto& s = user_stats->get();
+        const auto last_post_count = s.thread_count() + s.comment_count(),
+          last_new_post = s.latest_post_time();
         fbb.Clear();
         fbb.Finish(CreateUserStats(fbb,
-          s.comment_count() + 1,
-          s.comment_karma(),
           s.thread_count(),
-          s.thread_karma()
+          s.comment_count() + 1,
+          s.thread_karma(),
+          s.comment_karma(),
+          created_at,
+          id
         ));
-        db_put(txn, db.dbis[UserStats_User], author, fbb);
+        db_put(txn, db.dbis[UserStats_User], author_id, fbb);
+        db_del(txn, db.dbis[UsersNewPosts_Time], last_new_post, author_id);
+        db_del(txn, db.dbis[UsersMostPosts_Posts], last_post_count, author_id);
+        db_put(txn, db.dbis[UsersNewPosts_Time], created_at, author_id);
+        db_put(txn, db.dbis[UsersMostPosts_Posts], last_post_count + 1, author_id);
       }
-      if (const auto board_stats = get_board_stats(board)) {
+      if (const auto board_stats = get_board_stats(board_id)) {
         const auto& s = board_stats->get();
+        const auto last_post_count = s.thread_count() + s.comment_count(),
+          last_new_post = s.latest_post_time();
         fbb.Clear();
         fbb.Finish(CreateBoardStats(fbb,
           s.thread_count(),
           s.comment_count() + 1,
+          created_at,
+          id,
           s.subscriber_count(),
           s.users_active_half_year(),
           s.users_active_month(),
           s.users_active_week(),
           s.users_active_day()
         ));
-        db_put(txn, db.dbis[BoardStats_Board], board, fbb);
+        db_put(txn, db.dbis[BoardStats_Board], board_id, fbb);
+        db_del(txn, db.dbis[BoardsNewPosts_Time], last_new_post, board_id);
+        db_del(txn, db.dbis[BoardsMostPosts_Posts], last_post_count, board_id);
+        db_put(txn, db.dbis[BoardsNewPosts_Time], created_at, board_id);
+        db_put(txn, db.dbis[BoardsMostPosts_Posts], last_post_count + 1, board_id);
       }
     }
     db_put(txn, db.dbis[Comment_Comment], id, builder);
@@ -1414,20 +1505,23 @@ namespace Ludwig {
         ));
         db_put(txn, db.dbis[PostStats_Post], parent, fbb);
         if (parent == comment.thread()) {
-          db_del(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(board_id, last_descendant_count, parent));
-          db_put(txn, db.dbis[ThreadsMostComments_BoardCommentsThread], Cursor(board_id, next_descendant_count, parent), parent);
+          db_del(txn, db.dbis[ThreadsMostComments_BoardComments], Cursor(board_id, last_descendant_count), parent);
+          db_put(txn, db.dbis[ThreadsMostComments_BoardComments], Cursor(board_id, next_descendant_count), parent);
         } else {
-          db_del(txn, db.dbis[CommentsMostComments_BoardCommentsComment], Cursor(board_id, last_descendant_count, parent));
-          db_put(txn, db.dbis[CommentsMostComments_BoardCommentsComment], Cursor(board_id, next_descendant_count, parent), parent);
+          db_del(txn, db.dbis[CommentsMostComments_BoardComments], Cursor(board_id, last_descendant_count), parent);
+          db_put(txn, db.dbis[CommentsMostComments_BoardComments], Cursor(board_id, next_descendant_count), parent);
         }
       }
     }
     if (const auto board_stats_opt = get_board_stats(board_id)) {
       const auto& s = board_stats_opt->get();
+      const auto last_post_count = s.thread_count() + s.comment_count();
       fbb.Clear();
       fbb.Finish(CreateBoardStats(fbb,
         s.thread_count(),
         (descendant_count + 1) > s.comment_count() ? 0 : s.comment_count() - (descendant_count + 1),
+        s.latest_post_time(),
+        s.latest_post_id() == id ? 0 : s.latest_post_id(),
         s.subscriber_count(),
         s.users_active_half_year(),
         s.users_active_month(),
@@ -1435,6 +1529,8 @@ namespace Ludwig {
         s.users_active_day()
       ));
       db_put(txn, db.dbis[BoardStats_Board], board_id, fbb);
+      db_del(txn, db.dbis[BoardsMostPosts_Posts], last_post_count, board_id);
+      db_put(txn, db.dbis[BoardsMostPosts_Posts], min(last_post_count, last_post_count - descendant_count - 1), board_id);
     }
 
     return delete_child_comment(id, board_id);
@@ -1449,12 +1545,19 @@ namespace Ludwig {
     assert(thread_opt || comment_opt);
     const auto op_id = thread_opt ? thread_opt->get().author() : comment_opt->get().author();
     spdlog::debug("Setting vote from user {:x} on post {:x} to {}", user_id, post_id, (int8_t)vote);
-    if (vote != Vote::NoVote) {
-      int8_t vote_byte = (int8_t)vote;
-      MDB_val v { sizeof(int8_t), &vote_byte };
-      db_put(txn, db.dbis[Vote_UserPost], Cursor(user_id, post_id), v);
-    } else {
-      db_del(txn, db.dbis[Vote_UserPost], Cursor(user_id, post_id));
+    switch (vote) {
+      case Vote::Upvote:
+        db_put(txn, db.dbis[UpvotePost_User], user_id, post_id);
+        db_del(txn, db.dbis[DownvotePost_User], user_id, post_id);
+        break;
+      case Vote::NoVote:
+        db_del(txn, db.dbis[UpvotePost_User], user_id, post_id);
+        db_del(txn, db.dbis[DownvotePost_User], user_id, post_id);
+        break;
+      case Vote::Downvote:
+        db_del(txn, db.dbis[UpvotePost_User], user_id, post_id);
+        db_put(txn, db.dbis[DownvotePost_User], user_id, post_id);
+        break;
     }
     int64_t old_karma, new_karma;
     FlatBufferBuilder fbb;
@@ -1476,29 +1579,31 @@ namespace Ludwig {
       const auto& s = op_stats_opt->get();
       fbb.Clear();
       fbb.Finish(CreateUserStats(fbb,
-        s.comment_count(),
-        s.comment_karma() + (thread_opt ? 0 : diff),
         s.thread_count(),
-        s.thread_karma() + (thread_opt ? diff : 0)
+        s.comment_count(),
+        s.thread_karma() + (thread_opt ? diff : 0),
+        s.comment_karma() + (thread_opt ? 0 : diff),
+        s.latest_post_time(),
+        s.latest_post_id()
       ));
       db_put(txn, db.dbis[UserStats_User], op_id, fbb);
     }
     if (thread_opt) {
       const auto& thread = thread_opt->get();
-      db_del(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(thread.board(), karma_uint(old_karma), post_id));
-      db_del(txn, db.dbis[ThreadsTop_UserKarmaThread], Cursor(thread.author(), karma_uint(old_karma), post_id));
-      db_put(txn, db.dbis[ThreadsTop_BoardKarmaThread], Cursor(thread.board(), karma_uint(new_karma), post_id), post_id);
-      db_put(txn, db.dbis[ThreadsTop_UserKarmaThread], Cursor(thread.author(), karma_uint(new_karma), post_id), post_id);
+      db_del(txn, db.dbis[ThreadsTop_BoardKarma], Cursor(thread.board(), karma_uint(old_karma)), post_id);
+      db_del(txn, db.dbis[ThreadsTop_UserKarma], Cursor(thread.author(), karma_uint(old_karma)), post_id);
+      db_put(txn, db.dbis[ThreadsTop_BoardKarma], Cursor(thread.board(), karma_uint(new_karma)), post_id);
+      db_put(txn, db.dbis[ThreadsTop_UserKarma], Cursor(thread.author(), karma_uint(new_karma)), post_id);
     } else {
       const auto& comment = comment_opt->get();
-      db_del(txn, db.dbis[CommentsTop_UserKarmaComment], Cursor(comment.author(), karma_uint(old_karma), post_id));
-      db_del(txn, db.dbis[ChildrenTop_PostKarmaComment], Cursor(comment.parent(), karma_uint(old_karma), post_id));
-      db_put(txn, db.dbis[CommentsTop_UserKarmaComment], Cursor(comment.author(), karma_uint(new_karma), post_id), post_id);
-      db_put(txn, db.dbis[ChildrenTop_PostKarmaComment], Cursor(comment.parent(), karma_uint(new_karma), post_id), post_id);
+      db_del(txn, db.dbis[CommentsTop_UserKarma], Cursor(comment.author(), karma_uint(old_karma)), post_id);
+      db_del(txn, db.dbis[ChildrenTop_PostKarma], Cursor(comment.parent(), karma_uint(old_karma)), post_id);
+      db_put(txn, db.dbis[CommentsTop_UserKarma], Cursor(comment.author(), karma_uint(new_karma)), post_id);
+      db_put(txn, db.dbis[ChildrenTop_PostKarma], Cursor(comment.parent(), karma_uint(new_karma)), post_id);
       if (const auto comment_thread_opt = get_thread(comment.thread())) {
         const auto& comment_thread = comment_thread_opt->get();
-        db_put(txn, db.dbis[CommentsTop_BoardKarmaComment], Cursor(comment_thread.board(), karma_uint(new_karma), post_id), post_id);
-        db_del(txn, db.dbis[CommentsTop_BoardKarmaComment], Cursor(comment_thread.board(), karma_uint(old_karma), post_id));
+        db_del(txn, db.dbis[CommentsTop_BoardKarma], Cursor(comment_thread.board(), karma_uint(old_karma)), post_id);
+        db_put(txn, db.dbis[CommentsTop_BoardKarma], Cursor(comment_thread.board(), karma_uint(new_karma)), post_id);
       }
     }
   }
@@ -1521,13 +1626,13 @@ namespace Ludwig {
       assert_fmt(invite->from() == old_invite->get().from(), "set_invite: cannot change from field of invite");
     } else {
       assert_fmt(!!get_local_user(invite->from()), "set_invite: local user {:x} does not exist", invite->from());
-      db_put(txn, db.dbis[Owner_UserInvite], Cursor(invite->from(), invite_id), invite->from());
+      db_put(txn, db.dbis[InviteByOwner_User], invite->from(), invite_id);
     }
     db_put(txn, db.dbis[Invite_Invite], invite_id, builder);
   }
   auto WriteTxn::delete_invite(uint64_t invite_id) -> void {
     if (auto invite = get_invite(invite_id)) {
-      db_del(txn, db.dbis[Owner_UserInvite], Cursor(invite->get().from(), invite_id));
+      db_del(txn, db.dbis[InviteByOwner_User], invite->get().from(), invite_id);
     }
     db_del(txn, db.dbis[Invite_Invite], invite_id);
   }

@@ -58,7 +58,7 @@ namespace Ludwig {
     return *entry_cell;
   }
 
-  auto ThumbnailCache::thumbnail(string url, Callback callback) -> void {
+  auto ThumbnailCache::thumbnail(string url, Callback&& callback) -> void {
     auto handle = cache[url];
     visit(overload{
       [&](Promise& p) {

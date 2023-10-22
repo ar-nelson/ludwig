@@ -125,6 +125,7 @@ set (LUDWIG_COMMON_SRC
   src/util/base64.c++
   src/util/thumbnailer.c++
   src/util/jwt.c++
+  src/util/iter.c++
   src/services/db.c++
   src/services/asio_http_client.c++
   src/services/lmdb_search_engine.c++

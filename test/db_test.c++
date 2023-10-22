@@ -1,10 +1,8 @@
-#include "util.h++"
+#include "test_common.h++"
 #include "services/db.h++"
-#include <catch2/catch_test_macros.hpp>
 #include <algorithm>
 #include <random>
 
-using namespace Ludwig;
 using namespace flatbuffers;
 
 TEST_CASE("create DB", "[db]") {
@@ -124,12 +122,12 @@ TEST_CASE("create and list users", "[db]") {
   create_users(db, user_ids);
   {
     auto txn = db.open_read_txn();
-    auto iter = txn.list_users();
+    auto iter = txn.list_users_new();
     REQUIRE(!iter.is_done());
     auto user = txn.get_user(*iter);
     REQUIRE(!!user);
-    REQUIRE(user->get().name()->string_view() == "user1"sv);
-    REQUIRE(user->get().display_name()->string_view() == "User 1"sv);
+    REQUIRE(user->get().name()->string_view() == "user3"sv);
+    REQUIRE(user->get().display_name()->string_view() == "User 3"sv);
     ++iter;
     REQUIRE(!iter.is_done());
     user = txn.get_user(*iter);
@@ -140,8 +138,8 @@ TEST_CASE("create and list users", "[db]") {
     REQUIRE(!iter.is_done());
     user = txn.get_user(*iter);
     REQUIRE(!!user);
-    REQUIRE(user->get().name()->string_view() == "user3"sv);
-    REQUIRE(user->get().display_name()->string_view() == "User 3"sv);
+    REQUIRE(user->get().name()->string_view() == "user1"sv);
+    REQUIRE(user->get().display_name()->string_view() == "User 1"sv);
     ++iter;
     REQUIRE(iter.is_done());
   }
@@ -254,26 +252,15 @@ TEST_CASE("create and list posts", "[db]") {
     REQUIRE(txn.get_board_stats(board_ids[0])->get().thread_count() == 6);
     REQUIRE(txn.get_board_stats(board_ids[1])->get().thread_count() == 3);
     REQUIRE(txn.get_board_stats(board_ids[2])->get().thread_count() == 3);
-    size_t i = 0;
-    for (uint64_t id : txn.list_threads_of_user_new(user_ids[0])) {
-      REQUIRE(i < 6);
-      REQUIRE(id == thread_ids[5 - i]);
-      i++;
-    }
-    REQUIRE(i == 6);
-    i = 0;
-    for (uint64_t id : txn.list_threads_of_user_new(user_ids[1])) {
-      REQUIRE(i < 4);
-      REQUIRE(id == thread_ids[9 - i]);
-      i++;
-    }
-    REQUIRE(i == 4);
-    i = 0;
-    for (uint64_t id : txn.list_threads_of_user_new(user_ids[2])) {
-      REQUIRE(i < 2);
-      REQUIRE(id == thread_ids[11 - i]);
-      i++;
-    }
+    vector<uint64_t> xs;
+    for (auto id : txn.list_threads_of_user_new(user_ids[0])) xs.push_back(id);
+    REQUIRE(xs == vector{thread_ids[5], thread_ids[4], thread_ids[3], thread_ids[2], thread_ids[1], thread_ids[0]});
+    xs.clear();
+    for (auto id : txn.list_threads_of_user_new(user_ids[1])) xs.push_back(id);
+    REQUIRE(xs == vector{thread_ids[9], thread_ids[8], thread_ids[7], thread_ids[6]});
+    xs.clear();
+    for (auto id : txn.list_threads_of_user_new(user_ids[2])) xs.push_back(id);
+    REQUIRE(xs == vector{thread_ids[11], thread_ids[10]});
 
     static const size_t board_threads[] = {
       // board_ids[0]
@@ -284,25 +271,22 @@ TEST_CASE("create and list posts", "[db]") {
       11, 9, 8
     };
 
-    i = 0;
-    for (uint64_t id : txn.list_threads_of_board_new(board_ids[0])) {
-      REQUIRE(i < 6);
-      REQUIRE(id == thread_ids[board_threads[i]]);
-      i++;
-    }
-    REQUIRE(i == 6);
-    for (uint64_t id : txn.list_threads_of_board_new(board_ids[1])) {
-      REQUIRE(i < 9);
-      REQUIRE(id == thread_ids[board_threads[i]]);
-      i++;
-    }
-    REQUIRE(i == 9);
-    for (uint64_t id : txn.list_threads_of_board_new(board_ids[2])) {
-      REQUIRE(i < 12);
-      REQUIRE(id == thread_ids[board_threads[i]]);
-      i++;
-    }
-    REQUIRE(i == 12);
+    xs.clear();
+    for (auto id : txn.list_threads_of_board_new(board_ids[0])) xs.push_back(id);
+    REQUIRE(xs == vector{
+      thread_ids[board_threads[0]], thread_ids[board_threads[1]], thread_ids[board_threads[2]],
+      thread_ids[board_threads[3]], thread_ids[board_threads[4]], thread_ids[board_threads[5]]
+    });
+    xs.clear();
+    for (auto id : txn.list_threads_of_board_new(board_ids[1])) xs.push_back(id);
+    REQUIRE(xs == vector{
+      thread_ids[board_threads[6]], thread_ids[board_threads[7]], thread_ids[board_threads[8]],
+    });
+    xs.clear();
+    for (auto id : txn.list_threads_of_board_new(board_ids[2])) xs.push_back(id);
+    REQUIRE(xs == vector{
+      thread_ids[board_threads[9]], thread_ids[board_threads[10]], thread_ids[board_threads[11]],
+    });
   }
 }
 
@@ -312,6 +296,7 @@ static inline auto random_int(std::mt19937& gen, uint64_t n) -> uint64_t {
 }
 
 TEST_CASE("generate and delete random posts and check stats", "[db]") {
+  spdlog::set_level(spdlog::level::info);
   TempFile file;
   DB db(file.name);
   std::random_device rd;
@@ -544,5 +529,6 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
     }
     REQUIRE(total_threads == RND_SIZE- (RND_SIZE / 20));
   }
+  spdlog::set_level(spdlog::level::debug);
 }
 

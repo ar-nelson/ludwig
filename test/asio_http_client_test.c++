@@ -1,13 +1,5 @@
-#include "util.h++"
+#include "test_common.h++"
 #include "services/asio_http_client.h++"
-#include <catch2/catch_test_macros.hpp>
-#include <static_block.hpp>
-
-static_block {
-  spdlog::set_level(spdlog::level::debug);
-}
-
-using namespace Ludwig;
 
 TEST_CASE("send request to example.com", "[http_client]") {
   auto io = std::make_shared<asio::io_context>();

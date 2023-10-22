@@ -103,6 +103,7 @@ function genLocalUser(
       email: faker.internet.email(),
       password_hash: { bytes: [...password_hash] },
       password_salt: { bytes: [...PASSWORD_SALT] },
+      approved: true,
       show_avatars: faker.datatype.boolean(0.8),
       show_karma: faker.datatype.boolean(0.8),
       hide_cw_posts: faker.datatype.boolean(0.5),
@@ -283,6 +284,7 @@ interface LocalUser {
   password_hash?: { bytes: number[] };
   password_salt?: { bytes: number[] };
   admin?: boolean;
+  approved?: boolean;
   accepted_application?: boolean;
   email_verified?: boolean;
   open_links_in_new_tab?: boolean;

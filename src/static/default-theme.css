@@ -483,6 +483,7 @@ a:hover.thread-title-link, .thread-info a:hover, .comment-info a:hover, .control
 .thread-info {
   grid-area: info;
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   color: var(--color-fg-dim);
   font-size: 0.8rem;
@@ -493,6 +494,7 @@ a:hover.thread-title-link, .thread-info a:hover, .comment-info a:hover, .control
 .comment-info {
   grid-area: info;
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   font-size: 0.8rem;
   font-weight: bold;
@@ -504,7 +506,7 @@ a:hover.thread-title-link, .thread-info a:hover, .comment-info a:hover, .control
   content: '\00a0';
 }
 
-.thread-info img, .thread-info .icon, .comment-info img, .comment-info .icon {
+.thread-info img, .thread-info .icon, .comment-info img, .comment-info .icon, .user-list-entry img, .user-list-entry .icon {
   display: inline-block;
   width: 1rem;
   height: 1rem;
@@ -525,6 +527,24 @@ a:hover.thread-title-link, .thread-info a:hover, .comment-info a:hover, .control
   font-size: 0.8rem;
 }
 
+.tag {
+  display: inline-block;
+  background-color: var(--color-fg-dim);
+  color: var(--color-bg);
+  padding: 0.125rem 0.25rem;
+  font-weight: bold;
+}
+
+.tag.content-warning-tag {
+  background-color: gold;
+  color: black;
+}
+
+.tag.mod-warning-tag {
+  background-color: orange;
+  color: black;
+}
+
 .content-warning {
   margin: 0;
   margin-top: 0.25rem;
@@ -532,26 +552,11 @@ a:hover.thread-title-link, .thread-info a:hover, .comment-info a:hover, .control
   color: var(--color-fg-dim);
 }
 
-.content-warning-label, .mod-warning-label {
-  display: inline-block;
-  color: black;
-  padding: 0.125rem 0.25rem;
-  font-weight: bold;
-}
-
-.content-warning-label {
-  background-color: gold;
-}
-
-.mod-warning-label {
-  background-color: orange;
-}
-
-.board-title .content-warning-label, .board-title .mod-warning-label {
+.board-title .tag {
   font-size: 1rem;
 }
 
-.content-warning .content-warning-label, .content-warning .mod-warning-label {
+.content-warning .tag {
   margin-right: 0.125rem;
 }
 
@@ -718,6 +723,21 @@ body:not(.has-js) .js {
 }
 
 .comment-tree .odd-depth > .comment {
+  border-color: var(--color-accent-dim);
+}
+
+.comment-tree .more-link {
+  text-align: left;
+  margin-left: 1rem;
+  margin-bottom: 0.5rem;
+  border-left: 2px solid var(--color-accent);
+}
+
+.comment-tree li > .more-link {
+  margin-left: 0;
+}
+
+.comment-tree .more-link.odd-depth {
   border-color: var(--color-accent-dim);
 }
 
