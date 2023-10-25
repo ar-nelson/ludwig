@@ -1,9 +1,9 @@
 #include "thumbnail_cache.h++"
 #include <xxhash.h>
 
-using std::bind, std::make_shared, std::nullopt, std::optional, std::pair,
-    std::runtime_error, std::placeholders::_1, std::shared_ptr,
-    std::string, std::string_view, std::visit, std::weak_ptr;
+using std::make_shared, std::nullopt, std::optional, std::pair,
+    std::runtime_error, std::shared_ptr, std::string, std::string_view,
+    std::visit, std::weak_ptr;
 
 namespace Ludwig {
   ThumbnailCache::ThumbnailCache(
@@ -11,14 +11,14 @@ namespace Ludwig {
     size_t cache_size,
     uint16_t thumbnail_width,
     uint16_t thumbnail_height
-  ) : cache(bind(&ThumbnailCache::fetch_thumbnail, this, _1), cache_size), http_client(http_client),
+  ) : cache([](const string&)->Entry{return Promise{};}, cache_size), http_client(http_client),
       w(thumbnail_width), h(thumbnail_height ? thumbnail_height : thumbnail_width) {}
 
-  auto ThumbnailCache::fetch_thumbnail(string url) -> Entry {
-    auto entry_cell = make_shared<Entry>(Promise{});
+  auto ThumbnailCache::fetch_thumbnail(string url, Entry& entry_cell) -> Entry& {
+    auto sync_flag = make_shared<std::monostate>();
     http_client->get(url)
       .header("Accept", "image/*")
-      .dispatch([this, url, maybe_entry_cell = weak_ptr(entry_cell)](auto rsp){
+      .dispatch([this, url, &entry_cell, maybe_sync_flag = weak_ptr(sync_flag)](auto rsp){
         const auto mimetype = rsp->header("content-type");
         Image img = make_shared<optional<pair<string, uint64_t>>>();
         if (rsp->error()) {
@@ -34,38 +34,64 @@ namespace Ludwig {
             spdlog::warn("Failed to generate thumbnail for {}: {}", url, e.what());
           }
         }
-        if (auto entry_cell = maybe_entry_cell.lock()) {
+        if (maybe_sync_flag.lock()) {
           // If this callback was synchronous, the shared_ptr cell will still
           // exist; overwrite it so that the ::thumbnail callback will work.
           spdlog::debug("Got synchronous response for image {}", url);
-          *entry_cell = img;
+          entry_cell.emplace<Image>(img);
         } else {
           Promise callbacks;
           {
             auto handle = cache[url];
+            auto& value = handle.value();
             visit(overload{
               [&](Promise p) { callbacks = std::move(p); },
               [&](Image&) {
                 spdlog::warn("Overwrote cached thumbnail for {}, this is probably a race condition and shouldn't happen!", url);
               }
-            }, handle.value());
-            handle.value() = img;
+            }, value);
+            value.emplace<Image>(img);
           }
           spdlog::debug("Got thumbnail for {}, dispatching {:d} callbacks", url, callbacks.size());
           for (auto& cb : callbacks) (*cb)(img);
         }
       });
-    return *entry_cell;
+    return entry_cell;
   }
 
   auto ThumbnailCache::thumbnail(string url, Callback&& callback) -> void {
     auto handle = cache[url];
+    auto& value = handle.value();
     visit(overload{
       [&](Promise& p) {
-        spdlog::debug("Adding callback to in-flight thumbnail request for {}", url);
-        p.push_back(std::make_shared<Callback>(std::move(callback)));
+        if (p.empty()) {
+          visit(overload{
+            [&callback](Promise& p) {
+              p.push_back(make_shared<Callback>(std::move(callback)));
+            },
+            [&callback](Image i) { callback(i); }
+          }, fetch_thumbnail(url, value));
+        } else {
+          spdlog::debug("Adding callback to in-flight thumbnail request for {}", url);
+          p.push_back(make_shared<Callback>(std::move(callback)));
+        }
       },
-      [&](Image i) { callback(i); }
-    }, handle.value());
+      [&callback](Image i) { callback(i); }
+    }, value);
+  }
+
+  auto ThumbnailCache::set_thumbnail(string url, string_view mimetype, string_view data) -> bool {
+    auto handle = cache[url];
+    try {
+      const auto thumbnail = generate_thumbnail(
+        mimetype.empty() ? nullopt : optional(mimetype), data, w, h
+      );
+      const auto hash = XXH3_64bits(thumbnail.data(), thumbnail.length());
+      handle.value().emplace<Image>(make_shared<optional<pair<string, uint64_t>>>(pair(std::move(thumbnail), hash)));
+      return true;
+    } catch (const runtime_error& e) {
+      spdlog::warn("Failed to generate thumbnail for {}: {}", url, e.what());
+      return false;
+    }
   }
 }

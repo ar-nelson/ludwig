@@ -1,6 +1,7 @@
 #include "util/common.h++"
 #include "services/db.h++"
 #include "services/asio_http_client.h++"
+#include "services/asio_event_bus.h++"
 #include "services/lmdb_search_engine.h++"
 #include "controllers/instance.h++"
 #include "controllers/remote_media.h++"
@@ -91,9 +92,11 @@ int main(int argc, char** argv) {
   //ssl_ctx->set_verify_mode(ssl::verify_peer | ssl::context::verify_fail_if_no_peer_cert);
   ssl_ctx->set_default_verify_paths();
   auto http_client = make_shared<AsioHttpClient>(io, ssl_ctx);
+  auto event_bus = make_shared<AsioEventBus>(io);
   auto db = make_shared<DB>(dbfile, map_size);
-  auto instance_c = make_shared<InstanceController>(db, http_client, search_engine);
-  auto remote_media_c = make_shared<RemoteMediaController>(db, http_client);
+  auto xml_ctx = make_shared<LibXmlContext>();
+  auto instance_c = make_shared<InstanceController>(db, http_client, event_bus, search_engine);
+  auto remote_media_c = make_shared<RemoteMediaController>(db, http_client, xml_ctx, event_bus, search_engine);
 
   std::thread io_thread([io]{io->run();});
 

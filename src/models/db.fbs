@@ -153,6 +153,8 @@ table LocalBoard {
   invite_mod_only: bool = false;
 }
 
+enum MediaCategory : ubyte { Image, Audio, Video }
+
 table Thread {
   author: uint64;
   board: uint64;
@@ -168,12 +170,6 @@ table Thread {
   content_warning: string;
   mod_state: ModState = Visible;
   mod_reason: string;
-  has_card: bool = false;
-  fetch_tries: uint64 = 0;
-  last_fetch_at: uint64 = null;
-  card_title: string;
-  card_description: string;
-  card_image_url: string;
 }
 
 table PostStats {
@@ -202,7 +198,15 @@ table Comment {
   mod_reason: string;
 }
 
-enum MediaCategory : ubyte { Image, Audio, Video }
+table LinkCard {
+  fetch_complete: bool = false;
+  fetch_tries: ubyte = 0;
+  last_fetch_at: uint64 = null;
+  media_category: MediaCategory = null; 
+  title: string;
+  description: string;
+  image_url: string;
+}
 
 table Media {
   category: MediaCategory;

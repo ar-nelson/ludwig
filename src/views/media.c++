@@ -1,7 +1,7 @@
 #include "media.h++"
 #include "util/web.h++"
 
-using std::function, std::move_only_function, std::shared_ptr, std::stoull, std::string;
+using std::function, std::move_only_function, std::shared_ptr, std::string;
 
 namespace Ludwig {
   template <bool SSL> static inline auto webp_route(
@@ -45,10 +45,8 @@ namespace Ludwig {
         webp_route(req, rsp, std::move(wrap), [&](auto cb) { controller->board_banner(req->getParameter(0), std::move(cb)); });
       })
       .get_async("/media/thread/:id/thumbnail.webp", [controller](auto* rsp, auto* req, auto, auto wrap) {
-        uint64_t id;
-        try { id = stoull(string(req->getParameter(0))); }
-        catch (...) { throw ApiError("Invalid thread ID", 404); }
-        webp_route(req, rsp, std::move(wrap), [&](auto cb) { controller->thread_preview(id, std::move(cb)); });
+        const auto id = hex_id_param(req, 0);
+        webp_route(req, rsp, std::move(wrap), [&, id](auto cb) { controller->thread_link_card_image(id, std::move(cb)); });
       });
   }
 

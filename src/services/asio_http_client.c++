@@ -75,23 +75,25 @@ namespace Ludwig {
         die(fmt::format("Error resolving {}: {}", request.url, ec.message()));
         return;
       }
-      spdlog::debug("Resolve OK");
       socket.set_verify_mode(ssl::verify_peer);
       socket.set_verify_callback([self = weak_from_this()](bool preverified, ssl::verify_context& ctx) {
         if (auto ptr = self.lock()) {
           return ptr->on_verify_certificate(preverified, ctx);
-          }
+        }
         return false;
       });
+
+      //spdlog::info("Connecting to {}", endpoint_iterator->endpoint().address().to_string());
+
       asio::async_connect(socket.lowest_layer(), endpoint_iterator, bind(&AsioFetch::on_connect, shared_from_this(), _1, _2));
     }
 
-    auto on_verify_certificate(bool preverified, ssl::verify_context& ctx) -> bool {
+    auto on_verify_certificate(bool /*preverified*/, ssl::verify_context& ctx) -> bool {
       // TODO: Actually verify SSL certificates
       char subject_name[256];
       X509* cert = X509_STORE_CTX_get_current_cert(ctx.native_handle());
       X509_NAME_oneline(X509_get_subject_name(cert), subject_name, 256);
-      spdlog::debug("Verifying SSL cert: {} (preverified: {})", subject_name, preverified);
+      //spdlog::debug("Verifying SSL cert: {} (preverified: {})", subject_name, preverified);
       return true;
     }
 
@@ -100,7 +102,6 @@ namespace Ludwig {
         die(fmt::format("Error connecting to {}: {}", request.url, ec.message()));
         return;
       }
-      spdlog::debug("Connect OK");
 
       // SNI - This is barely documented, but it's necessary to connect to some HTTPS sites without a handshake error!
       // Based on https://stackoverflow.com/a/59225060/548027
@@ -117,21 +118,19 @@ namespace Ludwig {
         die(fmt::format("TCP handshake error connecting to {}: {}", request.url, ec.message()));
         return;
       }
-      spdlog::debug("Handshake OK");
       std::ostream(&req_buf) << request.request;
       asio::async_write(socket, req_buf, bind(&AsioFetch::on_write, shared_from_this(), _1, _2));
     }
 
-    auto on_write(const asio::error_code& ec, size_t bytes) -> void {
+    auto on_write(const asio::error_code& ec, size_t) -> void {
       if (ec) {
         die(fmt::format("Error sending HTTP request to {}: {}", request.url, ec.message()));
         return;
       }
-      spdlog::debug("Write OK; sent {:d} bytes", bytes);
       asio::async_read(socket, rsp_buf, bind(&AsioFetch::on_read, shared_from_this(), _1, _2));
     }
 
-    auto parse(char* data, size_t length) -> int {
+    inline auto parse(char* data, size_t length) -> int {
       const auto [n, ret] = parser.consumePostPadded(data, static_cast<unsigned>(length), this, nullptr,
         [&](void* u, auto* req) -> void* {
           response_as_fake_request = { *req };
@@ -162,7 +161,6 @@ namespace Ludwig {
         die(fmt::format("HTTP response from {} is larger than max of {} bytes", request.url, MAX_RESPONSE_BYTES));
         return;
       }
-      spdlog::debug("Read OK; got {:d} bytes", bytes);
       response.append(string_view((char*)rsp_buf.data().data(), bytes));
       if (ec == asio::error::eof || ec == ssl::error::stream_truncated) {
         const auto first_newline = response.find_first_of('\r');
@@ -175,6 +173,8 @@ namespace Ludwig {
         }
         _status = static_cast<uint16_t>(std::stoi(match.str(2)));
         {
+          // This looks unnecessary. It isn't.
+          // Removing this temporary variable will lead to segfaults.
           auto fake_request = fmt::format("POST / {}\r\nHost: {}",
             match.str(1) == "HTTP/1.0" ? "HTTP/1.1" : match.str(1),
             response.substr(first_newline)
@@ -217,6 +217,7 @@ namespace Ludwig {
   };
 
   auto AsioHttpClient::fetch(HttpClientRequest&& req, HttpResponseCallback callback) -> void {
+    spdlog::debug("CLIENT HTTP {} {}", req.method, req.url);
     auto s = make_shared<AsioFetch>(*io, *ssl, std::move(req), callback);
     s->run();
   }

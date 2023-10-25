@@ -2,8 +2,8 @@
 #include "static/tokenizer/tokenizer_model.h"
 #include <map>
 
-using std::inserter, std::pair, std::runtime_error, std::set, std::string,
-    std::string_view;
+using std::inserter, std::optional, std::pair, std::runtime_error, std::set,
+    std::string, std::string_view;
 
 namespace Ludwig {
   static inline auto int_val(uint64_t* i) -> MDB_val {
@@ -152,19 +152,20 @@ namespace Ludwig {
     index_tokens(std::move(txn), id, Token_Boards, tokens);
   }
 
-  auto LmdbSearchEngine::index(uint64_t id, const Thread& thread) -> void {
+  auto LmdbSearchEngine::index(uint64_t id, const Thread& thread, optional<std::reference_wrapper<const LinkCard>> card_opt) -> void {
     Txn txn(env, 0);
     set<uint64_t> tokens;
     into_set(tokens, processor.EncodeAsIds(thread.title()->string_view()));
     if (thread.content_text_safe()) {
       into_set(tokens, processor.EncodeAsIds(thread.content_text_safe()->string_view()));
     }
-    if (thread.has_card()) {
-      if (thread.card_title()) {
-        into_set(tokens, processor.EncodeAsIds(thread.card_title()->string_view()));
+    if (card_opt) {
+      const auto& card = card_opt->get();
+      if (card.title()) {
+        into_set(tokens, processor.EncodeAsIds(card.title()->string_view()));
       }
-      if (thread.card_description()) {
-        into_set(tokens, processor.EncodeAsIds(thread.card_description()->string_view()));
+      if (card.description()) {
+        into_set(tokens, processor.EncodeAsIds(card.description()->string_view()));
       }
     }
     index_tokens(std::move(txn), id, Token_Threads, tokens);

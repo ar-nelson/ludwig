@@ -98,6 +98,16 @@ namespace Ludwig {
     }
   };
 
+  static inline auto hex_id_param(uWS::HttpRequest* req, uint16_t param) {
+    const auto str = req->getParameter(param);
+    uint64_t id;
+    const auto res = std::from_chars(str.begin(), str.end(), id, 16);
+    if (res.ec != std::errc{} || res.ptr != str.data() + str.length()) {
+      throw ApiError(fmt::format("Invalid hexadecimal ID: ", str), 404);
+    }
+    return id;
+  }
+
   template <bool SSL, typename M = std::monostate, typename E = std::monostate> class Router {
   public:
     using Middleware = std::function<M (uWS::HttpResponse<SSL>*, uWS::HttpRequest*)>;
@@ -269,10 +279,16 @@ namespace Ludwig {
               if (buffer.length() > max_size) throw ApiError("POST body is too large", 413);
               if (!last) return;
               if (!simdjson::validate_utf8(buffer)) throw ApiError("POST body is not valid UTF-8", 415);
-              rsp->cork([&]{ body_handler(QueryString{buffer}); });
-              spdlog::debug("[POST {}] - {} {}", url, rsp->getRemoteAddressAsText(), user_agent);
+              rsp->cork([&]{
+                try {
+                  body_handler(QueryString{buffer});
+                  spdlog::debug("[POST {}] - {} {}", url, rsp->getRemoteAddressAsText(), user_agent);
+                } catch (...) {
+                  impl->handle_error(std::current_exception(), rsp, *error_meta, "POST", url);
+                }
+              });
             } catch (...) {
-              rsp->cork([&] { impl->handle_error(std::current_exception(), rsp, *error_meta, "POST", url); });
+              rsp->cork([&]{ impl->handle_error(std::current_exception(), rsp, *error_meta, "POST", url); });
             }
           });
         } catch (...) {

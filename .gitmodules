@@ -37,3 +37,6 @@
 [submodule "vendor/sentencepiece"]
 	path = vendor/sentencepiece
 	url = https://github.com/google/sentencepiece.git
+[submodule "vendor/libxml2"]
+	path = vendor/libxml2
+	url = https://gitlab.gnome.org/GNOME/libxml2.git

@@ -9,6 +9,7 @@ vendor/libbsd
 vendor/libjpeg-turbo
 vendor/libpng
 vendor/libwebp
+vendor/libxml2
 vendor/lmdb
 vendor/monocypher
 vendor/sentencepiece

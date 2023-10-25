@@ -1,4 +1,7 @@
 add_subdirectory(zlib zlib)
+set(ZLIB_LIBRARY libz.a)
+set(ZLIB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/zlib ${CMAKE_CURRENT_BINARY_DIR}/zlib)
+set(ZLIB_INCLUDE_DIRS ${ZLIB_INCLUDE_DIR})
 
 add_subdirectory(boringssl boringssl)
 include_directories(boringssl/include)
@@ -22,6 +25,7 @@ add_library(uWS STATIC
 )
 target_include_directories(uWS
   SYSTEM PUBLIC
+    ${ZLIB_INCLUDE_DIRS}
     uWS/uSockets/
   SYSTEM INTERFACE
     uWS/
@@ -47,6 +51,32 @@ target_compile_definitions(xxHash INTERFACE XXH_INLINE_ALL)
 add_library(csprng STATIC
   csprng/source/csprng.cpp)
 target_include_directories(csprng PUBLIC csprng/source/)
+
+option(LIBXML2_WITH_C14N "Add the Canonicalization support" OFF)
+option(LIBXML2_WITH_CATALOG "Add the Catalog support" OFF)
+option(LIBXML2_WITH_DEBUG "Add the debugging module" OFF)
+option(LIBXML2_WITH_FTP "Add the FTP support" OFF)
+option(LIBXML2_WITH_HTML "Add the HTML support" ON)
+option(LIBXML2_WITH_HTTP "Add the HTTP support" OFF)
+option(LIBXML2_WITH_ICONV "Add ICONV support" OFF)
+option(LIBXML2_WITH_LZMA "Use liblzma" OFF)
+option(LIBXML2_WITH_MODULES "Add the dynamic modules support" OFF)
+option(LIBXML2_WITH_PATTERN "Add the xmlPattern selection interface" OFF)
+option(LIBXML2_WITH_PROGRAMS "Build programs" OFF)
+option(LIBXML2_WITH_PYTHON "Build Python bindings" OFF)
+option(LIBXML2_WITH_SCHEMAS "Add Relax-NG and Schemas support" OFF)
+option(LIBXML2_WITH_SCHEMATRON "Add Schematron support" OFF)
+option(LIBXML2_WITH_TESTS "Build tests" OFF)
+option(LIBXML2_WITH_THREADS "Add multithread support" ON)
+option(LIBXML2_WITH_VALID "Add the DTD validation support" OFF)
+option(LIBXML2_WITH_WRITER "Add the xmlWriter saving interface" OFF)
+option(LIBXML2_WITH_XINCLUDE "Add the XInclude support" OFF)
+option(LIBXML2_WITH_XPATH "Add the XPATH support" OFF)
+option(LIBXML2_WITH_XPTR "Add the XPointer support" OFF)
+option(LIBXML2_WITH_XPTR_LOCS "Add support for XPointer locations" OFF)
+option(LIBXML2_WITH_ZLIB "Use libz" ON)
+add_subdirectory(libxml2 libxml2)
+add_dependencies(LibXml2 zlibstatic)
 
 option(SIMDJSON_BUILD_STATIC_LIB "Build simdjson_static library along with simdjson" ON)
 add_subdirectory(simdjson simdjson)
@@ -91,6 +121,7 @@ add_subdirectory(libpng libpng)
 add_dependencies(png_static zlibstatic)
 
 set(ZLIB_LIBRARY zlibstatic)
+set(ZLIB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/zlib ${CMAKE_CURRENT_BINARY_DIR}/zlib)
 set(JPEG_LIBRARY turbojpeg-static)
 set(JPEG_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libjpeg-turbo/ ${CMAKE_CURRENT_BINARY_DIR}/libjpeg-turbo/)
 set(PNG_LIBRARY png_static)

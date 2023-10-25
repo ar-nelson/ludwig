@@ -1,7 +1,9 @@
 #pragma once
 #include "util/web.h++"
 #include "models/db.h++"
+#include "models/detail.h++"
 #include "services/db.h++"
+#include "services/event_bus.h++"
 #include "services/http_client.h++"
 #include "services/search_engine.h++"
 #include <map>
@@ -25,87 +27,6 @@ namespace Ludwig {
 
   struct LoginResponse {
     uint64_t user_id, session_id, expiration;
-  };
-
-  struct SiteDetail {
-    std::string name, domain, description;
-    std::optional<std::string> icon_url, banner_url;
-    uint64_t max_post_length;
-    bool javascript_enabled, infinite_scroll_enabled, board_creation_admin_only,
-         registration_enabled, registration_application_required,
-         registration_invite_required, invite_admin_only;
-  };
-
-  struct UserListEntry {
-    uint64_t id;
-    std::reference_wrapper<const User> _user;
-    OptRef<const LocalUser> _local_user;
-    std::reference_wrapper<const UserStats> _stats;
-    bool hidden;
-
-    inline auto user() const -> const User& { return _user; }
-    inline auto maybe_local_user() const -> OptRef<const LocalUser> { return _local_user; }
-    inline auto stats() const -> const UserStats& { return _stats; }
-  };
-
-  struct BoardListEntry {
-    uint64_t id;
-    std::reference_wrapper<const Board> _board;
-    std::reference_wrapper<const BoardStats> _stats;
-    bool hidden, subscribed;
-
-    inline auto board() const -> const Board& { return _board; }
-    inline auto stats() const -> const BoardStats& { return _stats; }
-  };
-
-  struct ThreadListEntry {
-  private:
-    static const flatbuffers::FlatBufferBuilder null_user, null_board;
-  public:
-    uint64_t id;
-    double rank;
-    Vote your_vote;
-    bool saved, hidden, user_hidden, board_hidden;
-    std::reference_wrapper<const Thread> _thread;
-    std::reference_wrapper<const PostStats> _stats;
-    OptRef<User> _author;
-    OptRef<Board> _board;
-
-    inline auto thread() const -> const Thread& { return _thread; }
-    inline auto stats() const -> const PostStats& { return _stats; }
-    inline auto author() const -> const User& {
-      return _author ? _author->get() : *flatbuffers::GetRoot<User>(null_user.GetBufferPointer());
-    }
-    inline auto board() const -> const Board& {
-      return _board ? _board->get() : *flatbuffers::GetRoot<Board>(null_board.GetBufferPointer());
-    }
-  };
-
-  struct CommentListEntry {
-  private:
-    static const flatbuffers::FlatBufferBuilder null_user, null_thread, null_board;
-  public:
-    uint64_t id;
-    double rank;
-    Vote your_vote;
-    bool saved, hidden, thread_hidden, user_hidden, board_hidden;
-    std::reference_wrapper<const Comment> _comment;
-    std::reference_wrapper<const PostStats> _stats;
-    OptRef<User> _author;
-    OptRef<Thread> _thread;
-    OptRef<Board> _board;
-
-    inline auto comment() const -> const Comment& { return _comment; }
-    inline auto stats() const -> const PostStats& { return _stats; }
-    inline auto author() const -> const User& {
-      return _author ? _author->get() : *flatbuffers::GetRoot<User>(null_user.GetBufferPointer());
-    }
-    inline auto thread() const -> const Thread& {
-      return _thread ? _thread->get() : *flatbuffers::GetRoot<Thread>(null_thread.GetBufferPointer());
-    }
-    inline auto board() const -> const Board& {
-      return _board ? _board->get() : *flatbuffers::GetRoot<Board>(null_board.GetBufferPointer());
-    }
   };
 
   struct PageCursor {
@@ -163,35 +84,17 @@ namespace Ludwig {
 
   struct CommentTree {
     std::unordered_map<uint64_t, PageCursor> continued;
-    std::multimap<uint64_t, CommentListEntry> comments;
+    std::multimap<uint64_t, CommentDetail> comments;
 
     inline auto size() const -> size_t {
       return comments.size();
     }
-    inline auto emplace(uint64_t parent, CommentListEntry e) -> void {
+    inline auto emplace(uint64_t parent, CommentDetail e) -> void {
       comments.emplace(parent, e);
     }
     inline auto mark_continued(uint64_t parent, PageCursor from = {}) {
       continued.emplace(parent, from);
     }
-  };
-
-  struct LocalUserDetailResponse : UserListEntry {
-    inline auto local_user() const -> const LocalUser& { return _local_user->get(); }
-  };
-
-  struct LocalBoardDetailResponse : BoardListEntry {
-    std::reference_wrapper<const LocalBoard> _local_board;
-
-    inline auto local_board() const -> const LocalBoard& { return _local_board; }
-  };
-
-  struct ThreadDetailResponse : ThreadListEntry {
-    CommentTree comments;
-  };
-
-  struct CommentDetailResponse : CommentListEntry {
-    CommentTree comments;
   };
 
   struct SiteUpdate {
@@ -225,24 +128,6 @@ namespace Ludwig {
     std::optional<std::optional<std::string_view>> content_warning;
   };
 
-  enum class Event : uint8_t {
-    SiteUpdate,
-    UserUpdate,
-    UserStatsUpdate,
-    LocalUserUpdate,
-    UserDelete,
-    BoardUpdate,
-    BoardStatsUpdate,
-    LocalBoardUpdate,
-    BoardDelete,
-    ThreadUpdate,
-    ThreadDelete,
-    CommentUpdate,
-    CommentDelete,
-    PostStatsUpdate,
-    MaxEvent
-  };
-
   static inline auto invite_code_to_id(std::string_view invite_code) -> uint64_t {
     static const std::regex invite_code_regex(R"(([0-9A-F]{5})-([0-9A-F]{3})-([0-9A-F]{3})-([0-9A-F]{5}))");
     std::match_results<std::string_view::const_iterator> match;
@@ -258,14 +143,74 @@ namespace Ludwig {
     return fmt::format("{}-{}-{}-{}", v.substr(0, 5), v.substr(5, 3), v.substr(8, 3), v.substr(11, 5));
   }
 
+  static inline auto parse_sort_type(std::string_view str, Login login = {}) -> SortType {
+    if (str.empty()) return login ? login->local_user().default_sort_type() : SortType::Active;
+    if (str == "Hot") return SortType::Hot;
+    if (str == "Active") return SortType::Active;
+    if (str == "New") return SortType::New;
+    if (str == "Old") return SortType::Old;
+    if (str == "MostComments") return SortType::MostComments;
+    if (str == "NewComments") return SortType::NewComments;
+    if (str == "Top" || str == "TopAll") return SortType::TopAll;
+    if (str == "TopYear") return SortType::TopYear;
+    if (str == "TopSixMonths") return SortType::TopSixMonths;
+    if (str == "TopThreeMonths") return SortType::TopThreeMonths;
+    if (str == "TopMonth") return SortType::TopMonth;
+    if (str == "TopWeek") return SortType::TopWeek;
+    if (str == "TopDay") return SortType::TopDay;
+    if (str == "TopTwelveHour") return SortType::TopTwelveHour;
+    if (str == "TopSixHour") return SortType::TopSixHour;
+    if (str == "TopHour") return SortType::TopHour;
+    throw ApiError("Bad sort type", 400);
+  }
+
+  static inline auto parse_comment_sort_type(std::string_view str, Login login = {}) -> CommentSortType {
+    if (str.empty()) return login ? login->local_user().default_comment_sort_type() : CommentSortType::Hot;
+    if (str == "Hot") return CommentSortType::Hot;
+    if (str == "New") return CommentSortType::New;
+    if (str == "Old") return CommentSortType::Old;
+    if (str == "Top") return CommentSortType::Top;
+    throw ApiError("Bad comment sort type", 400);
+  }
+
+  static inline auto parse_user_post_sort_type(std::string_view str) -> UserPostSortType {
+    if (str.empty() || str == "New") return UserPostSortType::New;
+    if (str == "Old") return UserPostSortType::Old;
+    if (str == "Top") return UserPostSortType::Top;
+    throw ApiError("Bad post sort type", 400);
+  }
+
+  static inline auto parse_user_sort_type(std::string_view str) -> UserSortType {
+    if (str.empty() || str == "NewPosts") return UserSortType::NewPosts;
+    if (str == "MostPosts") return UserSortType::MostPosts;
+    if (str == "New") return UserSortType::New;
+    if (str == "Old") return UserSortType::Old;
+    throw ApiError("Bad user sort type", 400);
+  }
+
+  static inline auto parse_board_sort_type(std::string_view str) -> BoardSortType {
+    if (str.empty() || str == "MostSubscribers") return BoardSortType::MostSubscribers;
+    if (str == "NewPosts") return BoardSortType::NewPosts;
+    if (str == "MostPosts") return BoardSortType::MostPosts;
+    if (str == "New") return BoardSortType::New;
+    if (str == "Old") return BoardSortType::Old;
+    throw ApiError("Bad board sort type", 400);
+  }
+
+  static auto parse_hex_id(std::string hex_id) -> std::optional<uint64_t> {
+    if (hex_id.empty()) return {};
+    try { return std::stoull(hex_id, nullptr, 16); }
+    catch (...) { throw ApiError("Bad hexadecimal ID", 400); }
+  }
+
   class InstanceController : public std::enable_shared_from_this<InstanceController> {
   private:
     std::shared_ptr<DB> db;
     std::shared_ptr<HttpClient> http_client;
+    std::shared_ptr<EventBus> event_bus;
     std::optional<std::shared_ptr<SearchEngine>> search_engine;
     SiteDetail cached_site_detail;
 
-    auto fetch_link_preview(uint64_t thread_id, std::string_view url) -> void;
     auto create_local_user_internal(
       WriteTxn& txn,
       std::string_view username,
@@ -274,124 +219,21 @@ namespace Ludwig {
       bool is_bot,
       std::optional<uint64_t> invite
     ) -> uint64_t;
-    virtual auto dispatch_event(Event, uint64_t = 0) -> void {}
 
     class SearchFunctor;
   public:
     InstanceController(
       std::shared_ptr<DB> db,
       std::shared_ptr<HttpClient> http_client,
+      std::shared_ptr<EventBus> event_bus = std::make_shared<DummyEventBus>(),
       std::optional<std::shared_ptr<SearchEngine>> search_engine = {}
     );
     virtual ~InstanceController() = default;
 
-    using SearchResultListEntry = std::variant<UserListEntry, BoardListEntry, ThreadListEntry, CommentListEntry>;
-    using SearchCallback = std::move_only_function<void (ReadTxnBase&, std::vector<SearchResultListEntry>)>;
-    using Login = const std::optional<LocalUserDetailResponse>&;
+    using SearchResultDetail = std::variant<UserDetail, BoardDetail, ThreadDetail, CommentDetail>;
+    using SearchCallback = std::move_only_function<void (ReadTxnBase&, std::vector<SearchResultDetail>)>;
 
-    static auto parse_sort_type(std::string_view str, Login login = {}) -> SortType {
-      if (str.empty()) return login ? login->local_user().default_sort_type() : SortType::Active;
-      if (str == "Hot") return SortType::Hot;
-      if (str == "Active") return SortType::Active;
-      if (str == "New") return SortType::New;
-      if (str == "Old") return SortType::Old;
-      if (str == "MostComments") return SortType::MostComments;
-      if (str == "NewComments") return SortType::NewComments;
-      if (str == "Top" || str == "TopAll") return SortType::TopAll;
-      if (str == "TopYear") return SortType::TopYear;
-      if (str == "TopSixMonths") return SortType::TopSixMonths;
-      if (str == "TopThreeMonths") return SortType::TopThreeMonths;
-      if (str == "TopMonth") return SortType::TopMonth;
-      if (str == "TopWeek") return SortType::TopWeek;
-      if (str == "TopDay") return SortType::TopDay;
-      if (str == "TopTwelveHour") return SortType::TopTwelveHour;
-      if (str == "TopSixHour") return SortType::TopSixHour;
-      if (str == "TopHour") return SortType::TopHour;
-      throw ApiError("Bad sort type", 400);
-    }
-
-    static auto parse_comment_sort_type(std::string_view str, Login login = {}) -> CommentSortType {
-      if (str.empty()) return login ? login->local_user().default_comment_sort_type() : CommentSortType::Hot;
-      if (str == "Hot") return CommentSortType::Hot;
-      if (str == "New") return CommentSortType::New;
-      if (str == "Old") return CommentSortType::Old;
-      if (str == "Top") return CommentSortType::Top;
-      throw ApiError("Bad comment sort type", 400);
-    }
-
-    static auto parse_user_post_sort_type(std::string_view str) -> UserPostSortType {
-      if (str.empty() || str == "New") return UserPostSortType::New;
-      if (str == "Old") return UserPostSortType::Old;
-      if (str == "Top") return UserPostSortType::Top;
-      throw ApiError("Bad post sort type", 400);
-    }
-
-    static auto parse_user_sort_type(std::string_view str) -> UserSortType {
-      if (str.empty() || str == "NewPosts") return UserSortType::NewPosts;
-      if (str == "MostPosts") return UserSortType::MostPosts;
-      if (str == "New") return UserSortType::New;
-      if (str == "Old") return UserSortType::Old;
-      throw ApiError("Bad user sort type", 400);
-    }
-
-    static auto parse_board_sort_type(std::string_view str) -> BoardSortType {
-      if (str.empty() || str == "MostSubscribers") return BoardSortType::MostSubscribers;
-      if (str == "NewPosts") return BoardSortType::NewPosts;
-      if (str == "MostPosts") return BoardSortType::MostPosts;
-      if (str == "New") return BoardSortType::New;
-      if (str == "Old") return BoardSortType::Old;
-      throw ApiError("Bad board sort type", 400);
-    }
-
-    static auto parse_hex_id(std::string hex_id) -> std::optional<uint64_t> {
-      if (hex_id.empty()) return {};
-      try { return std::stoull(hex_id, nullptr, 16); }
-      catch (...) { throw ApiError("Bad hexadecimal ID", 400); }
-    }
-
-    static auto can_view(const ThreadListEntry& thread, Login login) -> bool;
-    static auto can_view(const CommentListEntry& comment, Login login) -> bool;
-    static auto can_view(const UserListEntry& user, Login login) -> bool;
-    static auto can_view(const BoardListEntry& board, Login login) -> bool;
-    static auto should_show(const ThreadListEntry& thread, Login login) -> bool;
-    static auto should_show(const CommentListEntry& comment, Login login) -> bool;
-    static auto should_show(const UserListEntry& user, Login login) -> bool;
-    static auto should_show(const BoardListEntry& board, Login login) -> bool;
-    static auto can_create_thread(const BoardListEntry& board, Login login) -> bool;
-    static auto can_reply_to(const ThreadListEntry& thread, Login login) -> bool;
-    static auto can_reply_to(const CommentListEntry& comment, Login login) -> bool;
-    static auto can_edit(const ThreadListEntry& thread, Login login) -> bool;
-    static auto can_edit(const CommentListEntry& comment, Login login) -> bool;
-    static auto can_delete(const ThreadListEntry& thread, Login login) -> bool;
-    static auto can_delete(const CommentListEntry& comment, Login login) -> bool;
-    static auto can_upvote(const ThreadListEntry& thread, Login login) -> bool;
-    static auto can_upvote(const CommentListEntry& comment, Login login) -> bool;
-    static auto can_downvote(const ThreadListEntry& thread, Login login) -> bool;
-    static auto can_downvote(const CommentListEntry& comment, Login login) -> bool;
-    static auto can_change_board_settings(const LocalBoardDetailResponse& board, Login login) -> bool;
     static auto can_change_site_settings(Login login) -> bool;
-
-    static auto get_thread_entry(
-      ReadTxnBase& txn,
-      uint64_t thread_id,
-      InstanceController::Login login,
-      OptRef<User> author = {},
-      bool is_author_hidden = false,
-      OptRef<Board> board = {},
-      bool is_board_hidden = false
-    ) -> ThreadListEntry;
-
-    static auto get_comment_entry(
-      ReadTxnBase& txn,
-      uint64_t comment_id,
-      Login login,
-      OptRef<User> author = {},
-      bool is_author_hidden = false,
-      OptRef<Thread> thread = {},
-      bool is_thread_hidden = false,
-      OptRef<Board> board = {},
-      bool is_board_hidden = false
-    ) -> CommentListEntry;
 
     inline auto open_read_txn() -> ReadTxnImpl {
       return db->open_read_txn();
@@ -426,25 +268,25 @@ namespace Ludwig {
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
       PageCursor from = {}
-    ) -> ThreadDetailResponse;
+    ) -> std::pair<ThreadDetail, CommentTree>;
     auto comment_detail(
       ReadTxnBase& txn,
       uint64_t id,
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
       PageCursor from = {}
-    ) -> CommentDetailResponse;
-    auto user_detail(ReadTxnBase& txn, uint64_t id, Login login) -> UserListEntry;
-    auto local_user_detail(ReadTxnBase& txn, uint64_t id) -> LocalUserDetailResponse;
-    auto board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> BoardListEntry;
-    auto local_board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> LocalBoardDetailResponse;
+    ) -> std::pair<CommentDetail, CommentTree>;
+    auto user_detail(ReadTxnBase& txn, uint64_t id, Login login) -> UserDetail;
+    auto local_user_detail(ReadTxnBase& txn, uint64_t id, Login login) -> LocalUserDetail;
+    auto board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> BoardDetail;
+    auto local_board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> LocalBoardDetail;
     auto list_users(
       ReadTxnBase& txn,
       UserSortType sort,
       bool local_only,
       Login login = {},
       PageCursor from = {}
-    ) -> PageOf<UserListEntry>;
+    ) -> PageOf<UserDetail>;
     auto list_boards(
       ReadTxnBase& txn,
       BoardSortType sort,
@@ -452,35 +294,35 @@ namespace Ludwig {
       bool subscribed_only,
       Login login = {},
       PageCursor from = {}
-    ) -> PageOf<BoardListEntry>;
+    ) -> PageOf<BoardDetail>;
     auto list_board_threads(
       ReadTxnBase& txn,
       uint64_t board_id,
       SortType sort = SortType::Active,
       Login login = {},
       PageCursor from = {}
-    ) -> PageOf<ThreadListEntry>;
+    ) -> PageOf<ThreadDetail>;
     auto list_board_comments(
       ReadTxnBase& txn,
       uint64_t board_id,
       SortType sort = SortType::Active,
       Login login = {},
       PageCursor from = {}
-    ) -> PageOf<CommentListEntry>;
+    ) -> PageOf<CommentDetail>;
     auto list_user_threads(
       ReadTxnBase& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
       PageCursor from = {}
-    ) -> PageOf<ThreadListEntry>;
+    ) -> PageOf<ThreadDetail>;
     auto list_user_comments(
       ReadTxnBase& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
       PageCursor from = {}
-    ) -> PageOf<CommentListEntry>;
+    ) -> PageOf<CommentDetail>;
     auto search(SearchQuery query, Login login, SearchCallback callback) -> void;
 
     auto register_local_user(

@@ -68,11 +68,11 @@ namespace Ludwig {
     return name.substr(0, name.find('@'));
   }
 
-  static inline auto mod_state(const ThreadListEntry& thread) -> ModState {
+  static inline auto mod_state(const ThreadDetail& thread) -> ModState {
     return thread.thread().mod_state();
   }
 
-  static inline auto mod_state(const CommentListEntry& comment) -> ModState {
+  static inline auto mod_state(const CommentDetail& comment) -> ModState {
     return comment.comment().mod_state();
   }
 
@@ -99,10 +99,8 @@ namespace Ludwig {
   }
 
   template <typename T> static constexpr auto post_word() -> string_view;
-  template <> constexpr auto post_word<ThreadDetailResponse>() -> string_view { return "thread"; }
-  template <> constexpr auto post_word<CommentDetailResponse>() -> string_view { return "comment"; }
-  template <> constexpr auto post_word<ThreadListEntry>() -> string_view { return "thread"; }
-  template <> constexpr auto post_word<CommentListEntry>() -> string_view { return "comment"; }
+  template <> constexpr auto post_word<ThreadDetail>() -> string_view { return "thread"; }
+  template <> constexpr auto post_word<CommentDetail>() -> string_view { return "comment"; }
 
   template <bool SSL> struct Webapp : public std::enable_shared_from_this<Webapp<SSL>> {
     shared_ptr<InstanceController> controller;
@@ -154,12 +152,12 @@ namespace Ludwig {
       optional<string> session_cookie;
       bool is_htmx;
       const SiteDetail* site;
-      optional<const LocalUserDetailResponse> login;
+      optional<LocalUserDetail> login;
 
       inline auto populate(shared_ptr<Webapp<SSL>> self, ReadTxnBase& txn) {
         site = self->controller->site_detail();
         if (logged_in_user_id) {
-          login.emplace(self->controller->local_user_detail(txn, *logged_in_user_id));
+          login.emplace(LocalUserDetail::get(txn, *logged_in_user_id));
         }
       }
 
@@ -372,7 +370,7 @@ namespace Ludwig {
     auto write_sidebar(
       Response rsp,
       const Meta& m,
-      const optional<BoardListEntry>& board = {}
+      const optional<BoardDetail>& board = {}
     ) noexcept -> void {
       rsp->write(
         R"(<label id="sidebar-toggle-label" for="sidebar-toggle"><svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#menu"></svg> Menu</label>)"
@@ -412,7 +410,7 @@ namespace Ludwig {
       } else if (board) {
         rsp->write(R"(<section id="actions-section"><h2>Actions</h2>)");
         write_subscribe_button(rsp, board->board().name()->string_view(), board->subscribed);
-        if (InstanceController::can_create_thread(*board, m.login)) {
+        if (board->can_create_thread(m.login)) {
           write_fmt(rsp,
             R"(<a class="big-button" href="/b/{0}/create_thread">Submit a new link</a>)"
             R"(<a class="big-button" href="/b/{0}/create_thread?text=1">Submit a new text post</a>)",
@@ -477,7 +475,7 @@ namespace Ludwig {
         fmt::gmtime((time_t)timestamp), fmt::localtime((time_t)timestamp), relative_time(timestamp));
     }
 
-    auto write_user_link(Response rsp, OptRef<User> user_opt, InstanceController::Login login) noexcept -> void {
+    auto write_user_link(Response rsp, OptRef<User> user_opt, Login login) noexcept -> void {
       if (!user_opt || user_opt->get().deleted_at()) {
         rsp->write("<em>[deleted]</em>");
         return;
@@ -549,7 +547,7 @@ namespace Ludwig {
 
     auto write_board_list(
       Response rsp,
-      const PageOf<BoardListEntry>& list,
+      const PageOf<BoardDetail>& list,
       string_view base_url,
       bool include_ol = true
     ) noexcept -> void {
@@ -565,9 +563,9 @@ namespace Ludwig {
 
     auto write_user_list(
       Response rsp,
-      const PageOf<UserListEntry>& list,
+      const PageOf<UserDetail>& list,
       string_view base_url,
-      InstanceController::Login login = {},
+      Login login = {},
       bool include_ol = true
     ) noexcept -> void {
       if (include_ol) rsp->write(R"(<ol class="user-list" id="top-level-list">)");
@@ -747,10 +745,10 @@ namespace Ludwig {
     template <typename T> auto write_vote_buttons(
       Response rsp,
       const T& entry,
-      InstanceController::Login login
+      Login login
     ) noexcept -> void {
-      const auto can_upvote = InstanceController::can_upvote(entry, login),
-        can_downvote = InstanceController::can_downvote(entry, login);
+      const auto can_upvote = entry.can_upvote(login),
+        can_downvote = entry.can_downvote(login);
       if (can_upvote || can_downvote) {
         write_fmt(rsp,
           R"(<form class="vote-buttons" id="votes-{0:x}" method="post" action="/{1}/{0:x}/vote" hx-post="/{1}/{0:x}/vote" hx-swap="outerHTML">)"
@@ -804,7 +802,7 @@ namespace Ludwig {
     template <typename T> auto write_controls_submenu(
       Response rsp,
       const T& post,
-      InstanceController::Login login,
+      Login login,
       bool show_user,
       bool show_board
     ) noexcept -> void {
@@ -817,13 +815,13 @@ namespace Ludwig {
         R"(<option selected hidden value="{4:d}">Actions)",
         post.id, post_word<T>(), show_user, show_board, SubmenuAction::None
       );
-      if (InstanceController::can_reply_to(post, login)) {
+      if (post.can_reply_to(login)) {
         write_fmt(rsp, R"(<option value="{:d}">💬 Reply)", SubmenuAction::Reply);
       }
-      if (InstanceController::can_edit(post, login)) {
+      if (post.can_edit(login)) {
         write_fmt(rsp, R"(<option value="{:d}">✏️ Edit)", SubmenuAction::Edit);
       }
-      if (InstanceController::can_delete(post, login)) {
+      if (post.can_delete(login)) {
         write_fmt(rsp, R"(<option value="{:d}">🗑️ Delete)", SubmenuAction::Delete);
       }
       write_fmt(rsp,
@@ -933,15 +931,14 @@ namespace Ludwig {
 
     auto write_thread_entry(
       Response rsp,
-      const ThreadListEntry& thread,
-      InstanceController::Login login,
+      const ThreadDetail& thread,
+      Login login,
       bool is_list_item,
       bool show_user,
       bool show_board,
       bool show_images
     ) noexcept -> void {
       // TODO: thread-source (link URL)
-      // TODO: thumbnail
       write_fmt(rsp,
         R"({} class="thread" id="thread-{:x}"><h2 class="thread-title">)",
         is_list_item ? "<li><article" : "<div",
@@ -959,10 +956,18 @@ namespace Ludwig {
       } else {
         write_fmt(rsp, "{}</h2>", Escape(thread.thread().title()));
       }
-      write_fmt(rsp,
-        R"(<div class="thumbnail"><svg class="icon"><use href="/static/feather-sprite.svg#{}"></svg></div>)",
-        thread.thread().content_warning() ? "alert-octagon" : (thread.thread().content_url() ? "link" : "file-text")
-      );
+      // TODO: Selectively show CW'd images, maybe use blurhash
+      if (show_images && !thread.thread().content_warning() && thread.link_card().image_url()) {
+        write_fmt(rsp,
+          R"(<div class="thumbnail"><img src="/media/thread/{:x}/thumbnail.webp" aria-hidden="true"></div>)",
+          thread.id
+        );
+      } else {
+        write_fmt(rsp,
+          R"(<div class="thumbnail"><svg class="icon"><use href="/static/feather-sprite.svg#{}"></svg></div>)",
+          thread.thread().content_warning() ? "alert-octagon" : (thread.thread().content_url() ? "link" : "file-text")
+        );
+      }
       if (thread.thread().content_warning() || thread.thread().mod_state() > ModState::Visible) {
         rsp->write(R"(<div class="thread-warnings">)");
         if (!is_list_item && thread.thread().content_text_safe()) write_short_warnings(rsp, thread.thread());
@@ -996,9 +1001,9 @@ namespace Ludwig {
 
     auto write_thread_list(
       Response rsp,
-      const PageOf<ThreadListEntry>& list,
+      const PageOf<ThreadDetail>& list,
       string_view base_url,
-      InstanceController::Login login,
+      Login login,
       bool include_ol,
       bool show_user,
       bool show_board,
@@ -1014,8 +1019,8 @@ namespace Ludwig {
 
     auto write_comment_entry(
       Response rsp,
-      const CommentListEntry& comment,
-      InstanceController::Login login,
+      const CommentDetail& comment,
+      Login login,
       bool is_list_item,
       bool is_tree_item,
       bool show_user,
@@ -1072,9 +1077,9 @@ namespace Ludwig {
 
     auto write_comment_list(
       Response rsp,
-      const PageOf<CommentListEntry>& list,
+      const PageOf<CommentDetail>& list,
       string_view base_url,
-      InstanceController::Login login,
+      Login login,
       bool include_ol,
       bool show_user,
       bool show_thread,
@@ -1094,25 +1099,25 @@ namespace Ludwig {
 
     auto write_search_result_list(
       Response rsp,
-      std::vector<InstanceController::SearchResultListEntry> list,
-      InstanceController::Login login,
+      std::vector<InstanceController::SearchResultDetail> list,
+      Login login,
       bool include_ol
     ) noexcept -> void {
       if (include_ol) rsp->write(R"(<ol class="search-list" id="top-level-list">)");
       for (const auto& entry : list) {
         std::visit(overload{
-          [&](const UserListEntry& user) {
+          [&](const UserDetail& user) {
             rsp->write("<li>");
             write_user_link(rsp, user.user(), login);
           },
-          [&](const BoardListEntry& board) {
+          [&](const BoardDetail& board) {
             rsp->write("<li>");
             write_board_link(rsp, board.board());
           },
-          [&](const ThreadListEntry& thread) {
+          [&](const ThreadDetail& thread) {
             write_thread_entry(rsp, thread, login, true, true, true, true);
           },
-          [&](const CommentListEntry& comment) {
+          [&](const CommentDetail& comment) {
             write_comment_entry(rsp, comment, login, true, false, true, true, true);
           },
         }, entry);
@@ -1126,7 +1131,7 @@ namespace Ludwig {
       uint64_t root,
       CommentSortType sort,
       const SiteDetail* site,
-      InstanceController::Login login,
+      Login login,
       bool show_images,
       bool is_thread,
       bool include_ol,
@@ -1168,14 +1173,14 @@ namespace Ludwig {
           write_fmt(rsp,
             R"( hx-get="/{0}/{1:x}?sort={2}&from={3}" hx-swap="outerHTML" hx-trigger="revealed")",
             is_thread ? "thread" : "comment", root,
-            EnumNamesCommentSortType()[(size_t)sort], cont->second.to_string()
+            EnumNameCommentSortType(sort), cont->second.to_string()
           );
         }
         write_fmt(rsp,
           R"(><a class="more-link{0}" id="continue-{1:x}" href="/{2}/{1:x}?sort={3}&from={4}")"
           R"( hx-get="/{2}/{1:x}?sort={3}&from={4}" hx-target="#comment-replace-{1:x}" hx-swap="outerHTML">More comments…</a>)",
           is_alt ? " odd-depth" : "", root, is_thread ? "thread" : "comment",
-          EnumNamesCommentSortType()[(size_t)sort], cont->second.to_string()
+          EnumNameCommentSortType(sort), cont->second.to_string()
         );
       }
       if (include_ol) rsp->write("</ol>");
@@ -1219,9 +1224,10 @@ namespace Ludwig {
 
     auto write_thread_view(
       Response rsp,
-      const ThreadDetailResponse& thread,
+      const ThreadDetail& thread,
+      const CommentTree& comments,
       const SiteDetail* site,
-      InstanceController::Login login,
+      Login login,
       CommentSortType sort,
       bool show_images = false
     ) noexcept -> void {
@@ -1238,18 +1244,19 @@ namespace Ludwig {
       }
       write_fmt(rsp, R"(<section class="comments" id="comments"><h2>{:d} comments</h2>)", thread.stats().descendant_count());
       write_sort_options(rsp, fmt::format("/thread/{:x}", thread.id), sort, false, show_images, fmt::format("#comments-{:x}", thread.id));
-      if (InstanceController::can_reply_to(thread, login)) {
+      if (thread.can_reply_to(login)) {
         write_reply_form(rsp, thread);
       }
-      write_comment_tree(rsp, thread.comments, thread.id, sort, site, login, show_images, true, true);
+      write_comment_tree(rsp, comments, thread.id, sort, site, login, show_images, true, true);
       rsp->write("</section></article>");
     }
 
     auto write_comment_view(
       Response rsp,
-      const CommentDetailResponse& comment,
+      const CommentDetail& comment,
+      const CommentTree& comments,
       const SiteDetail* site,
-      InstanceController::Login login,
+      Login login,
       CommentSortType sort,
       bool show_images = false
     ) noexcept -> void {
@@ -1261,10 +1268,10 @@ namespace Ludwig {
       );
       write_fmt(rsp, R"(<section class="comments" id="comments"><h2>{:d} replies</h2>)", comment.stats().descendant_count());
       write_sort_options(rsp, fmt::format("/comment/{:x}", comment.id), sort, false, show_images, fmt::format("#comments-{:x}", comment.id));
-      if (InstanceController::can_reply_to(comment, login)) {
+      if (comment.can_reply_to(login)) {
         write_reply_form(rsp, comment);
       }
-      write_comment_tree(rsp, comment.comments, comment.id, sort, site, login, show_images, false, true);
+      write_comment_tree(rsp, comments, comment.id, sort, site, login, show_images, false, true);
       rsp->write("</section></article>");
     }
 
@@ -1301,7 +1308,7 @@ namespace Ludwig {
 
     inline auto write_create_board_form(
       Response rsp,
-      const LocalUserDetailResponse login,
+      const LocalUserDetail& login,
       optional<string_view> error = {}
     ) noexcept -> void {
       write_fmt(rsp,
@@ -1328,8 +1335,8 @@ namespace Ludwig {
     auto write_create_thread_form(
       Response rsp,
       bool show_url,
-      const BoardListEntry board,
-      const LocalUserDetailResponse login,
+      const BoardDetail board,
+      const LocalUserDetail& login,
       optional<string_view> error = {}
     ) noexcept -> void {
       write_fmt(rsp,
@@ -1353,8 +1360,8 @@ namespace Ludwig {
 
     auto write_edit_thread_form(
       Response rsp,
-      const ThreadListEntry& thread,
-      const LocalUserDetailResponse login,
+      const ThreadDetail& thread,
+      const LocalUserDetail& login,
       optional<string_view> error = {}
     ) noexcept -> void {
       write_fmt(rsp,
@@ -1431,7 +1438,7 @@ namespace Ludwig {
     auto write_user_settings_form(
       Response rsp,
       const SiteDetail* site,
-      const LocalUserDetailResponse& login,
+      const LocalUserDetail& login,
       optional<string_view> error = {}
     ) noexcept -> void {
       uint8_t cw_mode = 1;
@@ -1480,7 +1487,7 @@ namespace Ludwig {
     auto write_user_profile_form(
       Response rsp,
       const SiteDetail* site,
-      const LocalUserDetailResponse login,
+      const LocalUserDetail& login,
       optional<string_view> error = {}
     ) noexcept -> void {
       write_fmt(rsp,
@@ -1505,7 +1512,7 @@ namespace Ludwig {
     auto write_user_account_forms(
       Response rsp,
       const SiteDetail* site,
-      const LocalUserDetailResponse login,
+      const LocalUserDetail& login,
       optional<string_view> error = {}
     ) noexcept -> void {
       write_fmt(rsp,
@@ -1526,7 +1533,7 @@ namespace Ludwig {
 
     auto write_board_settings_form(
       Response rsp,
-      const LocalBoardDetailResponse board,
+      const LocalBoardDetail& board,
       optional<string_view> error = {}
     ) noexcept -> void {
       write_fmt(rsp,
@@ -1601,16 +1608,6 @@ namespace Ludwig {
       });
     }
 
-    static inline auto hex_id_param(Request req, uint16_t param) {
-      const auto str = req->getParameter(param);
-      uint64_t id;
-      const auto res = std::from_chars(str.begin(), str.end(), id, 16);
-      if (res.ec != std::errc{} || res.ptr != str.data() + str.length()) {
-        throw ApiError(fmt::format("Invalid hexadecimal ID: ", str), 404);
-      }
-      return id;
-    }
-
     static inline auto user_name_param(ReadTxnBase& txn, Request req, uint16_t param) {
       const auto name = req->getParameter(param);
       const auto user_id = txn.get_user_id_by_name(name);
@@ -1627,7 +1624,7 @@ namespace Ludwig {
 
     auto register_routes(App& app) -> void {
 
-      using PostList = std::variant<PageOf<ThreadListEntry>, PageOf<CommentListEntry>>;
+      using PostList = std::variant<PageOf<ThreadDetail>, PageOf<CommentDetail>>;
 
       // -----------------------------------------------------------------------
       // STATIC FILES
@@ -1666,7 +1663,7 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         m.populate(self, txn);
         const auto local = req->getQuery("local") == "1";
-        const auto sort = InstanceController::parse_board_sort_type(req->getQuery("sort"));
+        const auto sort = parse_board_sort_type(req->getQuery("sort"));
         const auto sub = req->getQuery("sub") == "1";
         const auto boards = self->controller->list_boards(txn, sort, local, sub, m.login, req->getQuery("from"));
         const auto base_url = fmt::format("/boards?local={}&sort={}&sub={}",
@@ -1701,7 +1698,7 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         m.populate(self, txn);
         const auto local = req->getQuery("local") == "1";
-        const auto sort = InstanceController::parse_user_sort_type(req->getQuery("sort"));
+        const auto sort = parse_user_sort_type(req->getQuery("sort"));
         const auto users = self->controller->list_users(txn, sort, local, m.login, req->getQuery("from"));
         const auto base_url = fmt::format("/users?local={}&sort={}",
           local ? "1" : "0",
@@ -1735,7 +1732,7 @@ namespace Ludwig {
         m.populate(self, txn);
         const auto board_id = board_name_param(txn, req, 0);
         const auto board = self->controller->board_detail(txn, board_id, m.login);
-        const auto sort = InstanceController::parse_sort_type(req->getQuery("sort"), m.login);
+        const auto sort = parse_sort_type(req->getQuery("sort"), m.login);
         const auto show_threads = req->getQuery("type") != "comments",
           show_images = req->getQuery("images") == "1" || (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_threads() : false);
         const auto base_url = fmt::format("/b/{}?type={}&sort={}&images={}",
@@ -1766,8 +1763,8 @@ namespace Ludwig {
           rsp->write(R"(</section><main>)");
         }
         std::visit(overload{
-          [&](const PageOf<ThreadListEntry>& l){self->write_thread_list(rsp, l, base_url, m.login, !m.is_htmx, true, false, show_images);},
-          [&](const PageOf<CommentListEntry>& l){self->write_comment_list(rsp, l, base_url, m.login, !m.is_htmx, true, true, show_images);}
+          [&](const PageOf<ThreadDetail>& l){self->write_thread_list(rsp, l, base_url, m.login, !m.is_htmx, true, false, show_images);},
+          [&](const PageOf<CommentDetail>& l){self->write_comment_list(rsp, l, base_url, m.login, !m.is_htmx, true, true, show_images);}
         }, list);
         if (m.is_htmx) {
           rsp->end();
@@ -1799,13 +1796,13 @@ namespace Ludwig {
         m.populate(self, txn);
         const auto user_id = user_name_param(txn, req, 0);
         const auto user = self->controller->user_detail(txn, user_id, m.login);
-        const auto sort = InstanceController::parse_user_post_sort_type(req->getQuery("sort"));
+        const auto sort = parse_user_post_sort_type(req->getQuery("sort"));
         const auto show_threads = req->getQuery("type") != "comments",
           show_images = req->getQuery("images") == "1" || (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_threads() : false);
         const auto base_url = fmt::format("/u/{}?type={}&sort={}&images={}",
           user.user().name()->string_view(),
           show_threads ? "threads" : "comments",
-          EnumNamesUserPostSortType()[(size_t)sort],
+          EnumNameUserPostSortType(sort),
           show_images ? 1 : 0
         );
         const auto list = show_threads
@@ -1830,8 +1827,8 @@ namespace Ludwig {
           rsp->write(R"(</section><main>)");
         }
         std::visit(overload{
-          [&](const PageOf<ThreadListEntry>& l){self->write_thread_list(rsp, l, base_url, m.login, !m.is_htmx, false, false, show_images);},
-          [&](const PageOf<CommentListEntry>& l){self->write_comment_list(rsp, l, base_url, m.login, !m.is_htmx, false, true, show_images);}
+          [&](const PageOf<ThreadDetail>& l){self->write_thread_list(rsp, l, base_url, m.login, !m.is_htmx, false, false, show_images);},
+          [&](const PageOf<CommentDetail>& l){self->write_comment_list(rsp, l, base_url, m.login, !m.is_htmx, false, true, show_images);}
         }, list);
         if (m.is_htmx) {
           rsp->end();
@@ -1844,16 +1841,16 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         m.populate(self, txn);
         const auto id = hex_id_param(req, 0);
-        const auto sort = InstanceController::parse_comment_sort_type(req->getQuery("sort"), m.login);
+        const auto sort = parse_comment_sort_type(req->getQuery("sort"), m.login);
         const auto show_images = req->getQuery("images") == "1" ||
           (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_comments() : false);
-        const auto detail = self->controller->thread_detail(txn, id, sort, m.login, req->getQuery("from"));
+        const auto [detail, comments] = self->controller->thread_detail(txn, id, sort, m.login, req->getQuery("from"));
         const auto board = self->controller->board_detail(txn, detail.thread().board(), m.login);
         // ---
         if (m.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
           m.write_cookie(rsp);
-          self->write_comment_tree(rsp, detail.comments, detail.id, sort, m.site, m.login, show_images, true, false);
+          self->write_comment_tree(rsp, comments, detail.id, sort, m.site, m.login, show_images, true, false);
           rsp->end();
         } else {
           self->write_html_header(rsp, m, {
@@ -1866,7 +1863,7 @@ namespace Ludwig {
           rsp->write("<div>");
           self->write_sidebar(rsp, m, board);
           rsp->write("<main>");
-          self->write_thread_view(rsp, detail, m.site, m.login, sort, show_images);
+          self->write_thread_view(rsp, detail, comments, m.site, m.login, sort, show_images);
           rsp->write("</main></div>");
           end_with_html_footer(rsp, m);
         }
@@ -1875,8 +1872,8 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         const auto id = hex_id_param(req, 0);
         const auto login = m.require_login(self, txn);
-        const auto thread = self->controller->get_thread_entry(txn, id, login);
-        if (!InstanceController::can_edit(thread, login)) throw ApiError("Cannot edit this post", 403);
+        const auto thread = ThreadDetail::get(txn, id, login);
+        if (!thread.can_edit(login)) throw ApiError("Cannot edit this post", 403);
         // ---
         self->write_html_header(rsp, m, {
           .canonical_path = req->getUrl(),
@@ -1891,16 +1888,16 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         m.populate(self, txn);
         const auto id = hex_id_param(req, 0);
-        const auto sort = InstanceController::parse_comment_sort_type(req->getQuery("sort"), m.login);
+        const auto sort = parse_comment_sort_type(req->getQuery("sort"), m.login);
         const auto show_images = req->getQuery("images") == "1" ||
           (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_comments() : false);
-        const auto detail = self->controller->comment_detail(txn, id, sort, m.login, req->getQuery("from"));
+        const auto [detail, comments] = self->controller->comment_detail(txn, id, sort, m.login, req->getQuery("from"));
         const auto board = self->controller->board_detail(txn, detail.thread().board(), m.login);
         // ----
         if (m.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
           m.write_cookie(rsp);
-          self->write_comment_tree(rsp, detail.comments, detail.id, sort, m.site, m.login, show_images, false, false);
+          self->write_comment_tree(rsp, comments, detail.id, sort, m.site, m.login, show_images, false, false);
           rsp->end();
         } else {
           self->write_html_header(rsp, m, {
@@ -1913,7 +1910,7 @@ namespace Ludwig {
           rsp->write("<div>");
           self->write_sidebar(rsp, m, board);
           rsp->write("<main>");
-          self->write_comment_view(rsp, detail, m.site, m.login, sort, show_images);
+          self->write_comment_view(rsp, detail, comments, m.site, m.login, sort, show_images);
           rsp->write("</main></div>");
           end_with_html_footer(rsp, m);
         }
@@ -2171,7 +2168,7 @@ namespace Ludwig {
           if (m->is_htmx) {
             auto txn = self->controller->open_read_txn();
             m->populate(self, txn);
-            const auto comment = self->controller->get_comment_entry(txn, id, m->login);
+            const auto comment = CommentDetail::get(txn, id, m->login);
             rsp->writeHeader("Content-Type", TYPE_HTML);
             m->write_cookie(rsp);
             self->write_comment_entry(rsp, comment, m->login, false, true, true, false, true);
@@ -2198,7 +2195,7 @@ namespace Ludwig {
           if (m->is_htmx) {
             auto txn = self->controller->open_read_txn();
             m->populate(self, txn);
-            const auto comment = self->controller->get_comment_entry(txn, id, m->login);
+            const auto comment = CommentDetail::get(txn, id, m->login);
             rsp->writeHeader("Content-Type", TYPE_HTML);
             m->write_cookie(rsp);
             self->write_comment_entry(rsp, comment, m->login, false, true, true, false, true);
@@ -2286,8 +2283,8 @@ namespace Ludwig {
             const auto show_user = body.optional_bool("show_user"),
               show_board = body.optional_bool("show_board");
             auto txn = self->controller->open_read_txn();
-            const auto login = self->controller->local_user_detail(txn, user);
-            const auto thread = self->controller->get_thread_entry(txn, id, login);
+            const auto login = LocalUserDetail::get(txn, user);
+            const auto thread = ThreadDetail::get(txn, id, login);
             rsp->writeHeader("Content-Type", TYPE_HTML);
             m->write_cookie(rsp);
             self->write_controls_submenu(rsp, thread, login, show_user, show_board);
@@ -2375,8 +2372,8 @@ namespace Ludwig {
             const auto show_user = body.optional_bool("show_user"),
               show_board = body.optional_bool("show_board");
             auto txn = self->controller->open_read_txn();
-            const auto login = self->controller->local_user_detail(txn, user);
-            const auto comment = self->controller->get_comment_entry(txn, id, login);
+            const auto login = LocalUserDetail::get(txn, user);
+            const auto comment = CommentDetail::get(txn, id, login);
             rsp->writeHeader("Content-Type", TYPE_HTML);
             m->write_cookie(rsp);
             self->write_controls_submenu(rsp, comment, login, show_user, show_board);
@@ -2395,8 +2392,8 @@ namespace Ludwig {
           self->controller->vote(user, post_id, vote);
           if (m->is_htmx) {
             auto txn = self->controller->open_read_txn();
-            const auto login = self->controller->local_user_detail(txn, user);
-            const auto thread = InstanceController::get_thread_entry(txn, post_id, login);
+            const auto login = LocalUserDetail::get(txn, user);
+            const auto thread = ThreadDetail::get(txn, post_id, login);
             rsp->writeHeader("Content-Type", TYPE_HTML);
             self->write_vote_buttons(rsp, thread, login);
             rsp->end();
@@ -2414,8 +2411,8 @@ namespace Ludwig {
           self->controller->vote(user, post_id, vote);
           if (m->is_htmx) {
             auto txn = self->controller->open_read_txn();
-            const auto login = self->controller->local_user_detail(txn, user);
-            const auto comment = InstanceController::get_comment_entry(txn, post_id, login);
+            const auto login = LocalUserDetail::get(txn, user);
+            const auto comment = CommentDetail::get(txn, post_id, login);
             rsp->writeHeader("Content-Type", TYPE_HTML);
             self->write_vote_buttons(rsp, comment, login);
             rsp->end();

@@ -45,6 +45,7 @@ namespace Ludwig {
       image_max_bytes {"image_max_bytes"},
       video_max_bytes {"video_max_bytes"},
       javascript_enabled {"javascript_enabled"},
+      infinite_scroll_enabled {"infinite_scroll_enabled"},
       board_creation_admin_only {"board_creation_admin_only"},
       registration_enabled {"registration_enabled"},
       registration_application_required {"registration_application_required"},
@@ -101,7 +102,7 @@ namespace Ludwig {
     auto operator=(const ReadTxnBase&) = delete;
     ReadTxnBase(ReadTxnBase&& from) : db(from.db), txn(from.txn) { from.txn = nullptr; }
     ReadTxnBase& operator=(ReadTxnBase&& from) = delete;
-    virtual ~ReadTxnBase() {};
+    virtual ~ReadTxnBase() = default;
 
     using OptCursor = const std::optional<Cursor>&;
     using OptKV = const std::optional<std::pair<Cursor, uint64_t>>&;
@@ -141,6 +142,10 @@ namespace Ludwig {
 
     auto get_thread(uint64_t id) -> OptRef<Thread>;
     auto get_post_stats(uint64_t id) -> OptRef<PostStats>;
+    auto list_threads_new(OptKV cursor = {}) -> DBIter;
+    auto list_threads_old(OptKV cursor = {}) -> DBIter;
+    auto list_threads_top(OptKV cursor = {}) -> DBIter;
+    auto list_threads_most_comments(OptKV cursor = {}) -> DBIter;
     auto list_threads_of_board_new(uint64_t board_id, OptKV cursor = {}) -> DBIter;
     auto list_threads_of_board_old(uint64_t board_id, OptKV cursor = {}) -> DBIter;
     auto list_threads_of_board_top(uint64_t board_id, OptKV cursor = {}) -> DBIter;
@@ -150,6 +155,10 @@ namespace Ludwig {
     auto list_threads_of_user_top(uint64_t user_id, OptKV cursor = {}) -> DBIter;
 
     auto get_comment(uint64_t id) -> OptRef<Comment>;
+    auto list_comments_new(OptKV cursor = {}) -> DBIter;
+    auto list_comments_old(OptKV cursor = {}) -> DBIter;
+    auto list_comments_top(OptKV cursor = {}) -> DBIter;
+    auto list_comments_most_comments(OptKV cursor = {}) -> DBIter;
     auto list_comments_of_post_new(uint64_t post_id, OptKV cursor = {}) -> DBIter;
     auto list_comments_of_post_old(uint64_t post_id, OptKV cursor = {}) -> DBIter;
     auto list_comments_of_post_top(uint64_t post_id, OptKV cursor = {}) -> DBIter;
@@ -162,9 +171,9 @@ namespace Ludwig {
     auto list_comments_of_user_top(uint64_t user_id, OptKV cursor = {}) -> DBIter;
 
     auto get_vote_of_user_for_post(uint64_t user_id, uint64_t post_id) -> Vote;
-    //auto list_upvoted_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
-    //auto list_downvoted_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
-    //auto list_saved_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
+    auto list_upvoted_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
+    auto list_downvoted_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
+    auto list_saved_posts_of_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
 
     auto has_user_saved_post(uint64_t user_id, uint64_t post_id) -> bool;
     auto has_user_hidden_post(uint64_t user_id, uint64_t post_id) -> bool;
@@ -177,7 +186,10 @@ namespace Ludwig {
     auto get_invite(uint64_t invite_id) -> OptRef<Invite>;
     auto list_invites_from_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
 
-    // TODO: Feeds, DMs, Blocks, Admins/Mods, Mod Actions
+    auto get_link_card(std::string_view url) -> OptRef<LinkCard>;
+    auto list_threads_of_domain(std::string_view domain, OptKV cursor = {}) -> DBIter;
+
+    // TODO: DMs, Blocks, Admins/Mods, Mod Actions
 
     friend class ReadTxnImpl;
   };
@@ -259,6 +271,9 @@ namespace Ludwig {
     auto create_invite(uint64_t sender_user_id, uint64_t lifetime_seconds) -> uint64_t;
     auto set_invite(uint64_t invite_id, flatbuffers::FlatBufferBuilder& builder) -> void;
     auto delete_invite(uint64_t invite_id) -> void;
+
+    auto set_link_card(std::string_view url, flatbuffers::FlatBufferBuilder& builder) -> void;
+    auto delete_link_card(std::string_view url) -> void;
 
     inline auto commit() -> void {
       auto err = mdb_txn_commit(txn);

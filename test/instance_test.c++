@@ -254,7 +254,7 @@ TEST_CASE("list users", "[instance]") {
   REQUIRE(!page.next);
 
   // New, logged in as admin, local only
-  page = instance->list_users(txn, UserSortType::New, true, instance->local_user_detail(txn, instance.users[0]));
+  page = instance->list_users(txn, UserSortType::New, true, LocalUserDetail::get(txn, instance.users[0]));
   REQUIRE(page.entries.size() > 0);
   vec.clear();
   for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
@@ -263,7 +263,7 @@ TEST_CASE("list users", "[instance]") {
   REQUIRE(!page.next);
 
   // New, logged in as rando (excludes bots), local only
-  page = instance->list_users(txn, UserSortType::New, true, instance->local_user_detail(txn, instance.users[1]));
+  page = instance->list_users(txn, UserSortType::New, true, LocalUserDetail::get(txn, instance.users[1]));
   REQUIRE(page.entries.size() > 0);
   vec.clear();
   for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
@@ -272,7 +272,7 @@ TEST_CASE("list users", "[instance]") {
   REQUIRE(!page.next);
 
   // New, logged in as troll (includes self, hides admin), local only
-  page = instance->list_users(txn, UserSortType::New, true, instance->local_user_detail(txn, instance.users[2]));
+  page = instance->list_users(txn, UserSortType::New, true, LocalUserDetail::get(txn, instance.users[2]));
   REQUIRE(page.entries.size() > 0);
   vec.clear();
   for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
