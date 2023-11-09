@@ -18,7 +18,7 @@ namespace Ludwig {
     auto sync_flag = make_shared<std::monostate>();
     http_client->get(url)
       .header("Accept", "image/*")
-      .dispatch([this, url, &entry_cell, maybe_sync_flag = weak_ptr(sync_flag)](auto rsp){
+      .dispatch([this, url, &entry_cell, maybe_sync_flag = weak_ptr(sync_flag)](auto&& rsp){
         const auto mimetype = rsp->header("content-type");
         Image img = make_shared<optional<pair<string, uint64_t>>>();
         if (rsp->error()) {

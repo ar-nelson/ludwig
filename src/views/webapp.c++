@@ -11,7 +11,7 @@
 
 using std::bind, std::match_results, std::nullopt, std::optional, std::regex,
     std::regex_search, std::shared_ptr, std::stoull, std::string,
-    std::string_view, std::to_string;
+    std::string_view, std::to_string, std::variant, std::visit;
 
 using namespace std::placeholders;
 namespace chrono = std::chrono;
@@ -56,18 +56,6 @@ namespace Ludwig {
 
   static inline auto format_as(SubmenuAction a) { return fmt::underlying(a); };
 
-  static inline auto display_name(const User& user) -> string_view {
-    if (user.display_name()) return user.display_name()->string_view();
-    const auto name = user.name()->string_view();
-    return name.substr(0, name.find('@'));
-  }
-
-  static inline auto display_name(const Board& board) -> string_view {
-    if (board.display_name()) return board.display_name()->string_view();
-    const auto name = board.name()->string_view();
-    return name.substr(0, name.find('@'));
-  }
-
   static inline auto mod_state(const ThreadDetail& thread) -> ModState {
     return thread.thread().mod_state();
   }
@@ -104,9 +92,13 @@ namespace Ludwig {
 
   template <bool SSL> struct Webapp : public std::enable_shared_from_this<Webapp<SSL>> {
     shared_ptr<InstanceController> controller;
+    shared_ptr<RichTextParser> rt;
     string buf;
 
-    Webapp(shared_ptr<InstanceController> controller) : controller(controller) {}
+    Webapp(
+      shared_ptr<InstanceController> controller,
+      shared_ptr<RichTextParser> rich_text
+    ) : controller(controller), rt(rich_text) {}
 
     using App = uWS::TemplatedApp<SSL>;
     using Response = uWS::HttpResponse<SSL>*;
@@ -166,7 +158,7 @@ namespace Ludwig {
         return *logged_in_user_id;
       }
 
-      inline auto require_login(shared_ptr<Webapp<SSL>> self, ReadTxnBase& txn) {
+      inline auto require_login(shared_ptr<Webapp<SSL>> self, ReadTxnBase& txn) -> const LocalUserDetail& {
         if (!logged_in_user_id) throw ApiError("Login is required", 401);
         if (site == nullptr) populate(self, txn);
         return *login;
@@ -224,25 +216,57 @@ namespace Ludwig {
       );
     }
 
+    inline auto display_name_as_text(const User& user) -> string {
+      if (user.display_name_type()->size()) {
+        return rt->plain_text_with_emojis_to_text_content(user.display_name_type(), user.display_name());
+      }
+      const auto name = user.name()->string_view();
+      return string(name.substr(0, name.find('@')));
+    }
+
+    inline auto display_name_as_text(const Board& board) -> string {
+      if (board.display_name_type()->size()) {
+        return rt->plain_text_with_emojis_to_text_content(board.display_name_type(), board.display_name());
+      }
+      const auto name = board.name()->string_view();
+      return string(name.substr(0, name.find('@')));
+    }
+
+    inline auto display_name_as_html(const User& user) -> string {
+      if (user.display_name_type()->size()) {
+        return rt->plain_text_with_emojis_to_html(user.display_name_type(), user.display_name(), {});
+      }
+      const auto name = user.name()->string_view();
+      return fmt::format("{}", Escape(name.substr(0, name.find('@'))));
+    }
+
+    inline auto display_name_as_html(const Board& board) -> string {
+      if (board.display_name_type()->size()) {
+        return rt->plain_text_with_emojis_to_html(board.display_name_type(), board.display_name(), {});
+      }
+      const auto name = board.name()->string_view();
+      return fmt::format("{}", Escape(name.substr(0, name.find('@'))));
+    }
+
     inline auto write_qualified_display_name(Response rsp, const User* user) -> void {
       const auto name = user->name()->string_view();
-      if (user->display_name()) {
-        rsp << user->display_name()->string_view();
+      if (user->display_name_type()->size()) {
+        rsp->write(rt->plain_text_with_emojis_to_html(user->display_name_type(), user->display_name(), {}));
         const auto at_index = name.find('@');
-        if (at_index != string_view::npos) rsp << name.substr(at_index);
+        if (at_index != string_view::npos) rsp->write(name.substr(at_index));
       } else {
-        rsp << name;
+        rsp->write(name);
       }
     }
 
     inline auto write_qualified_display_name(Response rsp, const Board* board) -> void {
       const auto name = board->name()->string_view();
-      if (board->display_name()) {
-        rsp << board->display_name()->string_view();
+      if (board->display_name_type()->size()) {
+        rsp->write(rt->plain_text_with_emojis_to_html(board->display_name_type(), board->display_name(), {}));
         const auto at_index = name.find('@');
-        if (at_index != string_view::npos) rsp << name.substr(at_index);
+        if (at_index != string_view::npos) rsp->write(name.substr(at_index));
       } else {
-        rsp << name;
+        rsp->write(name);
       }
     }
 
@@ -309,7 +333,7 @@ namespace Ludwig {
           R"(<li id="topbar-user"><a href="/u/{}">{}</a> ({:d}))"
           R"(<li><a href="/settings">Settings</a>{}<li><a href="/logout">Logout</a></ul></nav>)",
           Escape(m.login->user().name()),
-          Escape{display_name(m.login->user())},
+          display_name_as_html(m.login->user()),
           m.login->stats().thread_karma() + m.login->stats().comment_karma(),
           InstanceController::can_change_site_settings(m.login) ? R"(<li><a href="/site_admin">Site admin</a>)" : ""
         );
@@ -369,8 +393,12 @@ namespace Ludwig {
 
     auto write_sidebar(
       Response rsp,
-      const Meta& m,
-      const optional<BoardDetail>& board = {}
+      Login login,
+      variant<
+        const SiteDetail*,
+        const BoardDetail,
+        const UserDetail
+      > detail
     ) noexcept -> void {
       rsp->write(
         R"(<label id="sidebar-toggle-label" for="sidebar-toggle"><svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#menu"></svg> Menu</label>)"
@@ -380,15 +408,16 @@ namespace Ludwig {
         R"(<label for="search"><span class="a11y">Search</span>)"
         R"(<input type="search" name="search" id="search" placeholder="Search"><input type="submit" value="Search"></label>)"
       );
-      const auto hide_cw = m.login && m.login->local_user().hide_cw_posts();
-      const auto board_name = Escape{board ? display_name(board->board()) : ""};
+      const auto hide_cw = login && login->local_user().hide_cw_posts();
+      const optional<BoardDetail> board =
+        std::holds_alternative<const BoardDetail>(detail) ? optional(std::get<const BoardDetail>(detail)) : nullopt;
       if (board) write_fmt(rsp, R"(<input type="hidden" name="board" value="{:x}">)", board->id);
       if (!hide_cw || board) {
         rsp->write(R"(<details id="search-options"><summary>Search Options</summary><fieldset>)");
         if (board) {
           write_fmt(rsp,
             R"(<label for="only_board"><input type="checkbox" name="only_board" id="only_board" checked> Limit my search to {}</label>)",
-            board_name
+            display_name_as_html(board->board())
           );
         }
         if (!hide_cw) {
@@ -397,7 +426,7 @@ namespace Ludwig {
         rsp->write("</fieldset></details>");
       }
       rsp->write("</form></section>");
-      if (!m.login) {
+      if (!login) {
         write_fmt(rsp,
           R"(<section id="login-section"><h2>Login</h2><form method="post" action="/login" id="login-form">{})"
           R"(<label for="actual_username"><span class="a11y">Username or email</span><input type="text" name="actual_username" id="actual_username" placeholder="Username or email"></label>)"
@@ -407,41 +436,74 @@ namespace Ludwig {
           R"(<a href="/register" class="big-button">Register</a></section>)",
           HONEYPOT_FIELD
         );
-      } else if (board) {
-        rsp->write(R"(<section id="actions-section"><h2>Actions</h2>)");
-        write_subscribe_button(rsp, board->board().name()->string_view(), board->subscribed);
-        if (board->can_create_thread(m.login)) {
-          write_fmt(rsp,
-            R"(<a class="big-button" href="/b/{0}/create_thread">Submit a new link</a>)"
-            R"(<a class="big-button" href="/b/{0}/create_thread?text=1">Submit a new text post</a>)",
-            Escape(board->board().name())
-          );
-        }
-        // TODO: Board settings link
-        rsp->write("</section>");
-      }
-      if (board) {
-        write_fmt(rsp, R"(<section id="board-sidebar"><h2>{}</h2>)", board_name);
-        // TODO: Banner image
-        if (board->board().description_safe()) {
-          write_fmt(rsp, "<p>{}</p>", board->board().description_safe()->string_view());
-        }
-        rsp->write("</section>");
-        // TODO: Board stats
-        // TODO: Modlog link
       } else {
-        write_fmt(rsp, R"(<section id="site-sidebar"><h2>{}</h2>)", Escape{m.site->name});
-        if (m.site->banner_url) {
-          write_fmt(rsp,
-            R"(<div class="sidebar-banner"><img src="{}" alt="{} banner"></div>)",
-            Escape{*m.site->banner_url}, Escape{m.site->name}
-          );
-        }
-        write_fmt(rsp, "<p>{}</p></section>", Escape{m.site->description});
-        // TODO: Site stats
-        // TODO: Modlog link
+        visit(overload{
+          [&](const SiteDetail*) {
+            if (controller->can_create_board(login)) {
+              rsp->write(
+                R"(<section id="actions-section"><h2>Actions</h2>)"
+                R"(<a class="big-button" href="/create_board">Create a new board</a>)"
+                R"(</section>)"
+              );
+            }
+          },
+          [&](const BoardDetail& board) {
+            rsp->write(R"(<section id="actions-section"><h2>Actions</h2>)");
+            write_subscribe_button(rsp, board.board().name()->string_view(), board.subscribed);
+            if (board.can_create_thread(login)) {
+              write_fmt(rsp,
+                R"(<a class="big-button" href="/b/{0}/create_thread">Submit a new link</a>)"
+                R"(<a class="big-button" href="/b/{0}/create_thread?text=1">Submit a new text post</a>)",
+                Escape(board.board().name())
+              );
+            }
+            if (board.can_change_settings(login)) {
+              write_fmt(rsp,
+                R"(<a class="big-button" href="/b/{0}/settings">Board settings</a>)",
+                Escape(board.board().name())
+              );
+            }
+            rsp->write("</section>");
+          },
+          [&](const UserDetail&) {}
+        }, detail);
       }
-      rsp->write("</aside>");
+
+      visit(overload{
+        [&](const SiteDetail* site) {
+          write_fmt(rsp, R"(<section id="site-sidebar"><h2>{}</h2>)", Escape{site->name});
+          if (site->banner_url) {
+            write_fmt(rsp,
+              R"(<div class="sidebar-banner"><img src="{}" alt="{} banner"></div>)",
+              Escape{*site->banner_url}, Escape{site->name}
+            );
+          }
+          write_fmt(rsp, "<p>{}</p>", Escape{site->description});
+        },
+        [&](const BoardDetail& board) {
+          write_fmt(rsp, R"(<section id="board-sidebar"><h2>{}</h2>)", display_name_as_html(board.board()));
+          // TODO: Banner image
+          if (board.board().description_type()->size()) {
+            write_fmt(rsp, "<p>{}</p>", rt->blocks_to_html(
+              board.board().description_type(),
+              board.board().description(),
+              { .open_links_in_new_tab = login && login->local_user().open_links_in_new_tab() }
+            ));
+          }
+        },
+        [&](const UserDetail& user) {
+          write_fmt(rsp, R"(<section id="user-sidebar"><h2>{}</h2>)", display_name_as_html(user.user()));
+          if (user.user().bio_type()->size()) {
+            write_fmt(rsp, "<p>{}</p>", rt->blocks_to_html(
+              user.user().bio_type(),
+              user.user().bio(),
+              { .open_links_in_new_tab = login && login->local_user().open_links_in_new_tab() }
+            ));
+          }
+        }
+      }, detail);
+
+      rsp->write("</section></aside>");
     }
 
     static auto relative_time(uint64_t timestamp) noexcept -> string {
@@ -489,25 +551,13 @@ namespace Ludwig {
       } else {
         rsp->write(R"(<svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#user"></svg>)");
       }
-      auto name = user.name()->str();
-      write_fmt(rsp, "{}", Escape{
-        user.display_name() == nullptr
-          ? name.substr(0, name.find('@'))
-          : user.display_name()->string_view()
-        }
-      );
-      if (user.instance()) {
-        const auto suffix_ix = name.find('@');
-        if (suffix_ix != string::npos) {
-          write_fmt(rsp, R"(<span class="at-domain">@{}</span>)", Escape{name.substr(suffix_ix + 1)});
-        }
-      }
+      write_qualified_display_name(rsp, &user);
+      rsp->write("</a>");
       if (user.bot()) rsp->write(R"( <span class="tag">Bot</span>)");
       if (user.mod_state() > ModState::Visible) {
         write_fmt(rsp, R"( <abbr class="tag mod-warning-tag" title="{0} by Moderator: {1}">{0}</abbr>)",
           describe_mod_state(user.mod_state()), Escape(user.mod_reason()));
       }
-      rsp->write("</a>");
     }
 
     auto write_board_link(Response rsp, OptRef<Board> board_opt) noexcept -> void {
@@ -524,18 +574,10 @@ namespace Ludwig {
       } else {
         rsp->write(R"(<svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#book"></svg>)");
       }
-      auto name = board.name()->str();
-      write_fmt(rsp, "{}", Escape{
-        board.display_name() == nullptr
-          ? name.substr(0, name.find('@'))
-          : board.display_name()->string_view()
-        }
-      );
-      if (board.instance()) {
-        const auto suffix_ix = name.find('@');
-        if (suffix_ix != string::npos) {
-          write_fmt(rsp, R"(<span class="at-domain">@{}</span>)", Escape{name.substr(suffix_ix + 1)});
-        }
+      write_qualified_display_name(rsp, &board);
+      if (board.mod_state() > ModState::Visible) {
+        write_fmt(rsp, R"( <abbr class="tag mod-warning-tag" title="{0} by Moderator: {1}">{0}</abbr>)",
+          describe_mod_state(board.mod_state()), Escape(board.mod_reason()));
       }
       rsp->write("</a>");
       if (board.content_warning()) {
@@ -970,7 +1012,9 @@ namespace Ludwig {
       }
       if (thread.thread().content_warning() || thread.thread().mod_state() > ModState::Visible) {
         rsp->write(R"(<div class="thread-warnings">)");
-        if (!is_list_item && thread.thread().content_text_safe()) write_short_warnings(rsp, thread.thread());
+        if (!is_list_item && thread.thread().content_text_type()->size()) {
+          write_short_warnings(rsp, thread.thread());
+        }
         else write_warnings(rsp, thread.thread());
         rsp->write(R"(</div>)");
       }
@@ -1047,15 +1091,20 @@ namespace Ludwig {
       }
       const bool has_warnings = comment.comment().content_warning() || comment.comment().mod_state() > ModState::Visible,
         thread_warnings = show_thread && (comment.thread().content_warning() || comment.thread().mod_state() > ModState::Visible);
+      const auto content = rt->blocks_to_html(
+        comment.comment().content_type(),
+        comment.comment().content(),
+        { .show_images = show_images, .open_links_in_new_tab = login && login->local_user().open_links_in_new_tab() }
+      );
       if (has_warnings || thread_warnings) {
         rsp->write(R"(</span></h2><div class="comment-content"><details class="content-warning-collapse"><summary>Content hidden (click to show))");
         if (thread_warnings) write_warnings(rsp, comment.thread(), "Thread ");
         if (has_warnings) write_warnings(rsp, comment.comment());
-        write_fmt(rsp, R"(</summary><div>{}</div></details></div>)", comment.comment().content_safe()->string_view());
+        write_fmt(rsp, R"(</summary><div>{}</div></details></div>)", content);
       } else {
         write_fmt(rsp, R"(</span></{}><div class="comment-content">{}</div>)",
           is_tree_item ? "h3" : "h2",
-          comment.comment().content_safe()->string_view()
+          content
         );
       }
       write_vote_buttons(rsp, comment, login);
@@ -1233,13 +1282,18 @@ namespace Ludwig {
     ) noexcept -> void {
       rsp->write(R"(<article class="thread-with-comments">)");
       write_thread_entry(rsp, thread, login, false, true, true, show_images);
-      if (thread.thread().content_text_safe()) {
+      if (thread.thread().content_text_type()->size()) {
+        const auto content = rt->blocks_to_html(
+          thread.thread().content_text_type(),
+          thread.thread().content_text(),
+          { .show_images = show_images, .open_links_in_new_tab = login && login->local_user().open_links_in_new_tab() }
+        );
         if (thread.thread().content_warning() || thread.board().content_warning() || thread.thread().mod_state() > ModState::Visible) {
           rsp->write(R"(<div class="thread-content"><details class="content-warning-collapse"><summary>Content hidden (click to show))");
           write_warnings(rsp, thread.thread());
-          write_fmt(rsp, R"(</summary><div>{}</div></details></div>)", thread.thread().content_text_safe()->string_view());
+          write_fmt(rsp, R"(</summary><div>{}</div></details></div>)", content);
         } else {
-          write_fmt(rsp, R"(<div class="thread-content">{}</div>)", thread.thread().content_text_safe()->string_view());
+          write_fmt(rsp, R"(<div class="thread-content">{}</div>)", content);
         }
       }
       write_fmt(rsp, R"(<section class="comments" id="comments"><h2>{:d} comments</h2>)", thread.stats().descendant_count());
@@ -1501,7 +1555,7 @@ namespace Ludwig {
         R"(<input type="submit" value="Submit"></form>)",
         error_banner(error),
         Escape(login.user().name()),
-        Escape(login.user().display_name()),
+        Escape(rt->plain_text_with_emojis_to_text_content(login.user().display_name_type(), login.user().display_name())),
         Escape(login.local_user().email()),
         Escape(login.user().bio_raw()),
         Escape(login.user().avatar_url()),
@@ -1555,7 +1609,7 @@ namespace Ludwig {
         R"(</fieldset>)"
         R"(<input type="submit" value="Submit"></form>)",
         Escape(board.board().name()), error_banner(error),
-        Escape(board.board().display_name()),
+        Escape(rt->plain_text_with_emojis_to_text_content(board.board().display_name_type(), board.board().display_name())),
         Escape(board.board().description_raw()),
         Escape(board.board().content_warning()),
         Escape(board.board().icon_url()),
@@ -1629,9 +1683,9 @@ namespace Ludwig {
       // -----------------------------------------------------------------------
       // STATIC FILES
       // -----------------------------------------------------------------------
-      serve_static(app, "default-theme.css", TYPE_CSS, default_theme_css);
-      serve_static(app, "htmx.min.js", TYPE_JS, htmx_min_js);
-      serve_static(app, "feather-sprite.svg", TYPE_SVG, feather_sprite_svg);
+      serve_static(app, "default-theme.css", TYPE_CSS, default_theme_css_str());
+      serve_static(app, "htmx.min.js", TYPE_JS, htmx_min_js_str());
+      serve_static(app, "feather-sprite.svg", TYPE_SVG, feather_sprite_svg_str());
 
       // -----------------------------------------------------------------------
       // PAGES
@@ -1653,7 +1707,7 @@ namespace Ludwig {
           .banner_link = "/",
         });
         rsp->write("<div>");
-        self->write_sidebar(rsp, m);
+        self->write_sidebar(rsp, m.login, m.site);
         rsp->write("<main>");
         self->write_board_list(rsp, boards, "/");
         rsp->write("</main></div>");
@@ -1681,7 +1735,7 @@ namespace Ludwig {
             .banner_link = "/boards",
           });
           rsp->write("<div>");
-          self->write_sidebar(rsp, m);
+          self->write_sidebar(rsp, m.login, m.site);
           rsp->write(R"(<section><h2 class="a11y">Sort and filter</h2>)");
           self->write_sort_options(rsp, "/boards", sort, local, sub);
           rsp->write(R"(</section><main>)");
@@ -1714,7 +1768,7 @@ namespace Ludwig {
             .banner_link = "/users",
           });
           rsp->write("<div>");
-          self->write_sidebar(rsp, m);
+          self->write_sidebar(rsp, m.login, m.site);
           rsp->write(R"(<section><h2 class="a11y">Sort and filter</h2>)");
           self->write_sort_options(rsp, "/users", sort, local, false);
           rsp->write(R"(</section><main>)");
@@ -1751,13 +1805,13 @@ namespace Ludwig {
         } else {
           self->write_html_header(rsp, m, {
             .canonical_path = req->getUrl(),
-            .banner_title = display_name(board.board()),
+            .banner_title = self->display_name_as_text(board.board()),
             .banner_link = req->getUrl(),
             .banner_image = board.board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board.board().name()->string_view())) : nullopt,
             .card_image = board.board().icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board.board().name()->string_view())) : nullopt
           });
           rsp->write("<div>");
-          self->write_sidebar(rsp, m, {board});
+          self->write_sidebar(rsp, m.login, board);
           rsp->write(R"(<section><h2 class="a11y">Sort and filter</h2>)");
           self->write_sort_options(rsp, req->getUrl(), sort, show_threads, show_images);
           rsp->write(R"(</section><main>)");
@@ -1782,7 +1836,7 @@ namespace Ludwig {
         // ---
         self->write_html_header(rsp, m, {
           .canonical_path = fmt::format("/b/{}/create_thread", board.board().name()->string_view()),
-          .banner_title = display_name(board.board()),
+          .banner_title = self->display_name_as_text(board.board()),
           .banner_link = fmt::format("/b/{}", board.board().name()->string_view()),
           .banner_image = board.board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board.board().name()->string_view())) : nullopt,
           .page_title = "Create Thread",
@@ -1815,13 +1869,13 @@ namespace Ludwig {
         } else {
           self->write_html_header(rsp, m, {
             .canonical_path = req->getUrl(),
-            .banner_title = display_name(user.user()),
+            .banner_title = self->display_name_as_text(user.user()),
             .banner_link = req->getUrl(),
             .banner_image = user.user().banner_url() ? optional(fmt::format("/media/user/{}/banner.webp", user.user().name()->string_view())) : nullopt,
             .card_image = user.user().avatar_url() ? optional(fmt::format("/media/user/{}/avatar.webp", user.user().name()->string_view())) : nullopt
           });
           rsp->write("<div>");
-          self->write_sidebar(rsp, m);
+          self->write_sidebar(rsp, m.login, user);
           rsp->write(R"(<section><h2 class="a11y">Sort and filter</h2>)");
           self->write_sort_options(rsp, req->getUrl(), sort, show_threads, show_images);
           rsp->write(R"(</section><main>)");
@@ -1855,13 +1909,13 @@ namespace Ludwig {
         } else {
           self->write_html_header(rsp, m, {
             .canonical_path = req->getUrl(),
-            .banner_title = display_name(board.board()),
+            .banner_title = self->display_name_as_text(board.board()),
             .banner_link = fmt::format("/b/{}", board.board().name()->string_view()),
             .banner_image = board.board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board.board().name()->string_view())) : nullopt,
             .card_image = board.board().icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board.board().name()->string_view())) : nullopt
           });
           rsp->write("<div>");
-          self->write_sidebar(rsp, m, board);
+          self->write_sidebar(rsp, m.login, board);
           rsp->write("<main>");
           self->write_thread_view(rsp, detail, comments, m.site, m.login, sort, show_images);
           rsp->write("</main></div>");
@@ -1877,7 +1931,7 @@ namespace Ludwig {
         // ---
         self->write_html_header(rsp, m, {
           .canonical_path = req->getUrl(),
-          .banner_title = display_name(thread.board()),
+          .banner_title = self->display_name_as_text(thread.board()),
           .banner_link = fmt::format("/b/{}", thread.board().name()->string_view()),
           .banner_image = thread.board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", thread.board().name()->string_view())) : nullopt,
         });
@@ -1902,13 +1956,13 @@ namespace Ludwig {
         } else {
           self->write_html_header(rsp, m, {
             .canonical_path = req->getUrl(),
-            .banner_title = display_name(board.board()),
+            .banner_title = self->display_name_as_text(board.board()),
             .banner_link = fmt::format("/b/{}", board.board().name()->string_view()),
             .banner_image = board.board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board.board().name()->string_view())) : nullopt,
             .card_image = board.board().icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board.board().name()->string_view())) : nullopt
           });
           rsp->write("<div>");
-          self->write_sidebar(rsp, m, board);
+          self->write_sidebar(rsp, m.login, board);
           rsp->write("<main>");
           self->write_comment_view(rsp, detail, comments, m.site, m.login, sort, show_images);
           rsp->write("</main></div>");
@@ -1932,13 +1986,28 @@ namespace Ludwig {
               .banner_title = "Search",
             });
             rsp->write("<div>");
-            self->write_sidebar(rsp, *m);
+            self->write_sidebar(rsp, m->login, m->site);
             rsp->write("<main>");
             self->write_search_result_list(rsp, results, m->login, true);
             rsp->write("</main></div>");
             end_with_html_footer(rsp, *m);
           });
         });
+      })
+      .get("/create_board", [self](auto* rsp, auto*, Meta& m) {
+        auto txn = self->controller->open_read_txn();
+        const auto& login = m.require_login(self, txn);
+        if (!self->controller->can_create_board(login)) {
+          throw ApiError("User cannot create boards", 403);
+        }
+        self->write_html_header(rsp, m, {
+          .canonical_path = "/create_board",
+          .banner_title = "Create Board",
+        });
+        rsp->write("<main>");
+        self->write_create_board_form(rsp, login);
+        rsp->write("</main>");
+        end_with_html_footer(rsp, m);
       })
       .get("/login", [self](auto* rsp, auto*, Meta& m) {
         auto txn = self->controller->open_read_txn();
@@ -1995,7 +2064,7 @@ namespace Ludwig {
         // --
         self->write_html_header(rsp, m, {
           .canonical_path = fmt::format("/b/{}/settings", board.board().name()->string_view()),
-          .banner_title = display_name(board.board()),
+          .banner_title = self->display_name_as_text(board.board()),
           .banner_link = fmt::format("/b/{}", board.board().name()->string_view()),
           .banner_image = board.board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board.board().name()->string_view())) : nullopt,
           .page_title = "Board Settings",
@@ -2443,19 +2512,22 @@ namespace Ludwig {
 
   template <bool SSL> auto webapp_routes(
     uWS::TemplatedApp<SSL>& app,
-    shared_ptr<InstanceController> controller
+    shared_ptr<InstanceController> controller,
+    shared_ptr<RichTextParser> rt
   ) -> void {
-    auto router = std::make_shared<Webapp<SSL>>(controller);
+    auto router = std::make_shared<Webapp<SSL>>(controller, rt);
     router->register_routes(app);
   }
 
   template auto webapp_routes<true>(
     uWS::TemplatedApp<true>& app,
-    shared_ptr<InstanceController> controller
+    shared_ptr<InstanceController> controller,
+    shared_ptr<RichTextParser> rt
   ) -> void;
 
   template auto webapp_routes<false>(
     uWS::TemplatedApp<false>& app,
-    shared_ptr<InstanceController> controller
+    shared_ptr<InstanceController> controller,
+    shared_ptr<RichTextParser> rt
   ) -> void;
 }

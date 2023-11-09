@@ -31,6 +31,72 @@ enum UserSortType : ubyte { New, Old, MostPosts, NewPosts }
 
 enum ModState : ubyte { Visible, Flagged, Locked, Removed }
 
+union TextBlock {
+  P: TextSpans,
+  H1: TextSpans,
+  H2: TextSpans,
+  H3: TextSpans,
+  H4: TextSpans,
+  H5: TextSpans,
+  H6: TextSpans,
+  Blockquote: TextBlocks,
+  Code: TextCodeBlock,
+  Math: string,
+  Image: TextImage,
+  Hr: FbVoid,
+  UnorderedList: TextList,
+  OrderedList: TextList
+}
+
+union TextSpan {
+  Plain: string,
+  Code: string,
+  Math: string,
+  Bold: TextSpans,
+  Italic: TextSpans,
+  Strikeout: TextSpans,
+  Spoiler: TextSpans,
+  Link: TextLink,
+  SoftBreak: FbVoid,
+  HardBreak: FbVoid,
+  CustomEmoji: string
+}
+
+union PlainTextWithEmojis {
+  Plain: string,
+  CustomEmoji: string
+}
+
+table FbVoid {}
+
+table TextBlocks {
+  blocks: [TextBlock] (required);
+}
+
+table TextSpans {
+  spans: [TextSpan] (required);
+}
+
+table TextList {
+  items: [TextBlocks] (required);
+}
+
+table TextCodeBlock {
+  text: string (required);
+  language: string;
+}
+
+table TextLink {
+  href: string (required);
+  title: string;
+  spans: [TextSpan] (required);
+}
+
+table TextImage {
+  src: string (required);
+  alt: string;
+}
+
 table Session {
   user: uint64;
   ip: string;
@@ -42,9 +108,9 @@ table Session {
 
 table User {
   name: string (required);
-  display_name: string;
+  display_name: [PlainTextWithEmojis];
   bio_raw: string;
-  bio_safe: string;
+  bio: [TextBlock];
   actor_id: string;
   inbox_url: string;
   instance: uint64 = null;
@@ -112,14 +178,14 @@ table Application {
 
 table Board {
   name: string (required);
-  display_name: string;
+  display_name: [PlainTextWithEmojis];
   actor_id: string;
   inbox_url: string;
   instance: uint64 = null;
   created_at: uint64;
   updated_at: uint64 = null;
   description_raw: string;
-  description_safe: string;
+  description: [TextBlock];
   icon_url: string;
   banner_url: string;
   content_warning: string;
@@ -166,7 +232,7 @@ table Thread {
   original_post_url: string;
   content_url: string;
   content_text_raw: string;
-  content_text_safe: string;
+  content_text: [TextBlock];
   content_warning: string;
   mod_state: ModState = Visible;
   mod_reason: string;
@@ -192,7 +258,7 @@ table Comment {
   activity_url: string;
   original_post_url: string;
   content_raw: string;
-  content_safe: string (required);
+  content: [TextBlock] (required);
   content_warning: string;
   mod_state: ModState = Visible;
   mod_reason: string;
@@ -202,7 +268,7 @@ table LinkCard {
   fetch_complete: bool = false;
   fetch_tries: ubyte = 0;
   last_fetch_at: uint64 = null;
-  media_category: MediaCategory = null; 
+  media_category: MediaCategory = null;
   title: string;
   description: string;
   image_url: string;
@@ -253,4 +319,39 @@ table Invite {
   from: uint64;
   accepted_at: uint64 = null;
   to: uint64 = null;
+}
+
+table SettingRecord {
+  key: string (required);
+  value_int: uint64 = null;
+  value_str: string;
+}
+
+table VoteRecord {
+  post: uint64;
+  vote: Vote;
+}
+
+table SubscriptionRecord {
+  board: uint64;
+}
+
+enum DumpType : ubyte {
+  User,
+  LocalUser,
+  Board,
+  LocalBoard,
+  Thread,
+  Comment,
+  Application,
+  Invite,
+  SettingRecord,
+  VoteRecord,
+  SubscriptionRecord
+}
+
+table Dump {
+  id: uint64;
+  type: DumpType;
+  data: [ubyte]; // nested flatbuffer, type is determined by `type`
 }

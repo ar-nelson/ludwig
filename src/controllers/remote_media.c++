@@ -4,8 +4,8 @@
 #include <static_vector.hpp>
 #include "util/lambda_macros.h++"
 
-using std::make_shared, std::optional, std::pair, std::runtime_error,
-    std::shared_ptr, std::string, std::string_view,
+using std::make_shared, std::optional, std::pair, std::regex, std::regex_match,
+    std::runtime_error, std::shared_ptr, std::string, std::string_view,
     flatbuffers::FlatBufferBuilder;
 
 namespace Ludwig {
@@ -77,38 +77,37 @@ namespace Ludwig {
     cb(make_shared<optional<pair<string, uint64_t>>>());
   }
 
-  const std::regex ws("^\\s*$");
-  const std::regex bad_extensions("^.*[.](svgz?|avif|heif|tiff|jxl)$", std::regex::icase);
+  const regex ws("^\\s*$");
+  const regex bad_extensions("^.*[.](svgz?|avif|heif|tiff|jxl)$", regex::icase);
 
   struct PrioritizedLinkCardBuilder {
     const string& url;
     optional<MediaCategory> media_category;
     optional<string> title, description, image_url;
-    uint8_t priority_title, priority_description, priority_image_url;
+    uint8_t priority_title = 0, priority_description = 0, priority_image_url = 0;
 
-    inline auto set_title(const xmlChar* xstr, uint8_t priority) noexcept {
-      if (xstr != nullptr && priority_title < priority) {
-        const auto str = string((char*)xstr);
-        if (std::regex_match(str, ws)) return;
+    PrioritizedLinkCardBuilder(const string& url) : url(url) {}
+
+    inline auto set_title(string str, uint8_t priority) noexcept {
+      if (!str.empty() && priority_title < priority) {
+        if (regex_match(str, ws)) return;
         title = str;
         priority_title = priority;
       }
     }
 
-    inline auto set_description(const xmlChar* xstr, uint8_t priority) noexcept {
-      if (xstr != nullptr && priority_description < priority) {
-        const auto str = string((char*)xstr);
-        if (std::regex_match(str, ws)) return;
+    inline auto set_description(string str, uint8_t priority) noexcept {
+      if (!str.empty() && priority_description < priority) {
+        if (regex_match(str, ws)) return;
         description = str;
         priority_description = priority;
       }
     }
 
-    inline auto set_image_url(const xmlChar* xstr, uint8_t priority) noexcept {
-      if (xstr != nullptr && priority_image_url < priority) {
-        auto str = string((char*)xstr);
+    inline auto set_image_url(string str, uint8_t priority) noexcept {
+      if (!str.empty() && priority_image_url < priority) {
         // Skip images with extensions we know we can't handle
-        if (std::regex_match(str, bad_extensions)) return;
+        if (regex_match(str, bad_extensions)) return;
         // Fix relative URLs
         if (str.starts_with("/")) {
           auto base_url = Url::parse(url);
@@ -133,7 +132,7 @@ namespace Ludwig {
         description.transform(λx(x.c_str())).value_or(nullptr),
         image_url.transform(λx(x.c_str())).value_or(nullptr)
       ));
-      txn.set_link_card(url, fbb);
+      txn.set_link_card(url, fbb.GetBufferSpan());
     }
   };
 
@@ -142,89 +141,70 @@ namespace Ludwig {
     return !strcmp(lhs, (char*)rhs);
   }
 
-  static inline auto html_element_to_link_card(const xmlNode* node, PrioritizedLinkCardBuilder& card, bool is_main) noexcept -> bool {
+  static inline auto html_element_to_link_card(
+    HtmlDoc& doc,
+    xmlNodePtr node,
+    PrioritizedLinkCardBuilder& card,
+    xmlNodePtr& main
+  ) noexcept -> void {
     const auto tag_name = node->name;
 
     if (str_eq("meta", tag_name)) {
-      auto name = xmlGetProp(node, (xmlChar*)"property");
-      if (name == nullptr) name = xmlGetProp(node, (xmlChar*)"name");
-      if (str_eq("og:title", name)) {
-        card.set_title(xmlGetProp(node, (xmlChar*)"content"), 5);
-      } else if (str_eq("og:description", name)) {
-        card.set_description(xmlGetProp(node, (xmlChar*)"content"), 5);
-      } else if (str_eq("og:image", name)) {
-        card.set_image_url(xmlGetProp(node, (xmlChar*)"content"), 5);
-      } else if (str_eq("twitter:title", name)) {
-        card.set_title(xmlGetProp(node, (xmlChar*)"content"), 4);
-      } else if (str_eq("twitter:description", name)) {
-        card.set_description(xmlGetProp(node, (xmlChar*)"content"), 4);
-      } else if (str_eq("twitter:image", name)) {
-        card.set_image_url(xmlGetProp(node, (xmlChar*)"content"), 4);
-      } else if (str_eq("description", name)) {
-        card.set_description(xmlGetProp(node, (xmlChar*)"content"), 3);
-      }
-    } else if (str_eq("title", tag_name)) {
-      auto* content = xmlNodeGetContent(node);
-      card.set_title(content, 2);
-      if (content != nullptr) xmlFree(content);
-    } else if (str_eq("main", tag_name)) {
-      return true;
-    } else if (is_main && str_eq("p", tag_name)) {
-      auto* content = xmlNodeGetContent(node);
-      card.set_description(content, 1);
-      if (content != nullptr) xmlFree(content);
-    } else if (str_eq("img", tag_name)) {
-      const auto width = xmlGetProp(node, (xmlChar*)"width");
+      auto name = doc.attr(node, "property");
+      if (name.empty()) name = doc.attr(node, "name");
+      if (name == "og:title") card.set_title(doc.attr(node, "content"), 5);
+      else if (name == "og:description") card.set_description(doc.attr(node, "content"), 5);
+      else if (name == "og:image") card.set_image_url(doc.attr(node, "content"), 5);
+      else if (name == "twitter:title") card.set_title(doc.attr(node, "content"), 4);
+      else if (name == "twitter:description") card.set_description(doc.attr(node, "content"), 4);
+      else if (name == "twitter:image") card.set_image_url(doc.attr(node, "content"), 4);
+      else if (name == "description") card.set_description(doc.attr(node, "content"), 3);
+    }
+    else if (str_eq("title", tag_name)) card.set_title(doc.text_content(node), 2);
+    else if (main == nullptr && str_eq("main", tag_name)) main = node;
+    else if (main != nullptr && str_eq("p", tag_name)) card.set_description(doc.text_content(node), 1);
+    else if (str_eq("img", tag_name)) {
+      const auto width = doc.attr(node, "width");
       // Ignore images with a fixed with <64px, these are usually icons
-      if (width == nullptr || atoi((char*)width) >= 64) {
-        card.set_image_url(xmlGetProp(node, (xmlChar*)"src"), is_main ? 2 : 1);
+      if (width.empty() || atoi(width.c_str()) >= 64) {
+        card.set_image_url(doc.text_content(node), main == nullptr ? 1 : 2);
       }
     } else if (strlen((char*)tag_name) == 2 && tag_name[0] == 'h' && tag_name[1] >= '1' && tag_name[1] <= 6) {
-      auto* content = xmlNodeGetContent(node);
-      card.set_title(content, is_main ? 3 : 1);
-      if (content != nullptr) xmlFree(content);
+      card.set_title(doc.text_content(node), main == nullptr ? 1 : 3);
     }
 
-    return str_eq("main", xmlGetProp(node, (xmlChar*)"role"));
+    if (main == nullptr && doc.attr(node, "role") == "main") main = node;
   }
 
-  static inline auto html_to_link_card(string_view html_src, string url, PrioritizedLinkCardBuilder& card) noexcept -> bool {
-    auto* doc = htmlReadMemory(
-      html_src.data(), (int)html_src.size(), url.c_str(), "utf-8",
-      HTML_PARSE_NOBLANKS | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET
-    );
-    if (doc == nullptr) {
-      spdlog::debug("Failed to parse HTML at {}", url);
-      return false;
-    }
-    stlpb::static_vector<const xmlNode*, 64> stack { xmlDocGetRootElement(doc) };
-    uint8_t main_depth = 255;
-    while (!stack.empty()) {
-      bool is_main = stack.size() > main_depth;
-      if (!is_main) main_depth = 255;
-      const auto last = std::prev(stack.end());
-      const auto* node = *last;
-      if (node == nullptr) {
-        stack.erase(last);
-        continue;
-      } else if (node->next == nullptr) {
-        stack.erase(last);
-      } else {
-        *last = node->next;
-      }
-      if (node->type == XML_ELEMENT_NODE) {
-        if (html_element_to_link_card(node, card, is_main)) {
-          main_depth = std::min(main_depth, (uint8_t)stack.size());
+  static inline auto next_node(xmlNodePtr node, xmlNodePtr& main) -> xmlNodePtr {
+    if (node == nullptr) return nullptr;
+    if (auto child = node->children) return child;
+    do {
+      if (node == main) main = nullptr;
+      if (auto next = xmlNextElementSibling(node)) return next;
+    } while ((node = node->parent));
+    return nullptr;
+  }
+
+  static inline auto html_to_link_card(
+    std::shared_ptr<LibXmlContext> xml_ctx,
+    string_view html_src,
+    string url,
+    PrioritizedLinkCardBuilder& card
+  ) noexcept -> bool {
+    try {
+      HtmlDoc doc(xml_ctx, html_src.data(), html_src.size(), url.c_str());
+      xmlNodePtr main = nullptr;
+      for (xmlNodePtr node = doc.root(); node != nullptr; node = next_node(node, main)) {
+        if (node->type == XML_ELEMENT_NODE) {
+          html_element_to_link_card(doc, node, card, main);
         }
       }
-      // Stop descending once the stack overflows
-      // We shouldn't need anything too deep in the DOM for this metadata
-      if (node->children != nullptr && !stack.full()) {
-        stack.push_back(node->children);
-      }
+      return true;
+    } catch (const runtime_error& e) {
+      spdlog::debug("{}", e.what());
+      return false;
     }
-    xmlFreeDoc(doc);
-    return true;
   }
 
   auto RemoteMediaController::fetch_link_card_for_thread(uint64_t thread_id) -> void {
@@ -241,7 +221,7 @@ namespace Ludwig {
         card.fetch_tries() + 1,
         now_s()
       ));
-      txn.set_link_card(url, fbb);
+      txn.set_link_card(url, fbb.GetBufferSpan());
       txn.commit();
     } catch (const runtime_error& e) {
       spdlog::warn("Failed to set up link card fetch for thread {:x}: {}", thread_id, e.what());
@@ -249,7 +229,7 @@ namespace Ludwig {
     }
     http_client->get(url)
       .header("Accept", "text/html, application/xhtml+xml, image/ *")
-      .dispatch([this, url, thread_id](shared_ptr<const HttpClientResponse> rsp) {
+      .dispatch([this, url, thread_id](auto&& rsp) {
         if (rsp->status() != 200) {
           spdlog::warn("Preview card failed: got HTTP {} from {}", rsp->status(), url);
           return;
@@ -262,7 +242,7 @@ namespace Ludwig {
             card.image_url = url;
           }
         } else {
-          html_to_link_card(rsp->body(), url, card);
+          html_to_link_card(xml_ctx, rsp->body(), url, card);
         }
         spdlog::debug(
           R"(Fetched card for {}: title "{}", description "{}", image "{}")",

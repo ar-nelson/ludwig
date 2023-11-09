@@ -1,18 +1,45 @@
 // A Deno script to generate a Ludwig database dump with a huge amount of
 // realistic mock data.
 
+import {
+  Board,
+  Comment,
+  CommentSortType,
+  Dump,
+  DumpType,
+  Hash,
+  LocalBoard,
+  LocalUser,
+  ModState,
+  PlainTextWithEmojis,
+  Salt,
+  SettingRecord,
+  SortType,
+  TextBlock,
+  TextSpan,
+  TextSpans,
+  Thread,
+  User,
+  Vote,
+  VoteRecord,
+} from "./flatbuffers/ludwig.ts";
 import { faker } from "npm:@faker-js/faker";
-import { decode as hexDecode } from "https://deno.land/std/encoding/hex.ts";
-import { encode as base64Encode } from "https://deno.land/std/encoding/base64.ts";
+import {
+  Foras,
+  GzEncoder,
+} from "https://deno.land/x/denoflate@v2.1.4/src/deno/mod.ts";
 import { pbkdf2Sync } from "node:crypto";
+import * as flatbuffers from "npm:flatbuffers";
+
+await Foras.initBundledOnce();
 
 const PASSWORD_SALT = new TextEncoder().encode("0123456789abcdef");
 
 const SCALE = 100;
-let nextId = 0;
+let nextId = 0n;
 let ludwigDomain = "localhost:2023";
 
-function genInstance(): { id: number; domain: string } {
+function genInstance(): { id: bigint; domain: string } {
   return { id: nextId++, domain: `${faker.internet.domainWord()}.test` };
 }
 
@@ -48,319 +75,349 @@ function genWikipediaLink(): { url: string; title: string } {
 
 function genUser(
   baseName: string,
-  instance?: { id: number; domain: string },
-): { id: number; user: User } {
-  return {
-    id: nextId++,
-    user: {
-      name: instance ? `${baseName}@${instance.domain}` : baseName,
-      display_name: faker.helpers.maybe(() => faker.person.fullName(), {
-        probability: 0.5,
-      }),
-      bio_safe: faker.helpers.maybe(() => faker.person.bio(), {
-        probability: 0.75,
-      }),
-      actor_id: instance && `https://${instance.domain}/ap/actor/${baseName}`,
-      inbox_url: instance &&
-        `https://${instance.domain}/ap/actor/${baseName}/inbox`,
-      instance: instance?.id,
-      created_at: Math.floor(faker.date.past().valueOf() / 1000),
-      avatar_url: faker.helpers.maybe(
-        () => genImageUrl(faker.number.int({ min: 32, max: 512 })),
-        { probability: 0.75 },
+  instance?: { id: bigint; domain: string },
+): { id: bigint; data: Uint8Array } {
+  const fbb = new flatbuffers.Builder(),
+    id = nextId++,
+    displayName = faker.helpers.maybe(() => faker.person.fullName(), {
+      probability: 0.5,
+    }),
+    bio = faker.helpers.maybe(() => faker.person.bio(), {
+      probability: 0.75,
+    }),
+    avatar = faker.helpers.maybe(
+      () =>
+        genImageUrl(
+          faker.number.int({ min: 32, max: 512 }),
+          undefined,
+          faker.word.noun(),
+        ),
+      { probability: 0.75 },
+    ),
+    banner = faker.helpers.maybe(() => {
+      const w = faker.number.int({ min: 320, max: 1920 }),
+        h = faker.number.int({ min: 100, max: Math.min(w, 720) });
+      return genImageUrl(w, h, faker.word.noun());
+    }, { probability: 0.5 });
+  fbb.finish(
+    User.createUser(
+      fbb,
+      fbb.createString(
+        instance ? `${baseName}@${instance.domain}` : baseName,
       ),
-      banner_url: faker.helpers.maybe(() => {
-        const w = faker.number.int({ min: 320, max: 1920 }),
-          h = faker.number.int({ min: 100, max: Math.min(w, 720) });
-        return genImageUrl(w, h);
-      }, { probability: 0.5 }),
-      bot: faker.datatype.boolean(0.05),
-      mod_state: faker.helpers.maybe(() => faker.helpers.enumValue(ModState), {
+      User.createDisplayNameTypeVector(
+        fbb,
+        displayName ? [PlainTextWithEmojis.Plain] : [],
+      ),
+      User.createDisplayNameVector(
+        fbb,
+        displayName ? [fbb.createString(displayName)] : [],
+      ),
+      bio ? fbb.createSharedString(bio) : 0,
+      User.createBioTypeVector(fbb, bio ? [TextBlock.P] : []),
+      User.createBioVector(
+        fbb,
+        bio
+          ? [TextSpans.createTextSpans(
+            fbb,
+            TextSpans.createSpansTypeVector(fbb, [TextSpan.Plain]),
+            TextSpans.createSpansVector(fbb, [fbb.createSharedString(bio)]),
+          )]
+          : [],
+      ),
+      instance
+        ? fbb.createString(`https://${instance.domain}/ap/actor/${baseName}`)
+        : 0,
+      instance
+        ? fbb.createString(
+          `https://${instance.domain}/ap/actor/${baseName}/inbox`,
+        )
+        : 0,
+      instance ? instance.id : null,
+      BigInt(faker.date.past().valueOf()) / 1000n,
+      null,
+      null,
+      avatar ? fbb.createString(avatar) : 0,
+      banner ? fbb.createString(banner) : 0,
+      faker.datatype.boolean(0.05),
+      faker.helpers.maybe(() => faker.helpers.enumValue(ModState), {
         probability: 0.05,
-      }),
-    },
-  };
+      }) ?? ModState.Visible,
+      0,
+    ),
+  );
+  return { id, data: fbb.asUint8Array() };
 }
 
 function genLocalUser(
   baseName: string,
   isAdmin = false,
   password = faker.internet.password({ length: 8 }),
-): { id: number; user: User; localUser: LocalUser } {
-  const { id, user } = genUser(baseName);
-  const password_hash = pbkdf2Sync(
-    password,
-    PASSWORD_SALT,
-    600000,
-    32,
-    "sha256",
-  );
+): Uint8Array {
+  const fbb = new flatbuffers.Builder(),
+    hash = pbkdf2Sync(
+      password,
+      PASSWORD_SALT,
+      600000,
+      32,
+      "sha256",
+    );
   if (isAdmin) console.warn(`User: ${baseName}, Pass: ${password}`);
-  return {
-    id,
-    user,
-    localUser: {
-      email: faker.internet.email(),
-      password_hash: { bytes: [...password_hash] },
-      password_salt: { bytes: [...PASSWORD_SALT] },
-      approved: true,
-      show_avatars: faker.datatype.boolean(0.8),
-      show_karma: faker.datatype.boolean(0.8),
-      hide_cw_posts: faker.datatype.boolean(0.5),
-      admin: isAdmin,
-    },
-  };
+  const email = fbb.createString(faker.internet.email());
+  LocalUser.startLocalUser(fbb);
+  LocalUser.addEmail(fbb, email);
+  LocalUser.addPasswordHash(fbb, Hash.createHash(fbb, [...hash]));
+  LocalUser.addPasswordSalt(fbb, Salt.createSalt(fbb, [...PASSWORD_SALT]));
+  LocalUser.addApproved(fbb, true);
+  LocalUser.addShowAvatars(fbb, isAdmin || faker.datatype.boolean(0.8));
+  LocalUser.addShowKarma(fbb, isAdmin || faker.datatype.boolean(0.8));
+  LocalUser.addHideCwPosts(fbb, !isAdmin && faker.datatype.boolean(0.5));
+  LocalUser.addAdmin(fbb, isAdmin);
+  fbb.finish(LocalUser.endLocalUser(fbb));
+  return fbb.asUint8Array();
 }
 
 function genBoard(
   baseName: string,
-  instance?: { id: number; domain: string },
-): { id: number; board: Board } {
-  return {
-    id: nextId++,
-    board: {
-      name: instance ? `${baseName}@${instance.domain}` : baseName,
-      display_name: faker.helpers.maybe(
-        () => baseName[0].toUpperCase() + baseName.slice(1),
-        { probability: 0.75 },
+  instance?: { id: bigint; domain: string },
+): { id: bigint; data: Uint8Array } {
+  const fbb = new flatbuffers.Builder(),
+    id = nextId++,
+    displayName = faker.helpers.maybe(
+      () => baseName[0].toUpperCase() + baseName.slice(1),
+      { probability: 0.75 },
+    ),
+    description = faker.helpers.maybe(
+      () => faker.lorem.paragraphs({ min: 1, max: 3 }),
+      { probability: 0.75 },
+    ),
+    icon = faker.helpers.maybe(
+      () =>
+        genImageUrl(
+          faker.number.int({ min: 32, max: 512 }),
+          undefined,
+          baseName,
+        ),
+      { probability: 0.75 },
+    ),
+    banner = faker.helpers.maybe(() => {
+      const w = faker.number.int({ min: 320, max: 1920 }),
+        h = faker.number.int({ min: 100, max: Math.min(w, 720) });
+      return genImageUrl(w, h, baseName);
+    }, { probability: 0.5 });
+  fbb.finish(
+    Board.createBoard(
+      fbb,
+      fbb.createString(
+        instance ? `${baseName}@${instance.domain}` : baseName,
       ),
-      actor_id: instance && `https://${instance.domain}/ap/actor/${baseName}`,
-      inbox_url: instance &&
-        `https://${instance.domain}/ap/actor/${baseName}/inbox`,
-      instance: instance?.id,
-      created_at: Math.floor(faker.date.past().valueOf() / 1000),
-      description_safe: faker.helpers.maybe(
-        () => faker.lorem.paragraphs({ min: 1, max: 3 }),
-        { probability: 0.75 },
+      Board.createDisplayNameTypeVector(
+        fbb,
+        displayName ? [PlainTextWithEmojis.Plain] : [],
       ),
-      icon_url: faker.helpers.maybe(
-        () =>
-          genImageUrl(
-            faker.number.int({ min: 32, max: 512 }),
-            undefined,
-            baseName,
-          ),
-        { probability: 0.75 },
+      Board.createDisplayNameVector(
+        fbb,
+        displayName ? [fbb.createString(displayName)] : [],
       ),
-      banner_url: faker.helpers.maybe(() => {
-        const w = faker.number.int({ min: 320, max: 1920 }),
-          h = faker.number.int({ min: 100, max: Math.min(w, 720) });
-        return genImageUrl(w, h, baseName);
-      }, { probability: 0.5 }),
-      content_warning: faker.datatype.boolean(0.1)
-        ? faker.company.catchPhrase()
-        : undefined,
-    },
-  };
+      instance
+        ? fbb.createString(`https://${instance.domain}/ap/actor/${baseName}`)
+        : 0,
+      instance
+        ? fbb.createString(
+          `https://${instance.domain}/ap/actor/${baseName}/inbox`,
+        )
+        : 0,
+      instance ? instance.id : null,
+      BigInt(faker.date.past().valueOf()) / 1000n,
+      null,
+      description ? fbb.createSharedString(description) : 0,
+      Board.createDescriptionTypeVector(
+        fbb,
+        description ? [TextBlock.P] : [],
+      ),
+      Board.createDescriptionVector(
+        fbb,
+        description
+          ? [TextSpans.createTextSpans(
+            fbb,
+            TextSpans.createSpansTypeVector(fbb, [TextSpan.Plain]),
+            TextSpans.createSpansVector(fbb, [
+              fbb.createSharedString(description),
+            ]),
+          )]
+          : [],
+      ),
+      icon ? fbb.createString(icon) : 0,
+      banner ? fbb.createString(banner) : 0,
+      faker.datatype.boolean(0.1)
+        ? fbb.createString(faker.company.catchPhrase())
+        : 0,
+      false,
+      false,
+      true,
+      true,
+      SortType.Active,
+      CommentSortType.Hot,
+      faker.helpers.maybe(() => faker.helpers.enumValue(ModState), {
+        probability: 0.05,
+      }) ?? ModState.Visible,
+      0,
+    ),
+  );
+  return { id, data: fbb.asUint8Array() };
 }
 
-function genLocalBoard(
-  baseName: string,
-  owner: number,
-): { id: number; board: Board; localBoard: LocalBoard } {
-  const { id, board } = genBoard(baseName);
-  return { id, board, localBoard: { owner } };
+function genLocalBoard(owner: bigint): Uint8Array {
+  const fbb = new flatbuffers.Builder();
+  fbb.finish(
+    LocalBoard.createLocalBoard(fbb, owner, false, false, false, false),
+  );
+  return fbb.asUint8Array();
 }
 
 function genThread(
   date: Date,
-  author: number,
-  board: number,
-  instance?: { id: number; domain: string },
-): { id: number; thread: Thread } {
+  author: bigint,
+  board: bigint,
+  instance?: { id: bigint; domain: string },
+): { id: bigint; data: Uint8Array } {
   let title: string,
     content_url: string | undefined,
-    content_text_safe: string | undefined;
+    content_text: string[] = [];
   if (faker.datatype.boolean(0.7)) {
     const link = genWikipediaLink();
     title = link.title;
     content_url = link.url;
     if (faker.datatype.boolean(0.25)) {
-      content_text_safe = faker.lorem.paragraph({ min: 1, max: 3 });
+      content_text = faker.lorem.paragraph({ min: 1, max: 3 }).split("\n\n");
     }
   } else {
     title = faker.hacker.phrase();
-    content_text_safe = faker.lorem.paragraphs({ min: 1, max: 5 });
+    content_text = faker.lorem.paragraphs({ min: 1, max: 5 }).split("\n\n");
   }
-  const id = nextId++;
-  return {
-    id,
-    thread: {
+  const fbb = new flatbuffers.Builder(),
+    id = nextId++;
+  fbb.finish(
+    Thread.createThread(
+      fbb,
       author,
       board,
-      title,
-      created_at: Math.floor(date.valueOf() / 1000),
-      updated_at: faker.helpers.maybe(
+      fbb.createString(title),
+      BigInt(date.valueOf()) / 1000n,
+      faker.helpers.maybe(
         () =>
-          Math.floor(
-            faker.date.between({ from: date, to: Date() }).valueOf() / 1000,
-          ),
+          BigInt(
+            faker.date.between({ from: date, to: Date() }).valueOf(),
+          ) / 1000n,
         { probability: 0.1 },
+      ) ?? null,
+      instance ? instance.id : null,
+      instance
+        ? fbb.createString(
+          `https://${instance.domain}/ap/activity/${id.toString(16)}`,
+        )
+        : 0,
+      fbb.createString(
+        `https://${instance ? instance.domain : ludwigDomain}/post/${
+          id.toString(16)
+        }`,
       ),
-      instance: instance?.id,
-      activity_url: instance &&
-        `https://${instance.domain}/ap/activity/${id.toString(16)}`,
-      original_post_url: `https://${
-        instance ? instance.domain : ludwigDomain
-      }/post/${id.toString(16)}`,
-      content_url,
-      content_text_safe,
-      content_warning: faker.datatype.boolean(0.05)
-        ? faker.company.catchPhrase()
-        : undefined,
-      mod_state: faker.helpers.maybe(() => faker.helpers.enumValue(ModState), {
+      content_url ? fbb.createString(content_url) : 0,
+      content_text ? fbb.createString(content_text.join("\n\n")) : 0,
+      Thread.createContentTextTypeVector(
+        fbb,
+        content_text.map(() => TextBlock.P),
+      ),
+      Thread.createContentTextVector(
+        fbb,
+        content_text.map((t) =>
+          TextSpans.createTextSpans(
+            fbb,
+            TextSpans.createSpansTypeVector(fbb, [TextSpan.Plain]),
+            TextSpans.createSpansVector(fbb, [fbb.createString(t)]),
+          )
+        ),
+      ),
+      faker.datatype.boolean(0.05)
+        ? fbb.createString(faker.company.catchPhrase())
+        : 0,
+      faker.helpers.maybe(() => faker.helpers.enumValue(ModState), {
         probability: 0.05,
-      }),
-    },
-  };
+      }) ?? ModState.Visible,
+      0,
+    ),
+  );
+  return { id, data: fbb.asUint8Array() };
 }
 
 function genComment(
-  parent: number,
+  parent: bigint,
   date: Date,
-  author: number,
-  thread: number,
-  instance?: { id: number; domain: string },
-): { id: number; comment: Comment } {
-  const id = nextId++;
-  return {
-    id,
-    comment: {
+  author: bigint,
+  thread: bigint,
+  instance?: { id: bigint; domain: string },
+): { id: bigint; data: Uint8Array } {
+  const fbb = new flatbuffers.Builder(),
+    id = nextId++,
+    contentRaw = faker.lorem
+      [faker.datatype.boolean() ? "paragraph" : "paragraphs"]({
+        min: 1,
+        max: 5,
+      }),
+    content = contentRaw.split("\n\n");
+  fbb.finish(
+    Comment.createComment(
+      fbb,
       author,
       parent,
       thread,
-      created_at: Math.floor(date.valueOf() / 1000),
-      updated_at: faker.helpers.maybe(
+      BigInt(date.valueOf()) / 1000n,
+      faker.helpers.maybe(
         () =>
-          Math.floor(
-            faker.date.between({ from: date, to: Date() }).valueOf() / 1000,
-          ),
+          BigInt(
+            faker.date.between({ from: date, to: Date() }).valueOf(),
+          ) / 1000n,
         { probability: 0.1 },
+      ) ?? null,
+      instance ? instance.id : null,
+      instance
+        ? fbb.createString(
+          `https://${instance.domain}/ap/activity/${id.toString(16)}`,
+        )
+        : 0,
+      fbb.createString(
+        `https://${instance ? instance.domain : ludwigDomain}/post/${
+          id.toString(16)
+        }`,
       ),
-      instance: instance?.id,
-      activity_url: instance &&
-        `https://${instance.domain}/ap/activity/${id.toString(16)}`,
-      original_post_url: `https://${
-        instance ? instance.domain : ludwigDomain
-      }/post/${id.toString(16)}`,
-      content_safe: faker.lorem
-        [faker.datatype.boolean() ? "paragraph" : "paragraphs"]({
-          min: 1,
-          max: 5,
-        }),
-      mod_state: faker.helpers.maybe(() => faker.helpers.enumValue(ModState), {
+      fbb.createSharedString(contentRaw),
+      Comment.createContentTypeVector(
+        fbb,
+        content.map(() => TextBlock.P),
+      ),
+      Comment.createContentVector(
+        fbb,
+        content.map((t) =>
+          TextSpans.createTextSpans(
+            fbb,
+            TextSpans.createSpansTypeVector(fbb, [TextSpan.Plain]),
+            TextSpans.createSpansVector(fbb, [fbb.createString(t)]),
+          )
+        ),
+      ),
+      faker.datatype.boolean(0.05)
+        ? fbb.createString(faker.company.catchPhrase())
+        : 0,
+      faker.helpers.maybe(() => faker.helpers.enumValue(ModState), {
         probability: 0.05,
-      }),
-    },
-  };
+      }) ?? ModState.Visible,
+      0,
+    ),
+  );
+  return { id, data: fbb.asUint8Array() };
 }
 
-enum ModState {
-  Visible = 0,
-  Flagged = 1,
-  Locked = 2,
-  Removed = 3,
-}
-
-interface User {
-  name: string;
-  display_name?: string;
-  bio_raw?: string;
-  bio_safe?: string;
-  actor_id?: string;
-  inbox_url?: string;
-  instance?: number;
-  created_at: number;
-  updated_at?: number;
-  deleted_at?: number;
-  avatar_url?: string;
-  banner_url?: string;
-  bot?: boolean;
-  mod_state?: ModState;
-}
-
-interface LocalUser {
-  email?: string;
-  password_hash?: { bytes: number[] };
-  password_salt?: { bytes: number[] };
-  admin?: boolean;
-  approved?: boolean;
-  accepted_application?: boolean;
-  email_verified?: boolean;
-  open_links_in_new_tab?: boolean;
-  send_notifications_to_email?: boolean;
-  show_avatars?: boolean;
-  show_bot_accounts?: boolean;
-  show_new_post_notifs?: boolean;
-  hide_cw_posts?: boolean;
-  expand_cw_posts?: boolean;
-  expand_cw_images?: boolean;
-  show_read_posts?: boolean;
-  show_karma?: boolean;
-  interface_language?: string;
-  theme?: string;
-  default_listing_type?: number;
-  default_sort_type?: number;
-}
-
-interface Board {
-  name: string;
-  display_name?: string;
-  actor_id?: string;
-  inbox_url?: string;
-  instance?: number;
-  created_at: number;
-  updated_at?: number;
-  description_raw?: string;
-  description_safe?: string;
-  icon_url?: string;
-  banner_url?: string;
-  content_warning?: string;
-  restricted_posting?: boolean;
-  can_upvote?: boolean;
-  can_downvote?: boolean;
-  invite_only?: boolean;
-  mod_state?: ModState;
-}
-
-interface LocalBoard {
-  owner: number;
-  federated?: boolean;
-  private?: boolean;
-}
-
-interface Thread {
-  author: number;
-  board: number;
-  title: string;
-  created_at: number;
-  updated_at?: number;
-  instance?: number;
-  activity_url?: string;
-  original_post_url: string;
-  content_url?: string;
-  content_text_raw?: string;
-  content_text_safe?: string;
-  content_warning?: string;
-  mod_state?: ModState;
-}
-
-interface Comment {
-  author: number;
-  parent: number;
-  thread: number;
-  created_at: number;
-  updated_at?: number;
-  instance?: number;
-  activity_url?: string;
-  original_post_url: string;
-  content_raw?: string;
-  content_safe: string;
-  content_warning?: string;
-  mod_state?: ModState;
-}
-
-function genAll(scale = SCALE) {
+async function genAll(scale = SCALE) {
   const instances = faker.helpers.multiple(genInstance, {
       count: Math.ceil(2 + Math.log10(scale)),
     }),
@@ -372,138 +429,167 @@ function genAll(scale = SCALE) {
       faker.word.noun,
       Math.ceil(5 + Math.log10(scale)),
     ),
-    localUsers = [
-      genLocalUser("admin", true),
-      ...usernames.slice(0, scale).map((name) => genLocalUser(name)),
-    ],
-    users = [
-      ...localUsers,
-      ...usernames.slice(scale).map((name) =>
-        genUser(name, faker.helpers.arrayElement(instances))
-      ),
-    ],
+    localUsers: bigint[] = [],
+    users: { id: bigint; instance?: { id: bigint; domain: string } }[] = [],
     localBoardCount = faker.number.int({
       min: boardNames.length / 2,
       max: boardNames.length - 1,
     }),
-    localBoards = boardNames.slice(0, localBoardCount).map((name) =>
-      genLocalBoard(name, faker.helpers.arrayElement(localUsers).id)
-    ),
-    boards = [
-      ...localBoards,
-      ...boardNames.slice(localBoardCount).map((name) =>
-        genBoard(name, faker.helpers.arrayElement(instances))
-      ),
-    ],
+    localBoards: bigint[] = [],
+    boards: bigint[] = [],
     postDates = faker.date.betweens({
       from: faker.date.recent({ days: 14 }),
       to: Date(),
       count: scale * 100,
     }),
-    { threads, comments } = postDates.slice(scale).reduce(
-      ({ threads, comments }, date) => {
-        const user = faker.helpers.arrayElement(users);
-        const instance = instances.find((i) => i.id === user.user.instance);
-        if (faker.datatype.boolean()) {
-          return {
-            threads: [
-              ...threads,
-              genThread(
-                date,
-                user.id,
-                faker.helpers.arrayElement(boards).id,
-                instance,
-              ),
-            ],
-            comments,
-          };
-        } else {
-          const parent = faker.helpers.arrayElement([...threads, ...comments]);
-          return {
-            threads,
-            comments: [
-              ...comments,
-              genComment(
-                parent.id,
-                date,
-                user.id,
-                "thread" in parent ? parent.id : parent.comment.thread,
-                instance,
-              ),
-            ],
-          };
-        }
-      },
-      {
-        threads: postDates.slice(0, scale).map((date) => {
-          const user = faker.helpers.arrayElement(users);
-          return genThread(
+    fbb = new flatbuffers.Builder(),
+    gz = new GzEncoder(),
+    write = (id: bigint, type: DumpType, data: Uint8Array) => {
+      fbb.finishSizePrefixed(
+        Dump.createDump(fbb, id, type, Dump.createDataVector(fbb, data)),
+      );
+      gz.write(new Foras.Memory(fbb.asUint8Array()));
+      fbb.clear();
+    },
+    writeSettingInt = (key: string, val: bigint) => {
+      const fbb = new flatbuffers.Builder();
+      fbb.finish(
+        SettingRecord.createSettingRecord(
+          fbb,
+          fbb.createString(key),
+          val,
+          0,
+        ),
+      );
+      write(0n, DumpType.SettingRecord, fbb.asUint8Array());
+    },
+    writeSettingStr = (key: string, val: string | Uint8Array) => {
+      const fbb = new flatbuffers.Builder();
+      fbb.finish(
+        SettingRecord.createSettingRecord(
+          fbb,
+          fbb.createString(key),
+          null,
+          fbb.createString(val),
+        ),
+      );
+      write(0n, DumpType.SettingRecord, fbb.asUint8Array());
+    };
+
+  writeSettingStr("jwt_secret", crypto.getRandomValues(new Uint8Array(64)));
+  writeSettingStr("domain", ludwigDomain);
+  const now = BigInt(Date.now()) / 1000n;
+  writeSettingInt("created_at", now);
+  writeSettingInt("updated_at", now);
+  writeSettingStr("name", "Ludwig");
+  writeSettingStr("description", "Randomly Generated Ludwig Server");
+  writeSettingInt("post_max_length", 1024n * 1024n);
+  writeSettingInt("media_upload_enabled", 0n);
+  writeSettingInt("board_creation_admin_only", 1n);
+  writeSettingInt("federation_enabled", 0n);
+  writeSettingInt("javascript_enabled", 1n);
+  writeSettingInt("infinite_scroll_enabled", 1n);
+  writeSettingInt("registration_enabled", 1n);
+  writeSettingInt("registration_application_required", 1n);
+  writeSettingInt("registration_invite_required", 0n);
+
+  const admin = genUser("admin");
+  write(admin.id, DumpType.User, admin.data);
+  write(admin.id, DumpType.LocalUser, genLocalUser("admin", true));
+  localUsers.push(admin.id);
+  users.push({ id: admin.id });
+  for (const name of usernames.slice(0, scale)) {
+    const { id, data } = genUser(name);
+    write(id, DumpType.User, data);
+    write(id, DumpType.LocalUser, genLocalUser(name));
+    localUsers.push(id);
+    users.push({ id });
+  }
+  for (const name of usernames.slice(scale)) {
+    const instance = faker.helpers.arrayElement(instances);
+    const { id, data } = genUser(name, instance);
+    write(id, DumpType.User, data);
+    users.push({ id, instance });
+  }
+  for (const name of boardNames.slice(0, localBoardCount)) {
+    const { id, data } = genBoard(name);
+    write(id, DumpType.Board, data);
+    write(
+      id,
+      DumpType.LocalBoard,
+      genLocalBoard(faker.helpers.arrayElement(localUsers)),
+    );
+    localBoards.push(id);
+    boards.push(id);
+  }
+  for (const name of boardNames.slice(localBoardCount)) {
+    const { id, data } = genBoard(name, faker.helpers.arrayElement(instances));
+    write(id, DumpType.Board, data);
+    boards.push(id);
+  }
+  const posts: [bigint, bigint][] = postDates.slice(scale).reduce(
+    (posts, date) => {
+      const user = faker.helpers.arrayElement(users);
+      if (faker.datatype.boolean()) {
+        const { id, data } = genThread(
+          date,
+          user.id,
+          faker.helpers.arrayElement(boards),
+          user.instance,
+        );
+        write(id, DumpType.Thread, data);
+        return [...posts, [id, id]];
+      } else {
+        const [parent, thread] = faker.helpers.arrayElement(posts),
+          { id, data } = genComment(
+            parent,
             date,
             user.id,
-            faker.helpers.arrayElement(boards).id,
-            instances.find((i) => i.id === user.user.instance),
+            thread,
+            user.instance,
           );
-        }),
-        comments: [] as { id: number; comment: Comment }[],
-      },
-    );
-
-  function uint64Base64(uint: bigint): string {
-    return base64Encode(BigUint64Array.of(uint).buffer);
-  }
-
-  console.log(`S next_id ${uint64Base64(BigInt(nextId))}`);
-  console.log(
-    `S hash_seed ${base64Encode(crypto.getRandomValues(new Uint8Array(8)))}`,
+        write(id, DumpType.Comment, data);
+        return [...posts, [id, thread]];
+      }
+    },
+    postDates.slice(0, scale).map((date): [bigint, bigint] => {
+      const user = faker.helpers.arrayElement(users),
+        { id, data } = genThread(
+          date,
+          user.id,
+          faker.helpers.arrayElement(boards),
+          user.instance,
+        );
+      write(id, DumpType.Thread, data);
+      return [id, id];
+    }),
   );
-  console.log(
-    `S jwt_secret ${base64Encode(crypto.getRandomValues(new Uint8Array(64)))}`,
-  );
-  console.log(`S domain ${base64Encode(ludwigDomain)}`);
-  const now = uint64Base64(BigInt(Date.now()) / 1000n);
-  console.log(`S created_at ${now}`);
-  console.log(`S updated_at ${now}`);
-  console.log(`S name ${base64Encode("Ludwig")}`);
-  console.log(
-    `S description ${base64Encode("Randomly Generated Ludwig Server")}`,
-  );
-  console.log(`S post_max_length ${uint64Base64(1024n * 1024n)}`);
-  console.log(`S media_upload_enabled ${uint64Base64(0n)}`);
-  console.log(`S board_creation_admin_only ${uint64Base64(1n)}`);
-  console.log(`S federation_enabled ${uint64Base64(0n)}`);
 
-  for (const u of users) {
-    console.log(`u ${u.id} ${JSON.stringify(u.user)}`);
-  }
-  for (const u of localUsers) {
-    console.log(`U ${u.id} ${JSON.stringify(u.localUser)}`);
-  }
-  for (const b of boards) {
-    console.log(`b ${b.id} ${JSON.stringify(b.board)}`);
-  }
-  for (const b of localBoards) {
-    console.log(`B ${b.id} ${JSON.stringify(b.localBoard)}`);
-  }
-  for (const t of threads) {
-    console.log(`t ${t.id} ${JSON.stringify(t.thread)}`);
-  }
-  for (const c of comments) {
-    console.log(`c ${c.id} ${JSON.stringify(c.comment)}`);
-  }
-  for (
-    const post of [
-      ...threads.map((p) => p.id),
-      ...comments.map((n) => n.id),
-    ]
-  ) {
+  writeSettingInt("next_id", BigInt(nextId));
+
+  for (const [post] of posts) {
     const totalVotes = faker.number.int({ min: 0, max: users.length }),
-      voters = faker.helpers.arrayElements(users, totalVotes);
+      voters = faker.helpers.arrayElements(users, totalVotes),
+      fbb = new flatbuffers.Builder();
     for (const { id: user } of voters) {
-      console.log(
-        `v ${user} ${post} ${faker.helpers.arrayElement([1, 1, 1, 1, -1])}`,
-      );
+      fbb.clear();
+      fbb.finish(VoteRecord.createVoteRecord(
+        fbb,
+        post,
+        faker.helpers.arrayElement([
+          Vote.Upvote,
+          Vote.Upvote,
+          Vote.Upvote,
+          Vote.Upvote,
+          Vote.Downvote,
+        ]),
+      ));
+      write(user, DumpType.VoteRecord, fbb.asUint8Array());
     }
   }
+
+  gz.flush();
+  await Deno.stdout.write(gz.finish().copyAndDispose());
 }
 
-genAll();
+await genAll();

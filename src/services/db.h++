@@ -29,7 +29,6 @@ namespace Ludwig {
   public:
     inline static constexpr std::string_view
       next_id {"next_id"},
-      hash_seed {"hash_seed"},
       jwt_secret {"jwt_secret"},
       private_key {"private_key"},
       public_key {"public_key"},
@@ -242,23 +241,23 @@ namespace Ludwig {
     ) -> std::pair<uint64_t, uint64_t>;
     auto delete_session(uint64_t session) -> void;
 
-    auto create_user(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
-    auto set_user(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
-    auto set_local_user(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
+    auto create_user(flatbuffers::span<uint8_t> span) -> uint64_t;
+    auto set_user(uint64_t id, flatbuffers::span<uint8_t> span) -> void;
+    auto set_local_user(uint64_t id, flatbuffers::span<uint8_t> span) -> void;
     auto delete_user(uint64_t id) -> bool;
 
-    auto create_board(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
-    auto set_board(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
-    auto set_local_board(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
+    auto create_board(flatbuffers::span<uint8_t> span) -> uint64_t;
+    auto set_board(uint64_t id, flatbuffers::span<uint8_t> span) -> void;
+    auto set_local_board(uint64_t id, flatbuffers::span<uint8_t> span) -> void;
     auto delete_board(uint64_t id) -> bool;
     auto set_subscription(uint64_t user_id, uint64_t board_id, bool subscribed) -> void;
 
-    auto create_thread(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
-    auto set_thread(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
+    auto create_thread(flatbuffers::span<uint8_t> span) -> uint64_t;
+    auto set_thread(uint64_t id, flatbuffers::span<uint8_t> span) -> void;
     auto delete_thread(uint64_t id) -> bool;
 
-    auto create_comment(flatbuffers::FlatBufferBuilder& builder) -> uint64_t;
-    auto set_comment(uint64_t id, flatbuffers::FlatBufferBuilder& builder) -> void;
+    auto create_comment(flatbuffers::span<uint8_t> span) -> uint64_t;
+    auto set_comment(uint64_t id, flatbuffers::span<uint8_t> span) -> void;
     auto delete_comment(uint64_t id) -> uint64_t;
 
     auto set_vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;
@@ -267,12 +266,12 @@ namespace Ludwig {
     auto set_hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden) -> void;
     auto set_hide_board(uint64_t user_id, uint64_t board_id, bool hidden) -> void;
 
-    auto create_application(uint64_t user_id, flatbuffers::FlatBufferBuilder& builder) -> void;
+    auto create_application(uint64_t user_id, flatbuffers::span<uint8_t> span) -> void;
     auto create_invite(uint64_t sender_user_id, uint64_t lifetime_seconds) -> uint64_t;
-    auto set_invite(uint64_t invite_id, flatbuffers::FlatBufferBuilder& builder) -> void;
+    auto set_invite(uint64_t invite_id, flatbuffers::span<uint8_t> span) -> void;
     auto delete_invite(uint64_t invite_id) -> void;
 
-    auto set_link_card(std::string_view url, flatbuffers::FlatBufferBuilder& builder) -> void;
+    auto set_link_card(std::string_view url, flatbuffers::span<uint8_t> span) -> void;
     auto delete_link_card(std::string_view url) -> void;
 
     inline auto commit() -> void {

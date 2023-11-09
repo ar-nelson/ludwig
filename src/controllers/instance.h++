@@ -1,5 +1,6 @@
 #pragma once
 #include "util/web.h++"
+#include "util/rich_text.h++"
 #include "models/db.h++"
 #include "models/detail.h++"
 #include "services/db.h++"
@@ -207,6 +208,7 @@ namespace Ludwig {
   private:
     std::shared_ptr<DB> db;
     std::shared_ptr<HttpClient> http_client;
+    std::shared_ptr<RichTextParser> rich_text;
     std::shared_ptr<EventBus> event_bus;
     std::optional<std::shared_ptr<SearchEngine>> search_engine;
     SiteDetail cached_site_detail;
@@ -225,6 +227,7 @@ namespace Ludwig {
     InstanceController(
       std::shared_ptr<DB> db,
       std::shared_ptr<HttpClient> http_client,
+      std::shared_ptr<RichTextParser> rich_text,
       std::shared_ptr<EventBus> event_bus = std::make_shared<DummyEventBus>(),
       std::optional<std::shared_ptr<SearchEngine>> search_engine = {}
     );
@@ -234,6 +237,7 @@ namespace Ludwig {
     using SearchCallback = std::move_only_function<void (ReadTxnBase&, std::vector<SearchResultDetail>)>;
 
     static auto can_change_site_settings(Login login) -> bool;
+    auto can_create_board(Login login) -> bool;
 
     inline auto open_read_txn() -> ReadTxnImpl {
       return db->open_read_txn();

@@ -6,7 +6,7 @@ namespace Ludwig {
     static thread_local flatbuffers::Parser parser;
     static thread_local bool parser_ready = false;
     if (!parser_ready) {
-      parser.Parse(protocols_fbs, nullptr, "protocols.fbs");
+      parser.Parse(std::string(protocols_fbs_str()).c_str(), nullptr, "protocols.fbs");
       parser_ready = true;
     }
     return parser;

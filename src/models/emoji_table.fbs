@@ -1,0 +1,10 @@
+namespace Ludwig;
+
+table EmojiShortcode {
+  emoji: string (required);
+  shortcodes: [string];
+}
+
+table EmojiTable {
+  entries: [EmojiShortcode];
+}

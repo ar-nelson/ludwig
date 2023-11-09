@@ -4,6 +4,7 @@
 #include "services/http_client.h++"
 #include "services/search_engine.h++"
 #include "services/thumbnail_cache.h++"
+#include "util/rich_text.h++"
 
 namespace Ludwig {
   class RemoteMediaController : std::enable_shared_from_this<RemoteMediaController> {

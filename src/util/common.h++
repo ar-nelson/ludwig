@@ -82,11 +82,4 @@ namespace Ludwig {
       );
     }
   };
-
-  struct LibXmlContext {
-    LibXmlContext() { xmlInitParser(); }
-    ~LibXmlContext() { xmlCleanupParser(); }
-    LibXmlContext(const LibXmlContext&) = delete;
-    auto operator=(const LibXmlContext&) = delete;
-  };
 }

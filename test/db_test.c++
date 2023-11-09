@@ -1,9 +1,38 @@
 #include "test_common.h++"
 #include "services/db.h++"
+#include "util/rich_text.h++"
 #include <algorithm>
 #include <random>
 
 using namespace flatbuffers;
+
+static inline auto create_user(WriteTxn& txn, string_view name, string_view display_name, uint64_t now = now_s()) -> uint64_t {
+  FlatBufferBuilder fbb;
+  const auto name_s = fbb.CreateString(name);
+  const auto [display_name_types, display_name_values] =
+    RichTextParser::plain_text_to_plain_text_with_emojis(fbb, display_name);
+  UserBuilder user(fbb);
+  user.add_created_at(now);
+  user.add_name(name_s);
+  user.add_display_name_type(display_name_types);
+  user.add_display_name(display_name_values);
+  fbb.Finish(user.Finish());
+  return txn.create_user(fbb.GetBufferSpan());
+}
+
+static inline auto create_board(WriteTxn& txn, string_view name, string_view display_name) -> uint64_t {
+  FlatBufferBuilder fbb;
+  const auto name_s = fbb.CreateString(name);
+  const auto [display_name_types, display_name_values] =
+    RichTextParser::plain_text_to_plain_text_with_emojis(fbb, display_name);
+  BoardBuilder board(fbb);
+  board.add_created_at(now_s());
+  board.add_name(name_s);
+  board.add_display_name_type(display_name_types);
+  board.add_display_name(display_name_values);
+  fbb.Finish(board.Finish());
+  return txn.create_board(fbb.GetBufferSpan());
+}
 
 TEST_CASE("create DB", "[db]") {
   TempFile file;
@@ -15,19 +44,8 @@ TEST_CASE("create and get user", "[db]") {
   DB db(file.name);
   uint64_t id;
   {
-    FlatBufferBuilder fbb;
-    fbb.Finish(CreateUserDirect(fbb,
-      "testuser",
-      "Test User",
-      nullptr,
-      nullptr,
-      nullptr,
-      nullptr,
-      {},
-      now_s()
-    ));
     auto txn = db.open_write_txn();
-    id = txn.create_user(fbb);
+    id = create_user(txn, "testuser", "Test User");
     txn.commit();
   }
   {
@@ -35,83 +53,24 @@ TEST_CASE("create and get user", "[db]") {
     auto user = txn.get_user(id);
     REQUIRE(!!user);
     REQUIRE(user->get().name()->string_view() == "testuser"sv);
-    REQUIRE(user->get().display_name()->string_view() == "Test User"sv);
+    REQUIRE(user->get().display_name()->GetAsString(0)->string_view() == "Test User"sv);
   }
 }
 
 static inline auto create_users(DB& db, uint64_t ids[3]) {
   auto txn = db.open_write_txn();
   FlatBufferBuilder fbb;
-  fbb.Finish(CreateUserDirect(fbb,
-    "user1",
-    "User 1",
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr,
-    {},
-    now_s()
-  ));
-  ids[0] = txn.create_user(fbb);
-  fbb.Clear();
-  fbb.Finish(CreateUserDirect(fbb,
-    "user2",
-    "User 2",
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr,
-    {},
-    now_s()
-  ));
-  ids[1] = txn.create_user(fbb);
-  fbb.Clear();
-  fbb.Finish(CreateUserDirect(fbb,
-    "user3",
-    "User 3",
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr,
-    {},
-    now_s()
-  ));
-  ids[2] = txn.create_user(fbb);
+  ids[0] = create_user(txn, "user1", "User 1");
+  ids[1] = create_user(txn, "user2", "User 2");
+  ids[2] = create_user(txn, "user3", "User 3");
   txn.commit();
 }
 
 static inline auto create_boards(DB& db, uint64_t ids[3]) {
   auto txn = db.open_write_txn();
-  FlatBufferBuilder fbb;
-  fbb.Finish(CreateBoardDirect(fbb,
-    "lions",
-    "Lions",
-    nullptr,
-    nullptr,
-    {},
-    now_s()
-  ));
-  ids[0] = txn.create_board(fbb);
-  fbb.Clear();
-  fbb.Finish(CreateBoardDirect(fbb,
-    "tigers",
-    "Tigers",
-    nullptr,
-    nullptr,
-    {},
-    now_s()
-  ));
-  ids[1] = txn.create_board(fbb);
-  fbb.Clear();
-  fbb.Finish(CreateBoardDirect(fbb,
-    "bears",
-    "Bears",
-    nullptr,
-    nullptr,
-    {},
-    now_s()
-  ));
-  ids[2] = txn.create_board(fbb);
+  ids[0] = create_board(txn, "lions", "Lions");
+  ids[1] = create_board(txn, "tigers", "Tigers");
+  ids[2] = create_board(txn, "bears", "Bears");
   txn.commit();
 }
 
@@ -127,19 +86,19 @@ TEST_CASE("create and list users", "[db]") {
     auto user = txn.get_user(*iter);
     REQUIRE(!!user);
     REQUIRE(user->get().name()->string_view() == "user3"sv);
-    REQUIRE(user->get().display_name()->string_view() == "User 3"sv);
+    REQUIRE(user->get().display_name()->GetAsString(0)->string_view() == "User 3"sv);
     ++iter;
     REQUIRE(!iter.is_done());
     user = txn.get_user(*iter);
     REQUIRE(!!user);
     REQUIRE(user->get().name()->string_view() == "user2"sv);
-    REQUIRE(user->get().display_name()->string_view() == "User 2"sv);
+    REQUIRE(user->get().display_name()->GetAsString(0)->string_view() == "User 2"sv);
     ++iter;
     REQUIRE(!iter.is_done());
     user = txn.get_user(*iter);
     REQUIRE(!!user);
     REQUIRE(user->get().name()->string_view() == "user1"sv);
-    REQUIRE(user->get().display_name()->string_view() == "User 1"sv);
+    REQUIRE(user->get().display_name()->GetAsString(0)->string_view() == "User 1"sv);
     ++iter;
     REQUIRE(iter.is_done());
   }
@@ -219,7 +178,7 @@ static inline auto create_thread(WriteTxn& txn, uint64_t user, uint64_t board, c
     nullptr,
     url
   ));
-  return txn.create_thread(fbb);
+  return txn.create_thread(fbb.GetBufferSpan());
 }
 
 TEST_CASE("create and list posts", "[db]") {
@@ -306,26 +265,15 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
   create_boards(db, boards);
   std::array<uint64_t, RND_SIZE / 10> users;
   std::array<uint64_t, RND_SIZE> threads, comments;
-  FlatBufferBuilder fbb;
   auto now = now_s();
   {
     auto txn = db.open_write_txn();
     for (size_t i = 0; i < RND_SIZE / 10; i++) {
-      fbb.Clear();
-      fbb.Finish(CreateUserDirect(fbb,
-        "testuser",
-        "Test User",
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr,
-        {},
-        now - random_int(gen, 86400 * 30)
-      ));
-      users[i] = txn.create_user(fbb);
+      users[i] = create_user(txn, fmt::format("testuser{}", i), "Test User", now - random_int(gen, 86400 * 30));
     }
     txn.commit();
   }
+  FlatBufferBuilder fbb;
   {
     auto txn = db.open_write_txn();
     for (size_t i = 0; i < RND_SIZE; i++) {
@@ -343,31 +291,30 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         nullptr,
         "https://example.com"
       ));
-      threads[i] = txn.create_thread(fbb);
+      threads[i] = txn.create_thread(fbb.GetBufferSpan());
     }
     txn.commit();
   }
   {
     auto txn = db.open_write_txn();
     for (size_t i = 0; i < RND_SIZE; i++) {
-      auto author = users[random_int(gen, RND_SIZE / 10)],
+      fbb.Clear();
+      const auto author = users[random_int(gen, RND_SIZE / 10)],
         parent_ix = random_int(gen, RND_SIZE + i),
         parent = parent_ix >= RND_SIZE ? comments[parent_ix - RND_SIZE] : threads[parent_ix],
         thread = parent_ix >= RND_SIZE ? txn.get_comment(parent)->get().thread() : parent;
-      FlatBufferBuilder fbb;
-      fbb.Finish(CreateCommentDirect(fbb,
-        author,
-        parent,
-        thread,
-        now - random_int(gen, 86400 * 30),
-        {},
-        {},
-        nullptr,
-        nullptr,
-        nullptr,
-        "Lorem ipsum dolor sit amet"
-      ));
-      comments[i] = txn.create_comment(fbb);
+      const auto content_raw = fbb.CreateSharedString("Lorem ipsum dolor sit amet");
+      const auto [content_type, content] = RichTextParser::plain_text_to_blocks(fbb, "Lorem ipsum dolor sit amet");
+      CommentBuilder comment(fbb);
+      comment.add_author(author);
+      comment.add_parent(parent);
+      comment.add_thread(thread);
+      comment.add_created_at(now - random_int(gen, 86400 * 30));
+      comment.add_content_raw(content_raw);
+      comment.add_content_type(content_type);
+      comment.add_content(content);
+      fbb.Finish(comment.Finish());
+      comments[i] = txn.create_comment(fbb.GetBufferSpan());
     }
     txn.commit();
   }

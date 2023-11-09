@@ -1,4 +1,5 @@
 #include "util/common.h++"
+#include "util/rich_text.h++"
 #include "services/db.h++"
 #include "services/asio_http_client.h++"
 #include "services/asio_event_bus.h++"
@@ -9,6 +10,7 @@
 #include "views/media.h++"
 #include <uWebSockets/App.h>
 #include <asio.hpp>
+#include <gzstream.h>
 #include <optparse.h>
 #include <fstream>
 #include <csignal>
@@ -73,7 +75,7 @@ int main(int argc, char** argv) {
 
   if (options.is_set_by_user("import")) {
     const auto importfile = options["import"];
-    std::ifstream in(importfile, std::ios_base::in);
+    igzstream in(importfile.c_str(), std::ios_base::in);
     spdlog::info("Importing database dump from {}", importfile);
     DB db(dbfile, in, search_engine, map_size);
     spdlog::info("Import complete. You can now start Ludwig without --import.");
@@ -95,7 +97,8 @@ int main(int argc, char** argv) {
   auto event_bus = make_shared<AsioEventBus>(io);
   auto db = make_shared<DB>(dbfile, map_size);
   auto xml_ctx = make_shared<LibXmlContext>();
-  auto instance_c = make_shared<InstanceController>(db, http_client, event_bus, search_engine);
+  auto rich_text = make_shared<RichTextParser>(xml_ctx);
+  auto instance_c = make_shared<InstanceController>(db, http_client, rich_text, event_bus, search_engine);
   auto remote_media_c = make_shared<RemoteMediaController>(db, http_client, xml_ctx, event_bus, search_engine);
 
   std::thread io_thread([io]{io->run();});
@@ -110,7 +113,7 @@ int main(int argc, char** argv) {
 
   uWS::App app;
   media_routes(app, remote_media_c);
-  webapp_routes(app, instance_c);
+  webapp_routes(app, instance_c, rich_text);
   app.listen(port, [port](auto *listen_socket) {
     if (listen_socket) {
       global_socket = listen_socket;

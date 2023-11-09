@@ -1,0 +1,3 @@
+// Entry point for TypeScript flatbuffer generation; used by extras/ scripts
+include "db.fbs";
+include "emoji_table.fbs";

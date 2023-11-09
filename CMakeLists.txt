@@ -29,21 +29,20 @@ endif ()
 
 # Generate static files
 set(static_depends)
-find_program(deno deno)
+set(static_asm)
 file(GLOB_RECURSE static_files "${PROJECT_SOURCE_DIR}/src/static/*.*")
 foreach (static_path IN ITEMS ${static_files})
   cmake_path(GET static_path FILENAME static_basename)
-  set(static_outname "${PROJECT_BINARY_DIR}/generated/static/${static_basename}.h++")
+  set(static_h "${PROJECT_BINARY_DIR}/generated/static/${static_basename}.h++")
+  set(static_S "${PROJECT_BINARY_DIR}/generated/static/${static_basename}.S")
   add_custom_command(
-    COMMAND ${deno} run --allow-read=${static_path},${static_outname} --allow-write=${static_outname}
-      "${PROJECT_SOURCE_DIR}/extras/binary-header.ts" --once
-      --out ${static_outname} ${static_path}
-    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/src/static"
+    COMMAND "${PROJECT_SOURCE_DIR}/extras/binary-header.sh" ${static_path} ${PROJECT_BINARY_DIR}
     DEPENDS ${static_path}
-    OUTPUT ${static_outname}
+    OUTPUT ${static_h} ${static_S}
     VERBATIM
   )
-  list(APPEND static_depends ${static_outname})
+  list(APPEND static_depends ${static_h} ${static_S})
+  list(APPEND static_asm ${static_S})
 endforeach ()
 add_custom_target(static_generated DEPENDS ${static_depends})
 
@@ -67,7 +66,8 @@ foreach (fbs_path IN ITEMS ${fbs_files})
   cmake_path(GET fbs_path FILENAME fbs_basename)
   get_filename_component(fbs_prefix ${fbs_basename} NAME_WE)
   set(fbs_gen_outname "${PROJECT_BINARY_DIR}/generated/models/${fbs_prefix}.h++")
-  set(fbs_src_outname "${PROJECT_BINARY_DIR}/generated/models/${fbs_basename}.h++")
+  set(fbs_src_h "${PROJECT_BINARY_DIR}/generated/models/${fbs_basename}.h++")
+  set(fbs_src_S "${PROJECT_BINARY_DIR}/generated/models/${fbs_basename}.S")
   add_custom_command(
     COMMAND "${PROJECT_BINARY_DIR}/flatc"
       -o "${PROJECT_BINARY_DIR}/generated/models/"
@@ -84,28 +84,25 @@ foreach (fbs_path IN ITEMS ${fbs_files})
     VERBATIM
   )
   add_custom_command(
-    COMMAND ${deno} run --allow-read=${fbs_path},${fbs_src_outname} --allow-write=${fbs_src_outname}
-      "${PROJECT_SOURCE_DIR}/extras/binary-header.ts" --once
-      --type char --out ${fbs_src_outname} ${fbs_path}
-    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/src/models"
+    COMMAND "${PROJECT_SOURCE_DIR}/extras/binary-header.sh" ${fbs_path} ${PROJECT_BINARY_DIR}
     DEPENDS ${fbs_path}
-    OUTPUT ${fbs_src_outname}
+    OUTPUT ${fbs_src_h} ${fbs_src_S}
     VERBATIM
   )
-  list(APPEND fbs_depends ${fbs_gen_outname} ${fbs_src_outname})
+  list(APPEND fbs_depends ${fbs_gen_outname} ${fbs_src_h} ${fbs_src_S})
+  list(APPEND static_asm ${fbs_src_S})
 endforeach ()
 add_custom_target(flatbuffers_generated DEPENDS ${fbs_depends})
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   set (BUILDTYPE_COMPILE_OPTIONS
-    -DDEBUG
-    -DLOG_TO_CONSOLE
+    -DLUDWIG_DEBUG=1
     -g
-    -O1
+    -O0
     -fno-omit-frame-pointer
-    -fsanitize=address
+    -fsanitize=address,undefined
   )
-  set (LINK_OPTIONS -fsanitize=address)
+  set (LINK_OPTIONS -fsanitize=address,undefined)
 else ()
   set (BUILDTYPE_COMPILE_OPTIONS -O2)
   set (LINK_OPTIONS )
@@ -122,8 +119,11 @@ set (COMPILE_OPTIONS
 )
 
 set (LUDWIG_COMMON_SRC
+  ${static_asm}
+  vendor/singleheader/mmd.c
   src/util/base64.c++
   src/util/thumbnailer.c++
+  src/util/rich_text.c++
   src/util/jwt.c++
   src/util/iter.c++
   src/services/db.c++
@@ -137,7 +137,6 @@ set (LUDWIG_COMMON_SRC
   src/controllers/remote_media.c++
   src/views/media.c++
   src/views/webapp.c++
-  src/static/tokenizer/tokenizer_model.S
 )
 
 if (CMAKE_BUILD_TYPE MATCHES Release AND CMAKE_SYSTEM_NAME STREQUAL "Linux")

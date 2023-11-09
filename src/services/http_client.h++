@@ -24,7 +24,7 @@ namespace Ludwig {
     auto body() const -> std::string_view { return { nullptr, 0 }; };
   };
 
-  using HttpResponseCallback = std::function<void (std::shared_ptr<const HttpClientResponse>)>;
+  using HttpResponseCallback = std::move_only_function<void (std::unique_ptr<const HttpClientResponse>&&)>;
 
   class HttpClientRequest {
   public:
@@ -70,12 +70,12 @@ namespace Ludwig {
       return new_req;
     }
 
-    auto dispatch(HttpResponseCallback callback) && -> void;
+    auto dispatch(HttpResponseCallback&& callback) && -> void;
   };
 
   class HttpClient {
   protected:
-    virtual auto fetch(HttpClientRequest&& req, HttpResponseCallback callback) -> void = 0;
+    virtual auto fetch(HttpClientRequest&& req, HttpResponseCallback&& callback) -> void = 0;
   public:
     virtual inline ~HttpClient() {};
     inline auto get(std::string url) -> HttpClientRequest {
@@ -94,8 +94,8 @@ namespace Ludwig {
     friend class HttpClientRequest;
   };
 
-  inline auto HttpClientRequest::dispatch(HttpResponseCallback callback) && -> void {
+  inline auto HttpClientRequest::dispatch(HttpResponseCallback&& callback) && -> void {
     if (!has_body) request.append("\r\n\r\n");
-    client.fetch(std::move(*this), callback);
+    client.fetch(std::move(*this), std::move(callback));
   }
 }

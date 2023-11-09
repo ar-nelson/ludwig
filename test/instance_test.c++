@@ -9,10 +9,7 @@ using flatbuffers::FlatBufferBuilder, flatbuffers::Offset;
 #define HOUR 3600
 #define DAY (HOUR * 24)
 
-template <typename T> inline auto build(FlatBufferBuilder& fbb, Offset<T> t) -> FlatBufferBuilder& {
-  fbb.Finish(t);
-  return fbb;
-}
+auto rich_text = std::make_shared<RichTextParser>(std::make_shared<LibXmlContext>());
 
 struct Instance {
   TempFile file;
@@ -28,16 +25,17 @@ struct Instance {
     txn.set_setting(SettingsKey::registration_application_required, 1);
     FlatBufferBuilder fbb;
     fbb.ForceDefaults(true);
-    users[0] = txn.create_user(build(fbb, CreateUserDirect(fbb,
-      "admin",
-      "Admin User",
-      nullptr,
-      nullptr,
-      nullptr,
-      nullptr,
-      {},
-      epoch
-    )));
+    {
+      const auto name = fbb.CreateString("admin");
+      const auto [dn_t, dn] = RichTextParser::plain_text_to_plain_text_with_emojis(fbb, "Admin User");
+      UserBuilder u(fbb);
+      u.add_name(name);
+      u.add_display_name_type(dn_t);
+      u.add_display_name(dn);
+      u.add_created_at(epoch);
+      fbb.Finish(u.Finish());
+    }
+    users[0] = txn.create_user(fbb.GetBufferSpan());
     fbb.Clear();
     {
       auto email = fbb.CreateString("admin@ludwig.test");
@@ -47,19 +45,35 @@ struct Instance {
       lu.add_approved(true);
       fbb.Finish(lu.Finish());
     }
-    txn.set_local_user(users[0], fbb);
+    txn.set_local_user(users[0], fbb.GetBufferSpan());
     fbb.Clear();
-    users[1] = txn.create_user(build(fbb, CreateUserDirect(fbb,
-      "rando",
-      "Some Local Rando",
-      "This is *my* bio",
-      "This is <em>my</em> bio",
-      nullptr,
-      nullptr,
-      {},
-      epoch + HOUR,
-      epoch + DAY * 2
-    )));
+    {
+      const auto name = fbb.CreateString("rando"),
+        bio_raw = fbb.CreateString("This is *my* bio");
+      const auto [dn_t, dn] = RichTextParser::plain_text_to_plain_text_with_emojis(fbb, "Some Local Rando");
+      const auto bio_t = fbb.CreateVector(vector{TextBlock::P});
+      const auto bio = fbb.CreateVector(vector{CreateTextSpans(fbb,
+        fbb.CreateVector(vector{TextSpan::Plain, TextSpan::Italic, TextSpan::Plain}),
+        fbb.CreateVector(vector{
+          fbb.CreateString("This is ").Union(),
+          CreateTextSpans(fbb,
+            fbb.CreateVector(vector{TextSpan::Plain}),
+            fbb.CreateVector(vector{fbb.CreateString("my").Union()})
+          ).Union(),
+          fbb.CreateString(" bio").Union()
+        })
+      ).Union()});
+      UserBuilder u(fbb);
+      u.add_name(name);
+      u.add_display_name_type(dn_t);
+      u.add_display_name(dn);
+      u.add_bio_type(bio_t);
+      u.add_bio(bio);
+      u.add_created_at(epoch + HOUR);
+      u.add_updated_at(epoch + DAY * 2);
+      fbb.Finish(u.Finish());
+    }
+    users[1] = txn.create_user(fbb.GetBufferSpan());
     fbb.Clear();
     {
       auto email = fbb.CreateString("rando@ludwig.test");
@@ -69,25 +83,26 @@ struct Instance {
       lu.add_show_bot_accounts(false);
       fbb.Finish(lu.Finish());
     }
-    txn.set_local_user(users[1], fbb);
+    txn.set_local_user(users[1], fbb.GetBufferSpan());
     fbb.Clear();
-    users[2] = txn.create_user(build(fbb, CreateUserDirect(fbb,
-      "troll",
-      "Banned Troll",
-      "Problem?",
-      "Problem?",
-      nullptr,
-      nullptr,
-      {},
-      epoch + DAY,
-      {},
-      {},
-      nullptr,
-      nullptr,
-      false,
-      ModState::Removed,
-      "begone"
-    )));
+    {
+      const auto name = fbb.CreateString("troll"),
+        bio_raw = fbb.CreateSharedString("Problem?"),
+        mod_reason = fbb.CreateString("begone");
+      const auto [dn_t, dn] = RichTextParser::plain_text_to_plain_text_with_emojis(fbb, "Banned Troll");
+      const auto [bio_t, bio] = RichTextParser::plain_text_to_blocks(fbb, "Problem?");
+      UserBuilder u(fbb);
+      u.add_name(name);
+      u.add_display_name_type(dn_t);
+      u.add_display_name(dn);
+      u.add_bio_type(bio_t);
+      u.add_bio(bio);
+      u.add_created_at(epoch + DAY);
+      u.add_mod_state(ModState::Removed);
+      u.add_mod_reason(mod_reason);
+      fbb.Finish(u.Finish());
+    }
+    users[2] = txn.create_user(fbb.GetBufferSpan());
     fbb.Clear();
     {
       auto email = fbb.CreateString("troll@ludwig.test");
@@ -96,24 +111,25 @@ struct Instance {
       lu.add_approved(true);
       fbb.Finish(lu.Finish());
     }
-    txn.set_local_user(users[2], fbb);
+    txn.set_local_user(users[2], fbb.GetBufferSpan());
     txn.set_hide_user(users[2], users[0], true);
     fbb.Clear();
-    users[3] = txn.create_user(build(fbb, CreateUserDirect(fbb,
-      "robot",
-      "Mr. Roboto",
-      "domo",
-      "domo",
-      nullptr,
-      nullptr,
-      {},
-      epoch + DAY + HOUR * 2,
-      {},
-      {},
-      nullptr,
-      nullptr,
-      true
-    )));
+    {
+      const auto name = fbb.CreateString("robot"),
+        bio_raw = fbb.CreateSharedString("domo");
+      const auto [dn_t, dn] = RichTextParser::plain_text_to_plain_text_with_emojis(fbb, "Mr. Roboto");
+      const auto [bio_t, bio] = RichTextParser::plain_text_to_blocks(fbb, "domo");
+      UserBuilder u(fbb);
+      u.add_name(name);
+      u.add_display_name_type(dn_t);
+      u.add_display_name(dn);
+      u.add_bio_type(bio_t);
+      u.add_bio(bio);
+      u.add_created_at(epoch + DAY + HOUR * 2);
+      u.add_bot(true);
+      fbb.Finish(u.Finish());
+    }
+    users[3] = txn.create_user(fbb.GetBufferSpan());
     fbb.Clear();
     {
       auto email = fbb.CreateString("robot@ludwig.test");
@@ -122,29 +138,33 @@ struct Instance {
       lu.add_approved(true);
       fbb.Finish(lu.Finish());
     }
-    txn.set_local_user(users[3], fbb);
+    txn.set_local_user(users[3], fbb.GetBufferSpan());
     fbb.Clear();
-    users[4] = txn.create_user(build(fbb, CreateUserDirect(fbb,
-      "visitor@federated.test",
-      "Visitor from Elsewhere",
-      nullptr,
-      nullptr,
-      "https://federated.test/ap/user/visitor",
-      "https://federated.test/ap/user/visitor/inbox",
-      1,
-      epoch + DAY + HOUR
-    )));
+    {
+      const auto name = fbb.CreateString("visitor@federated.test"),
+        actor_url = fbb.CreateString("https://federated.test/ap/user/visitor"),
+        inbox_url = fbb.CreateString("https://federated.test/ap/user/visitor/inbox");
+      const auto [dn_t, dn] = RichTextParser::plain_text_to_plain_text_with_emojis(fbb, "Visitor from Elsewhere");
+      UserBuilder u(fbb);
+      u.add_name(name);
+      u.add_display_name_type(dn_t);
+      u.add_display_name(dn);
+      u.add_instance(1);
+      u.add_actor_id(actor_url);
+      u.add_inbox_url(inbox_url);
+      u.add_created_at(epoch + DAY + HOUR);
+      fbb.Finish(u.Finish());
+    }
+    users[4] = txn.create_user(fbb.GetBufferSpan());
     fbb.Clear();
-    users[5] = txn.create_user(build(fbb, CreateUserDirect(fbb,
-      "unapproved",
-      nullptr,
-      nullptr,
-      nullptr,
-      nullptr,
-      nullptr,
-      {},
-      epoch + DAY * 5
-    )));
+    {
+      const auto name = fbb.CreateString("unapproved");
+      UserBuilder u(fbb);
+      u.add_name(name);
+      u.add_created_at(epoch + DAY * 5);
+      fbb.Finish(u.Finish());
+    }
+    users[5] = txn.create_user(fbb.GetBufferSpan());
     fbb.Clear();
     {
       auto email = fbb.CreateString("unapproved@ludwig.test");
@@ -153,22 +173,23 @@ struct Instance {
       lu.add_approved(false);
       fbb.Finish(lu.Finish());
     }
-    txn.set_local_user(users[5], fbb);
+    txn.set_local_user(users[5], fbb.GetBufferSpan());
     for (int i = 0; i < ITEMS_PER_PAGE; i++) {
       fbb.Clear();
-      txn.create_user(build(fbb, CreateUserDirect(fbb,
-        fmt::format("filler{}@federated.test", i).c_str(),
-        nullptr,
-        nullptr,
-        nullptr,
-        "https://federated.test/ap/user/visitor",
-        "https://federated.test/ap/user/visitor/inbox",
-        1,
-        epoch + DAY * 6 + i
-      )));
+      const auto name = fbb.CreateString(fmt::format("filler{}@federated.test", i)),
+        actor_url = fbb.CreateString(fmt::format("https://federated.test/ap/user/filler{}", i)),
+        inbox_url = fbb.CreateString(fmt::format("https://federated.test/ap/user/filler{}/inbox", i));
+      UserBuilder u(fbb);
+      u.add_name(name);
+      u.add_actor_id(actor_url);
+      u.add_inbox_url(inbox_url);
+      u.add_instance(1);
+      u.add_created_at(epoch + DAY * 6 + i);
+      fbb.Finish(u.Finish());
+      txn.create_user(fbb.GetBufferSpan());
     }
     txn.commit();
-    controller = make_shared<InstanceController>(db, nullptr);
+    controller = make_shared<InstanceController>(db, nullptr, rich_text);
   }
 
   inline auto operator->() -> InstanceController* {

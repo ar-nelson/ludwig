@@ -7,8 +7,8 @@
 #include "util/lambda_macros.h++"
 
 using std::function, std::nullopt, std::regex, std::regex_match, std::optional,
-    std::pair, std::prev, std::shared_ptr, std::string, std::string_view,
-    flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot;
+    std::pair, std::prev, std::shared_ptr, std::string, std::string_view, std::vector,
+    flatbuffers::Offset, flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot, flatbuffers::Vector;
 
 namespace Ludwig {
   // PBKDF2-HMAC-SHA256 iteration count, as suggested by
@@ -210,9 +210,10 @@ namespace Ludwig {
   InstanceController::InstanceController(
     shared_ptr<DB> db,
     shared_ptr<HttpClient> http_client,
+    shared_ptr<RichTextParser> rich_text,
     shared_ptr<EventBus> event_bus,
     optional<shared_ptr<SearchEngine>> search_engine
-  ) : db(db), http_client(http_client), event_bus(event_bus), search_engine(search_engine) {
+  ) : db(db), http_client(http_client), rich_text(rich_text), event_bus(event_bus), search_engine(search_engine) {
     auto txn = db->open_read_txn();
     cached_site_detail = SiteDetail::get(txn);
   }
@@ -230,6 +231,10 @@ namespace Ludwig {
 
   auto InstanceController::can_change_site_settings(Login login) -> bool {
     return login && login->local_user().admin();
+  }
+
+  auto InstanceController::can_create_board(Login login) -> bool {
+    return login && (!site_detail()->board_creation_admin_only || login->local_user().admin());
   }
 
   auto InstanceController::validate_or_regenerate_session(
@@ -766,7 +771,7 @@ namespace Ludwig {
     return out;
   }
   class InstanceController::SearchFunctor : public std::enable_shared_from_this<InstanceController::SearchFunctor> {
-    std::vector<SearchResultDetail> entries;
+    vector<SearchResultDetail> entries;
     shared_ptr<InstanceController> controller;
     SearchQuery query;
     Login login;
@@ -791,7 +796,7 @@ namespace Ludwig {
     }
 
   private:
-    inline auto call(std::vector<SearchResult> page) -> void {
+    inline auto call(vector<SearchResult> page) -> void {
       auto txn = controller->open_read_txn();
       for (const auto& result : page) {
         if (entries.size() >= limit) break;
@@ -877,7 +882,7 @@ namespace Ludwig {
       b.add_bot(is_bot);
       fbb.Finish(b.Finish());
     }
-    const auto user_id = txn.create_user(fbb);
+    const auto user_id = txn.create_user(fbb.GetBufferSpan());
     if (search_engine) {
       (*search_engine)->index(user_id, *GetRoot<User>(fbb.GetBufferPointer()));
     }
@@ -893,7 +898,7 @@ namespace Ludwig {
       if (invite) b.add_invite(*invite);
       fbb.Finish(b.Finish());
     }
-    txn.set_local_user(user_id, fbb);
+    txn.set_local_user(user_id, fbb.GetBufferSpan());
     return user_id;
   }
   auto InstanceController::register_local_user(
@@ -945,7 +950,7 @@ namespace Ludwig {
       b.add_accepted_at(now);
       b.add_expires_at(invite.expires_at());
       fbb.Finish(b.Finish());
-      txn.set_invite(*invite_id, fbb);
+      txn.set_invite(*invite_id, fbb.GetBufferSpan());
     }
     if (site->registration_application_required) {
       FlatBufferBuilder fbb;
@@ -957,7 +962,7 @@ namespace Ludwig {
       b.add_user_agent(user_agent_s);
       b.add_text(application_text_s);
       fbb.Finish(b.Finish());
-      txn.create_application(user_id, fbb);
+      txn.create_application(user_id, fbb.GetBufferSpan());
     }
     txn.commit();
     return { user_id, site->registration_application_required };
@@ -1001,17 +1006,27 @@ namespace Ludwig {
     // TODO: Check if user is allowed to create boards
     flatbuffers::FlatBufferBuilder fbb;
     {
-      const auto display_name_s = display_name.transform([&](auto s) { return fbb.CreateString(s); }),
-        content_warning_s = content_warning.transform([&](auto s) { return fbb.CreateString(s); });
+      Offset<Vector<PlainTextWithEmojis>> display_name_types;
+      Offset<Vector<Offset<void>>> display_name_values;
+      if (display_name) {
+        const auto display_name_s = fbb.CreateString(*display_name);
+        display_name_types = fbb.CreateVector<PlainTextWithEmojis>(vector{PlainTextWithEmojis::Plain});
+        display_name_values = fbb.CreateVector<Offset<void>>(vector{display_name_s.Union()});
+      }
+      const auto content_warning_s = content_warning.transform([&](auto s) { return fbb.CreateString(s); });
+      const auto name_s = fbb.CreateString(name);
       BoardBuilder b(fbb);
       b.add_created_at(now_s());
-      b.add_name(fbb.CreateString(name));
-      if (display_name) b.add_display_name(*display_name_s);
+      b.add_name(name_s);
+      if (display_name) {
+        b.add_display_name_type(display_name_types);
+        b.add_display_name(display_name_values);
+      }
       if (content_warning) b.add_content_warning(*content_warning_s);
       b.add_restricted_posting(is_restricted_posting);
       fbb.Finish(b.Finish());
     }
-    const auto board_id = txn.create_board(fbb);
+    const auto board_id = txn.create_board(fbb.GetBufferSpan());
     if (search_engine) {
       (*search_engine)->index(board_id, *GetRoot<Board>(fbb.GetBufferPointer()));
     }
@@ -1023,7 +1038,7 @@ namespace Ludwig {
       b.add_federated(!is_local_only);
       fbb.Finish(b.Finish());
     }
-    txn.set_local_board(board_id, fbb);
+    txn.set_local_board(board_id, fbb.GetBufferSpan());
     txn.commit();
     return board_id;
   }
@@ -1063,19 +1078,19 @@ namespace Ludwig {
     uint64_t thread_id;
     {
       auto txn = db->open_write_txn();
-      if (!txn.get_local_user(author)) {
-        throw ApiError("Post author is not a user on this instance", 400);
+      optional<LocalUserDetail> user;
+      try { user = LocalUserDetail::get(txn, author); }
+      catch (const ApiError&) { throw ApiError("User does not exist", 403); }
+      if (!BoardDetail::get(txn, board, user).can_create_thread(user)) {
+        throw ApiError("User cannot create a thread in this board", 403);
       }
-      if (!txn.get_board(board)) {
-        throw ApiError("Board does not exist", 400);
-      }
-      // TODO: Check if user is banned
       flatbuffers::FlatBufferBuilder fbb;
       const auto title_s = fbb.CreateString(title),
         submission_s = submission_url ? fbb.CreateString(*submission_url) : 0,
         content_raw_s = text_content_markdown ? fbb.CreateString(*text_content_markdown) : 0,
-        content_safe_s = text_content_markdown ? fbb.CreateString(escape_html(*text_content_markdown)) : 0,
         content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
+      pair<Offset<Vector<TextBlock>>, Offset<Vector<Offset<void>>>> content_blocks;
+      if (text_content_markdown) content_blocks = rich_text->parse_markdown(fbb, *text_content_markdown);
       ThreadBuilder b(fbb);
       b.add_created_at(now_s());
       b.add_author(author);
@@ -1083,13 +1098,13 @@ namespace Ludwig {
       b.add_title(title_s);
       if (submission_url) b.add_content_url(submission_s);
       if (text_content_markdown) {
-        // TODO: Parse Markdown and HTML
         b.add_content_text_raw(content_raw_s);
-        b.add_content_text_safe(content_safe_s);
+        b.add_content_text_type(content_blocks.first);
+        b.add_content_text(content_blocks.second);
       }
       if (content_warning) b.add_content_warning(content_warning_s);
       fbb.Finish(b.Finish());
-      thread_id = txn.create_thread(fbb);
+      thread_id = txn.create_thread(fbb.GetBufferSpan());
       if (search_engine) {
         (*search_engine)->index(thread_id, *GetRoot<Thread>(fbb.GetBufferPointer()));
       }
@@ -1112,45 +1127,44 @@ namespace Ludwig {
     } else if (len < 1) {
       throw ApiError("Comment text content cannot be blank", 400);
     }
-    uint64_t comment_id, thread_id, board_id;
-    {
-      auto txn = db->open_write_txn();
-      if (!txn.get_local_user(author)) {
-        throw ApiError("Comment author is not a user on this instance", 400);
-      }
-      auto parent_thread = txn.get_thread(parent);
-      const auto parent_comment = !parent_thread ? txn.get_comment(parent) : nullopt;
-      if (parent_comment) parent_thread = txn.get_thread(parent_comment->get().thread());
-      if (!parent_thread) {
-        throw ApiError("Comment parent post does not exist", 400);
-      }
-      board_id = parent_thread->get().board();
-      // TODO: Check if user is banned
-      flatbuffers::FlatBufferBuilder fbb;
-      const auto content_raw_s = fbb.CreateString(text_content_markdown),
-        content_safe_s = fbb.CreateString(escape_html(text_content_markdown)),
-        content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
-      CommentBuilder b(fbb);
-      b.add_created_at(now_s());
-      b.add_author(author);
-      b.add_thread(thread_id = parent_comment ? parent_comment->get().thread() : parent);
-      b.add_parent(parent);
-      // TODO: Parse Markdown and HTML
-      b.add_content_raw(content_raw_s);
-      b.add_content_safe(content_safe_s);
-      if (content_warning) b.add_content_warning(content_warning_s);
-      fbb.Finish(b.Finish());
-      comment_id = txn.create_comment(fbb);
-      if (search_engine) {
-        (*search_engine)->index(comment_id, *GetRoot<Comment>(fbb.GetBufferPointer()));
-      }
-      txn.set_vote(author, comment_id, Vote::Upvote);
-      txn.commit();
+    auto txn = db->open_write_txn();
+    const auto login = LocalUserDetail::get(txn, author);
+    optional<ThreadDetail> parent_thread;
+    optional<CommentDetail> parent_comment;
+    try {
+      parent_thread = ThreadDetail::get(txn, parent, login);
+    } catch (...) {
+      parent_comment = CommentDetail::get(txn, parent, login);
+      parent_thread = ThreadDetail::get(txn, parent_comment->comment().thread(), login);
     }
+    if (parent_comment ? !parent_comment->can_reply_to(login) : !parent_thread->can_reply_to(login)) {
+      throw ApiError("User cannot reply to this post", 403);
+    }
+    flatbuffers::FlatBufferBuilder fbb;
+    const auto content_raw_s = fbb.CreateString(text_content_markdown),
+      content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
+    const auto content_blocks = rich_text->parse_markdown(fbb, text_content_markdown);
+    CommentBuilder b(fbb);
+    b.add_created_at(now_s());
+    b.add_author(author);
+    b.add_thread(parent_thread->id);
+    b.add_parent(parent);
+    b.add_content_raw(content_raw_s);
+    b.add_content_type(content_blocks.first);
+    b.add_content(content_blocks.second);
+    if (content_warning) b.add_content_warning(content_warning_s);
+    fbb.Finish(b.Finish());
+    const auto comment_id = txn.create_comment(fbb.GetBufferSpan());
+    const auto board_id = parent_thread->thread().board();
+    if (search_engine) {
+      (*search_engine)->index(comment_id, *GetRoot<Comment>(fbb.GetBufferPointer()));
+    }
+    txn.set_vote(author, comment_id, Vote::Upvote);
+    txn.commit();
     event_bus->dispatch(Event::UserStatsUpdate, author);
     event_bus->dispatch(Event::BoardStatsUpdate, board_id);
-    event_bus->dispatch(Event::PostStatsUpdate, thread_id);
-    if (parent != thread_id) event_bus->dispatch(Event::PostStatsUpdate, parent);
+    event_bus->dispatch(Event::PostStatsUpdate, parent_thread->id);
+    if (parent != parent_thread->id) event_bus->dispatch(Event::PostStatsUpdate, parent);
     return comment_id;
   }
   auto InstanceController::vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void {

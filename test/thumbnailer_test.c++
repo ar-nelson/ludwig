@@ -1,25 +1,14 @@
+#include "test_common.h++"
 #include "util/thumbnailer.h++"
-#include <catch2/catch_test_macros.hpp>
-#include <fstream>
-#include <filesystem>
-#include <iterator>
 
 using namespace Ludwig;
 
 static inline void thumbnail(std::string extension) {
-  std::filesystem::path p(__FILE__), file = p.parent_path() / "images" / ("test." + extension);
-  REQUIRE(std::filesystem::exists(file));
-  std::string src;
-  {
-    std::ostringstream ss;
-    std::ifstream input(file.c_str(), std::ios::binary);
-    ss << input.rdbuf();
-    src = ss.str();
-  }
+  auto src = load_file(test_root() / "images" / ("test." + extension));
   REQUIRE(!src.empty());
   auto thumbnail = generate_thumbnail("image/" + extension, src, 256);
   REQUIRE(!thumbnail.empty());
-  std::ofstream output(p.parent_path() / "images" / ("thumbnail_" + extension + ".webp"));
+  std::ofstream output(test_root() / "images" / ("thumbnail_" + extension + ".webp"));
   output << thumbnail;
 }
 

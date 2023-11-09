@@ -6,5 +6,6 @@
       go-task
       nasm
       deno
+      lldb
     ];
 }

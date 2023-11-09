@@ -2,8 +2,8 @@
 #include "util/web.h++"
 #include <flatbuffers/flatbuffers.h>
 
-using flatbuffers::FlatBufferBuilder, std::nullopt, std::optional, std::string,
-    std::string_view;
+using flatbuffers::FlatBufferBuilder, flatbuffers::Offset, std::nullopt, std::optional, std::string,
+    std::string_view, std::vector;
 
 namespace Ludwig {
 
@@ -15,10 +15,13 @@ namespace Ludwig {
   static inline auto make_null_board() -> FlatBufferBuilder {
     FlatBufferBuilder fbb;
     fbb.ForceDefaults(true);
-    auto name_s = fbb.CreateString(""), display_name_s = fbb.CreateString("[deleted]");
+    const auto name = fbb.CreateString("");
+    const auto display_name_type = fbb.CreateVector(vector{PlainTextWithEmojis::Plain});
+    const auto display_name = fbb.CreateVector(vector{fbb.CreateString("[deleted]").Union()});
     BoardBuilder board(fbb);
-    board.add_name(name_s);
-    board.add_display_name(display_name_s);
+    board.add_name(name);
+    board.add_display_name_type(display_name_type);
+    board.add_display_name(display_name);
     board.add_can_upvote(false);
     board.add_can_downvote(false);
     fbb.Finish(board.Finish());
@@ -27,20 +30,29 @@ namespace Ludwig {
   static inline auto make_null_user() -> FlatBufferBuilder {
     FlatBufferBuilder fbb;
     fbb.ForceDefaults(true);
-    auto name_s = fbb.CreateString(""), display_name_s = fbb.CreateString("[deleted]");
+    const auto name = fbb.CreateString("");
+    const auto display_name_type = fbb.CreateVector(vector{PlainTextWithEmojis::Plain});
+    const auto display_name = fbb.CreateVector(vector{fbb.CreateString("[deleted]").Union()});
     UserBuilder user(fbb);
-    user.add_name(name_s);
-    user.add_display_name(display_name_s);
+    user.add_name(name);
+    user.add_display_name_type(display_name_type);
+    user.add_display_name(display_name);
     fbb.Finish(user.Finish());
     return fbb;
   }
   static inline auto make_null_thread() -> FlatBufferBuilder {
     FlatBufferBuilder fbb;
     fbb.ForceDefaults(true);
-    auto content_s = fbb.CreateString("[deleted]");
+    const auto content_s = fbb.CreateString("[deleted]");
+    const auto content_text_type = fbb.CreateVector(vector{TextBlock::P});
+    const auto content_text = fbb.CreateVector(vector{CreateTextSpans(fbb,
+      fbb.CreateVector(vector{TextSpan::Plain}),
+      fbb.CreateVector(vector{content_s.Union()})
+    ).Union()});
     ThreadBuilder thread(fbb);
     thread.add_content_text_raw(content_s);
-    thread.add_content_text_safe(content_s);
+    thread.add_content_text_type(content_text_type);
+    thread.add_content_text(content_text);
     thread.add_title(content_s);
     fbb.Finish(thread.Finish());
     return fbb;

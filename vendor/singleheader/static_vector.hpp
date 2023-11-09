@@ -372,6 +372,17 @@ struct static_vector {
         return mut_pos;
     }
 
+    // Added by Adam Nelson for Ludwig
+    template <typename... CtorArgs>
+    value_type& emplace_back(CtorArgs&&... args) {
+        if (full())
+            throw std::out_of_range("size()");
+        iterator pos = end();
+        auto ptr = new (pos) value_type(std::forward<CtorArgs>(args)...);
+        m_size++;
+        return *ptr;
+    }
+
     // Erase element at `pos`
     // TODO docs
     iterator erase(const_iterator pos) {
@@ -399,7 +410,6 @@ struct static_vector {
         m_size++;
     }
 
-    // TODO emplace_back
     // TODO pop_back
     // TODO resize
     // TODO swap

@@ -10,7 +10,7 @@ TEST_CASE("send request to example.com", "[http_client]") {
   std::ostringstream response_body;
   client.get("https://example.com")
     .header("Accept", "text/html")
-    .dispatch([&](std::shared_ptr<const HttpClientResponse> response) {
+    .dispatch([&](auto&& response) {
       REQUIRE(response->error().value_or("") == "");
       REQUIRE(response->status() == 200);
       REQUIRE(response->header("content-type").starts_with("text/html"));

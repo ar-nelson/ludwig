@@ -13,7 +13,7 @@ namespace Ludwig {
 
     auto handle_resolve(const asio::error_code& ec, asio::ip::tcp::resolver::iterator endpoint_iterator) -> void;
   protected:
-    auto fetch(HttpClientRequest&& req, HttpResponseCallback callback) -> void;
+    auto fetch(HttpClientRequest&& req, HttpResponseCallback&& callback) -> void;
   public:
     AsioHttpClient(std::shared_ptr<asio::io_context> io, std::shared_ptr<asio::ssl::context> ssl);
   };

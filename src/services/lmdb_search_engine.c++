@@ -1,5 +1,6 @@
 #include "lmdb_search_engine.h++"
-#include "static/tokenizer/tokenizer_model.h"
+#include "util/rich_text.h++"
+#include "static/en.wiki.bpe.vs200000.model.h++"
 #include <map>
 
 using std::inserter, std::optional, std::pair, std::runtime_error, std::set,
@@ -89,7 +90,7 @@ namespace Ludwig {
       mdb_txn_commit(txn)
     )) throw runtime_error(fmt::format("Search database initialization failed: {}", mdb_strerror(err)));
 
-    const auto status = processor.LoadFromSerializedProto({ tokenizer_model, (size_t)tokenizer_model_size });
+    const auto status = processor.LoadFromSerializedProto(en_wiki_bpe_vs200000_model_str());
     if (!status.ok()) {
       throw runtime_error("Search tokenizer initialization failed: " + status.ToString());
     }
@@ -130,11 +131,11 @@ namespace Ludwig {
     Txn txn(env, 0);
     set<uint64_t> tokens;
     into_set(tokens, processor.EncodeAsIds(user.name()->string_view()));
-    if (user.display_name()) {
-      into_set(tokens, processor.EncodeAsIds(user.display_name()->string_view()));
+    if (user.display_name_type()->size()) {
+      into_set(tokens, processor.EncodeAsIds(RichTextParser::plain_text_with_emojis_to_text_content(user.display_name_type(), user.display_name())));
     }
-    if (user.bio_safe()) {
-      into_set(tokens, processor.EncodeAsIds(user.bio_safe()->string_view()));
+    if (user.bio_type()->size()) {
+      into_set(tokens, processor.EncodeAsIds(RichTextParser::blocks_to_text_content(user.bio_type(), user.bio())));
     }
     index_tokens(std::move(txn), id, Token_Users, tokens);
   }
@@ -144,10 +145,10 @@ namespace Ludwig {
     set<uint64_t> tokens;
     into_set(tokens, processor.EncodeAsIds(board.name()->string_view()));
     if (board.display_name()) {
-      into_set(tokens, processor.EncodeAsIds(board.display_name()->string_view()));
+      into_set(tokens, processor.EncodeAsIds(RichTextParser::plain_text_with_emojis_to_text_content(board.display_name_type(), board.display_name())));
     }
-    if (board.description_safe()) {
-      into_set(tokens, processor.EncodeAsIds(board.description_safe()->string_view()));
+    if (board.description_type()->size()) {
+      into_set(tokens, processor.EncodeAsIds(RichTextParser::blocks_to_text_content(board.description_type(), board.description())));
     }
     index_tokens(std::move(txn), id, Token_Boards, tokens);
   }
@@ -156,8 +157,8 @@ namespace Ludwig {
     Txn txn(env, 0);
     set<uint64_t> tokens;
     into_set(tokens, processor.EncodeAsIds(thread.title()->string_view()));
-    if (thread.content_text_safe()) {
-      into_set(tokens, processor.EncodeAsIds(thread.content_text_safe()->string_view()));
+    if (thread.content_text_type()->size()) {
+      into_set(tokens, processor.EncodeAsIds(RichTextParser::blocks_to_text_content(thread.content_text_type(), thread.content_text())));
     }
     if (card_opt) {
       const auto& card = card_opt->get();
@@ -174,7 +175,7 @@ namespace Ludwig {
   auto LmdbSearchEngine::index(uint64_t id, const Comment& comment) -> void {
     Txn txn(env, 0);
     set<uint64_t> tokens;
-    into_set(tokens, processor.EncodeAsIds(comment.content_safe()->string_view()));
+    into_set(tokens, processor.EncodeAsIds(RichTextParser::blocks_to_text_content(comment.content_type(), comment.content())));
     index_tokens(std::move(txn), id, Token_Comments, tokens);
   }
 

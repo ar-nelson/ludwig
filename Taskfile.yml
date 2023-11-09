@@ -2,7 +2,7 @@ version: '3'
 
 tasks:
   cmake-debug:
-    desc: Set up CMake debug build directory in build.debug
+    desc: 🏗️ Set up CMake debug build directory in build.debug/
     sources:
       - CMakeLists.txt
     cmds:
@@ -12,7 +12,7 @@ tasks:
     generates:
       - build.debug/build.ninja
   cmake-release:
-    desc: Set up CMake release build directory in build.release
+    desc: 🏗️ Set up CMake release build directory in build.release/
     sources:
       - CMakeLists.txt
     cmds:
@@ -22,7 +22,7 @@ tasks:
     generates:
       - build.release/build.ninja
   build-debug:
-    desc: Build in debug mode, along with unit tests, in build.debug
+    desc: 🔧 Build in debug mode, along with unit tests, in build.debug/
     deps:
       - cmake-debug
     sources:
@@ -37,7 +37,7 @@ tasks:
       - build.debug/test
       - build.debug/ludwig
   build-release:
-    desc: Build in release mode,  in build.release
+    desc: 🔧 Build in release mode, in build.release/
     deps:
       - cmake-release
     sources:
@@ -51,29 +51,43 @@ tasks:
     generates:
       - build.release/ludwig
   test:
-    desc: Run unit test suite
+    desc: 🚨 Run the unit test suite
     deps:
       - build-debug
     cmds:
-      - gdb -quiet -ex='set confirm on' -ex=run -ex=quit --args ./build.debug/test -b
+      - lldb -o run -- ./build.debug/test -b
   run-debug:
+    desc: ▶️ Run the debug build of Ludwig, with default settings
     deps:
       - build-debug
     cmds:
       - ./build.debug/ludwig --log-level debug
   run:
+    desc: ▶️ Run the release build of Ludwig, with default settings
     deps:
       - build-release
     cmds:
       - ./build.release/ludwig
+  gen-typescript-flatbuffers:
+    desc: ⚙️ Generate TypesScript Flatbuffers files used by the scripts in extras/
+    sources:
+      - src/models/*.fbs
+    cmds:
+      - ./build.debug/flatc --ts --gen-all -o ./extras/flatbuffers src/models/ts-models.fbs
+      - >
+        find ./extras/flatbuffers -iname '*.ts' -exec sed -i -e "s/\\.js'/.ts'/g" -e "s/from 'flatbuffers'/from 'npm:flatbuffers'/g" {} \;
+    generates:
+      - ./extras/flatbuffers/ludwig.ts
   gen-random-db:
+    desc: "⚙️ Generate a ludwig.db file with random test fixture data. ⚠️ WARNING: WILL DELETE AN EXISTING DB FILE! ⚠️"
     deps:
+      - gen-typescript-flatbuffers
       - build-debug
     cmds:
       - rm -f ludwig.mdb
       - rm -f ludwig.mdb-lock
-      - deno run extras/generate-mock-data.ts > random.dbdump
-      - ./build.debug/ludwig --import random.dbdump
+      - deno run extras/generate-mock-data.ts > random.dbdump.gz
+      - ./build.debug/ludwig --log-level debug --import random.dbdump.gz
   html-sample:
     sources:
       - extras/static-sample-server.ts
@@ -82,6 +96,6 @@ tasks:
     cmds:
       - deno run --allow-read --allow-net ./extras/static-sample-server.ts
   clean:
-    desc: Delete all build directories
+    desc: 🧹 Delete all build directories
     cmds:
       - rm -rf build build.debug build.release
