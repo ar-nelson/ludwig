@@ -3,6 +3,8 @@
 #include <webp/encode.h>
 #include <image_dec.h>
 #include <gif_lib.h>
+#include <iostream>
+#include <sstream>
 
 namespace Ludwig {
 

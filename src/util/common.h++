@@ -1,17 +1,23 @@
 #pragma once
 #include <stdint.h>
 #include <stdlib.h>
+#include <algorithm>
 #include <chrono>
+#include <coroutine>
 #include <functional>
 #include <limits>
+#include <list>
 #include <optional>
 #include <regex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
 #include <libxml/parser.h>
+#include <asio.hpp>
+#include <uWebSockets/MoveOnlyFunction.h>
 
 namespace Ludwig {
   constexpr uint64_t ID_MAX = std::numeric_limits<uint64_t>::max();
@@ -82,4 +88,45 @@ namespace Ludwig {
       );
     }
   };
+
+    template <typename T = std::monostate> class AsyncCell {
+    private:
+      using Handles = std::list<uWS::MoveOnlyFunction<void()>>;
+      struct State {
+        std::mutex mutex;
+        std::variant<Handles, T> v;
+      };
+      std::shared_ptr<State> state = std::make_shared<State>();
+    public:
+      template<asio::completion_token_for<void(T&)> CompletionToken>
+      inline auto async_get(CompletionToken&& token) const {
+        auto init = [&](asio::completion_handler_for<void(T&)> auto handler) {
+          auto complete = [state = std::weak_ptr(state), handler = std::move(handler)] mutable {
+            auto work = asio::make_work_guard(handler);
+            auto alloc = asio::get_associated_allocator(handler, asio::recycling_allocator<void>());
+            asio::dispatch(work.get_executor(),
+              asio::bind_allocator(alloc, [state = state, handler = std::move(handler)] mutable {
+                if (auto s = state.lock()) std::move(handler)(std::get<1>(s->v));
+              })
+            );
+          };
+          std::lock_guard<std::mutex> lock(state->mutex);
+          if (auto* handles = std::get_if<Handles>(&state->v)) handles->push_back(std::move(complete));
+          else complete();
+        };
+        return asio::async_initiate<CompletionToken, void(T&)>(init, token);
+      }
+
+      inline auto set(T new_value) -> void {
+        Handles handles;
+        {
+          std::lock_guard<std::mutex> lock(state->mutex);
+          if (auto* existing_handles = std::get_if<Handles>(&state->v)) {
+            std::swap(handles, *existing_handles);
+            state->v = new_value;
+          } else return;
+        }
+        for (auto& handle : handles) std::move(handle)();
+      }
+    };
 }

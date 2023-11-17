@@ -2,10 +2,11 @@
 #include "models/detail.h++"
 #include <libxml/HTMLparser.h>
 #include <static_vector.hpp>
+#include "util/web.h++"
 #include "util/lambda_macros.h++"
 
-using std::make_shared, std::optional, std::pair, std::regex, std::regex_match,
-    std::runtime_error, std::shared_ptr, std::string, std::string_view,
+using std::optional, std::regex, std::regex_match, std::runtime_error,
+    std::shared_ptr, std::string, std::string_view,
     flatbuffers::FlatBufferBuilder;
 
 namespace Ludwig {
@@ -16,65 +17,52 @@ namespace Ludwig {
     shared_ptr<EventBus> event_bus,
     optional<shared_ptr<SearchEngine>> search_engine
   ) : db(db), http_client(http_client), xml_ctx(xml_ctx), event_bus(event_bus), search_engine(search_engine),
-      sub_fetch(event_bus->on_event(Event::ThreadFetchLinkCard, [&](Event, uint64_t id){fetch_link_card_for_thread(id);})),
+      sub_fetch(event_bus->on_event_async(Event::ThreadFetchLinkCard, [&](Event, uint64_t id) -> asio::awaitable<void> {
+        co_await fetch_link_card_for_thread(id);
+      })),
       small_cache(http_client, 16384, 256),
       banner_cache(http_client, 256, 960, 160) {}
 
-  auto RemoteMediaController::user_avatar(string_view user_name, ThumbnailCache::Callback&& cb) -> void {
+  auto RemoteMediaController::user_avatar(string_view user_name) -> asio::awaitable<ThumbnailCache::Image> {
     auto txn = db->open_read_txn();
     const auto user =
       txn.get_user_id_by_name(user_name).and_then([&](auto id){return txn.get_user(id);});
-    if (user && user->get().avatar_url()) {
-      small_cache.thumbnail(user->get().avatar_url()->str(), std::move(cb));
-    } else {
-      cb(make_shared<optional<pair<string, uint64_t>>>());
-    }
+    if (user && user->get().avatar_url()) return small_cache.thumbnail(user->get().avatar_url()->str());
+    throw ApiError("No image available", 404);
   }
 
-  auto RemoteMediaController::user_banner(string_view user_name, ThumbnailCache::Callback&& cb) -> void {
+  auto RemoteMediaController::user_banner(string_view user_name) -> asio::awaitable<ThumbnailCache::Image> {
     auto txn = db->open_read_txn();
     const auto user =
       txn.get_user_id_by_name(user_name).and_then([&](auto id){return txn.get_user(id);});
-    if (user && user->get().banner_url()) {
-      banner_cache.thumbnail(user->get().banner_url()->str(), std::move(cb));
-    } else {
-      cb(make_shared<optional<pair<string, uint64_t>>>());
-    }
+    if (user && user->get().banner_url()) return banner_cache.thumbnail(user->get().banner_url()->str());
+    throw ApiError("No image available", 404);
   }
 
-  auto RemoteMediaController::board_icon(string_view board_name, ThumbnailCache::Callback&& cb) -> void {
+  auto RemoteMediaController::board_icon(string_view board_name) -> asio::awaitable<ThumbnailCache::Image> {
     auto txn = db->open_read_txn();
     const auto board =
       txn.get_board_id_by_name(board_name).and_then([&](auto id){return txn.get_board(id);});
-    if (board && board->get().icon_url()) {
-      small_cache.thumbnail(board->get().icon_url()->str(), std::move(cb));
-    } else {
-      cb(make_shared<optional<pair<string, uint64_t>>>());
-    }
+    if (board && board->get().icon_url()) return small_cache.thumbnail(board->get().icon_url()->str());
+    throw ApiError("No image available", 404);
   }
 
-  auto RemoteMediaController::board_banner(string_view board_name, ThumbnailCache::Callback&& cb) -> void {
+  auto RemoteMediaController::board_banner(string_view board_name) -> asio::awaitable<ThumbnailCache::Image> {
     auto txn = db->open_read_txn();
     const auto board =
       txn.get_board_id_by_name(board_name).and_then([&](auto id){return txn.get_board(id);});
-    if (board && board->get().banner_url()) {
-      banner_cache.thumbnail(board->get().banner_url()->str(), std::move(cb));
-    } else {
-      cb(make_shared<optional<pair<string, uint64_t>>>());
-    }
+    if (board && board->get().banner_url()) return banner_cache.thumbnail(board->get().banner_url()->str());
+    throw ApiError("No image available", 404);
   }
 
-  auto RemoteMediaController::thread_link_card_image(uint64_t thread_id, ThumbnailCache::Callback&& cb) -> void {
+  auto RemoteMediaController::thread_link_card_image(uint64_t thread_id) -> asio::awaitable<ThumbnailCache::Image> {
     auto txn = db->open_read_txn();
     const auto thread = txn.get_thread(thread_id);
     if (thread && thread->get().content_url()) {
       const auto card = txn.get_link_card(thread->get().content_url()->string_view());
-      if (card && card->get().image_url()) {
-        small_cache.thumbnail(card->get().image_url()->str(), std::move(cb));
-        return;
-      }
+      if (card && card->get().image_url()) return small_cache.thumbnail(card->get().image_url()->str());
     }
-    cb(make_shared<optional<pair<string, uint64_t>>>());
+    throw ApiError("No image available", 404);
   }
 
   const regex ws("^\\s*$");
@@ -207,12 +195,12 @@ namespace Ludwig {
     }
   }
 
-  auto RemoteMediaController::fetch_link_card_for_thread(uint64_t thread_id) -> void {
+  auto RemoteMediaController::fetch_link_card_for_thread(uint64_t thread_id) -> asio::awaitable<void> {
     string url;
     try {
       auto txn = db->open_write_txn();
       const auto thread = ThreadDetail::get(txn, thread_id, {});
-      if (!thread.should_fetch_card()) return;
+      if (!thread.should_fetch_card()) co_return;
       url = thread.thread().content_url()->str();
       const auto& card = thread.link_card();
       FlatBufferBuilder fbb;
@@ -225,41 +213,40 @@ namespace Ludwig {
       txn.commit();
     } catch (const runtime_error& e) {
       spdlog::warn("Failed to set up link card fetch for thread {:x}: {}", thread_id, e.what());
-      return;
+      co_return;
     }
-    http_client->get(url)
+    auto rsp = co_await http_client->get(url)
       .header("Accept", "text/html, application/xhtml+xml, image/ *")
-      .dispatch([this, url, thread_id](auto&& rsp) {
-        if (rsp->status() != 200) {
-          spdlog::warn("Preview card failed: got HTTP {} from {}", rsp->status(), url);
-          return;
-        }
-        PrioritizedLinkCardBuilder card(url);
-        const auto content_type = rsp->header("content-type");
-        if (content_type.starts_with("image/")) {
-          card.media_category = MediaCategory::Image;
-          if (small_cache.set_thumbnail(url, rsp->header("content-type"), rsp->body())) {
-            card.image_url = url;
-          }
-        } else {
-          html_to_link_card(xml_ctx, rsp->body(), url, card);
-        }
-        spdlog::debug(
-          R"(Fetched card for {}: title "{}", description "{}", image "{}")",
-          url, card.title.value_or(""), card.description.value_or(""), card.image_url.value_or("")
-        );
-        {
-          auto txn = db->open_write_txn();
-          card.save(txn);
-          txn.commit();
-        }
-        if (search_engine) {
-          auto txn = db->open_read_txn();
-          const auto thread = txn.get_thread(thread_id);
-          const auto card = txn.get_link_card(url);
-          if (thread) (*search_engine)->index(thread_id, thread->get(), card);
-        }
-        event_bus->dispatch(Event::ThreadUpdate, thread_id);
-      });
+      .dispatch();
+    if (rsp->status() != 200) {
+      spdlog::warn("Preview card failed: got HTTP {} from {}", rsp->status(), url);
+      co_return;
+    }
+    PrioritizedLinkCardBuilder card(url);
+    const auto content_type = rsp->header("content-type");
+    if (content_type.starts_with("image/")) {
+      card.media_category = MediaCategory::Image;
+      if (small_cache.set_thumbnail(url, rsp->header("content-type"), rsp->body())) {
+        card.image_url = url;
+      }
+    } else {
+      html_to_link_card(xml_ctx, rsp->body(), url, card);
+    }
+    spdlog::debug(
+      R"(Fetched card for {}: title "{}", description "{}", image "{}")",
+      url, card.title.value_or(""), card.description.value_or(""), card.image_url.value_or("")
+    );
+    {
+      auto txn = db->open_write_txn();
+      card.save(txn);
+      txn.commit();
+    }
+    if (search_engine) {
+      auto txn = db->open_read_txn();
+      const auto thread = txn.get_thread(thread_id);
+      const auto card = txn.get_link_card(url);
+      if (thread) (*search_engine)->index(thread_id, thread->get(), card);
+    }
+    event_bus->dispatch(Event::ThreadUpdate, thread_id);
   }
 }

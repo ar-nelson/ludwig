@@ -26,13 +26,12 @@ namespace Ludwig {
 
   class SearchEngine {
   public:
-    using Callback = std::move_only_function<void (std::vector<SearchResult>)&&>;
     virtual ~SearchEngine() = default;
     virtual auto index( uint64_t id, const User& user) -> void = 0;
     virtual auto index(uint64_t id, const Board& board) -> void = 0;
     virtual auto index(uint64_t id, const Thread& thread, std::optional<std::reference_wrapper<const LinkCard>> card_opt = {}) -> void = 0;
     virtual auto index(uint64_t id, const Comment& comment) -> void = 0;
     virtual auto unindex(uint64_t id, SearchResultType type) -> void = 0;
-    virtual auto search(SearchQuery query, Callback&& callback) -> void = 0;
+    virtual auto search(SearchQuery query) -> asio::awaitable<std::vector<SearchResult>> = 0;
   };
 }

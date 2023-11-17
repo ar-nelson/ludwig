@@ -1,22 +1,22 @@
+#include "services/http_client.h++"
 #include "util/common.h++"
 #include "util/web.h++"
-#include "services/http_client.h++"
-#include <map>
+#include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <lmdb.h>
-#include <catch2/catch_test_macros.hpp>
+#include <map>
 #include <static_block.hpp>
 
 using std::make_shared, std::make_unique, std::nullopt, std::optional,
     std::pair, std::runtime_error, std::shared_ptr, std::string,
-    std::string_view, std::vector;
+    std::string_view, std::unique_ptr, std::vector;
 using namespace std::literals::string_view_literals;
+using namespace std::chrono_literals;
 using namespace Ludwig;
 
-static_block {
-  spdlog::set_level(spdlog::level::debug);
-}
+static_block { spdlog::set_level(spdlog::level::debug); }
 
 static inline auto test_root() {
   std::filesystem::path p(__FILE__);
@@ -32,37 +32,40 @@ static inline auto load_file(std::filesystem::path p) -> string {
 }
 
 struct TempFile {
-  char* name;
+  char *name;
 
-  TempFile() {
-    name = std::tmpnam(nullptr);
-  }
-  ~TempFile() {
-    std::remove(name);
-  }
+  TempFile() { name = std::tmpnam(nullptr); }
+  ~TempFile() { std::remove(name); }
 };
 
 struct TempDB {
   TempFile file;
-  MDB_env* env;
+  MDB_env *env;
   MDB_dbi dbi;
 
   TempDB() {
     int err = mdb_env_create(&env);
-    if (err) throw runtime_error(mdb_strerror(err));
+    if (err)
+      throw runtime_error(mdb_strerror(err));
     err = mdb_env_set_maxdbs(env, 1);
-    if (err) throw runtime_error(mdb_strerror(err));
+    if (err)
+      throw runtime_error(mdb_strerror(err));
     err = mdb_env_set_mapsize(env, 1024 * 1024 * 10);
-    if (err) throw runtime_error(mdb_strerror(err));
+    if (err)
+      throw runtime_error(mdb_strerror(err));
     err = mdb_env_open(env, file.name, MDB_NOSUBDIR, 0600);
-    if (err) throw runtime_error(mdb_strerror(err));
-    MDB_txn* txn;
+    if (err)
+      throw runtime_error(mdb_strerror(err));
+    MDB_txn *txn;
     err = mdb_txn_begin(env, nullptr, 0, &txn);
-    if (err) throw runtime_error(mdb_strerror(err));
+    if (err)
+      throw runtime_error(mdb_strerror(err));
     err = mdb_dbi_open(txn, "test", MDB_CREATE | MDB_DUPSORT, &dbi);
-    if (err) throw runtime_error(mdb_strerror(err));
+    if (err)
+      throw runtime_error(mdb_strerror(err));
     err = mdb_txn_commit(txn);
-    if (err) throw runtime_error(mdb_strerror(err));
+    if (err)
+      throw runtime_error(mdb_strerror(err));
   }
   ~TempDB() {
     mdb_env_close(env);
@@ -72,39 +75,65 @@ struct TempDB {
 
 class MockHttpClient : public HttpClient {
 private:
-  std::unordered_map<string, std::tuple<uint16_t, string, string>> get_responses;
+  std::unordered_map<string, std::tuple<uint16_t, string, string>>
+      get_responses;
+  uint64_t requests = 0;
+  std::optional<std::chrono::milliseconds> delay;
   class Response : public HttpClientResponse {
   private:
     uint16_t _status;
     string_view _mimetype, _body;
+
   public:
-    Response(uint16_t status, string_view mimetype, string_view body) : _status(status), _mimetype(mimetype), _body(body) {}
-    Response(uint16_t status) : _status(status), _mimetype("text/plain"), _body(http_status(status)) {}
+    Response(uint16_t status, string_view mimetype, string_view body)
+        : _status(status), _mimetype(mimetype), _body(body) {}
+    Response(uint16_t status)
+        : _status(status), _mimetype("text/plain"), _body(http_status(status)) {
+    }
 
     auto status() const -> uint16_t { return _status; };
     auto error() const -> optional<string_view> {
       return _status >= 400 ? optional(http_status(_status)) : nullopt;
     };
     auto header(string_view name) const -> string_view {
-      if (name == "content-type") return _mimetype;
-      else if (name == "location" && _status >= 300 && _status < 400) return _body;
-      return { nullptr, 0 };
+      if (name == "content-type")
+        return _mimetype;
+      else if (name == "location" && _status >= 300 && _status < 400)
+        return _body;
+      return {nullptr, 0};
     };
     auto body() const -> string_view { return _body; };
   };
+
 protected:
-  auto fetch(HttpClientRequest&& req, HttpResponseCallback&& callback) -> void {
-    const auto rsp = get_responses.find(req.url);
-    if (rsp == get_responses.end()) callback(make_unique<Response>(404));
-    else if (req.method != "GET") callback(make_unique<Response>(405));
-    else {
-      const auto [status, mimetype, body] = rsp->second;
-      callback(make_unique<Response>(status, mimetype, body));
+  auto fetch(unique_ptr<HttpClientRequest> req)
+      -> asio::awaitable<unique_ptr<const HttpClientResponse>> {
+    requests++;
+    const auto rsp = get_responses.find(req->url.to_string());
+    if (rsp == get_responses.end())
+      co_return make_unique<Response>(404);
+    if (req->method != "GET")
+      co_return make_unique<Response>(405);
+    if (delay) {
+      asio::steady_timer timer(co_await asio::this_coro::executor, *delay);
+      co_await timer.async_wait(asio::use_awaitable);
     }
+    const auto [status, mimetype, body] = rsp->second;
+    co_return make_unique<Response>(status, mimetype, body);
   }
+
 public:
-  auto on_get(string url, uint16_t status, string_view mimetype, string_view body) -> MockHttpClient* {
+  auto on_get(string url, uint16_t status, string_view mimetype,
+              string_view body) -> MockHttpClient * {
     get_responses.emplace(url, std::tuple(status, mimetype, body));
     return this;
+  }
+
+  inline auto set_delay(std::chrono::milliseconds d) -> void {
+    delay = d;
+  }
+
+  inline auto total_requests() -> uint64_t {
+    return requests;
   }
 };

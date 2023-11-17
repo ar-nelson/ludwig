@@ -52,7 +52,10 @@ TEST_CASE("fetch Wikipedia link card", "[remote_media]") {
   http_client->on_get(WIKI_URL, 200, TYPE_HTML, load_file(test_root() / "fixtures" / "wikipedia_red_panda.html"));
   RemoteMediaController remote_media(db, http_client, xml_ctx);
 
-  remote_media.fetch_link_card_for_thread(thread_id);
+  asio::io_context io;
+  auto f = asio::co_spawn(io, remote_media.fetch_link_card_for_thread(thread_id), asio::use_future);
+  io.run();
+  f.get();
 
   auto txn = db->open_read_txn();
   const auto link_card_opt = txn.get_link_card(WIKI_URL);

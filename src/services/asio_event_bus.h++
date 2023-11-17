@@ -6,20 +6,18 @@
 #include <asio.hpp>
 
 namespace Ludwig {
-  typedef std::move_only_function<void (Event, uint64_t)> EventCallback;
-
   class AsioEventBus;
 
   struct EventListener {
     uint64_t id, subject_id;
     Event event;
-    EventCallback callback;
+    EventBus::Callback callback;
 
     EventListener(
       uint64_t id,
       Event event,
       uint64_t subject_id,
-      EventCallback&& callback
+      EventBus::Callback&& callback
     ) : id(id), subject_id(subject_id), event(event), callback(std::move(callback)) {}
   };
 
@@ -47,9 +45,7 @@ namespace Ludwig {
     AsioEventBus(std::shared_ptr<asio::io_context> io) : io(io), work(io->get_executor()) {};
 
     auto dispatch(Event event, uint64_t subject_id = 0) -> void;
-    inline auto on_event(Event event, EventCallback&& callback) -> Subscription {
-      return on_event(event, 0, std::move(callback));
-    }
-    auto on_event(Event event, uint64_t subject_id, EventCallback&& callback) -> Subscription;
+    auto on_event(Event event, uint64_t subject_id, Callback&& callback) -> Subscription;
+    auto on_event_async(Event event, uint64_t subject_id, CoroCallback&& callback) -> Subscription;
   };
 }

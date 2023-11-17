@@ -4,6 +4,7 @@
 #include "services/asio_http_client.h++"
 #include "services/asio_event_bus.h++"
 #include "services/lmdb_search_engine.h++"
+#include "services/rate_limiter.h++"
 #include "controllers/instance.h++"
 #include "controllers/remote_media.h++"
 #include "views/webapp.h++"
@@ -16,16 +17,16 @@
 #include <csignal>
 
 using namespace Ludwig;
-using std::make_shared, std::optional, std::shared_ptr;
+using std::lock_guard, std::make_shared, std::mutex, std::optional, std::shared_ptr, std::vector;
 namespace ssl = asio::ssl;
 
-static us_listen_socket_t* global_socket = nullptr;
+static vector<us_listen_socket_t*> global_sockets;
+static mutex global_sockets_mutex;
 
 void signal_handler(int) {
   spdlog::warn("Caught signal, shutting down.");
-  if (global_socket != nullptr) {
-    us_listen_socket_close(0, global_socket);
-  }
+  lock_guard<mutex> lock(global_sockets_mutex);
+  for (auto* socket : global_sockets) us_listen_socket_close(0, socket);
 }
 
 int main(int argc, char** argv) {
@@ -33,22 +34,24 @@ int main(int argc, char** argv) {
     optparse::OptionParser().description("lemmy but better");
   parser.add_option("-p", "--port")
     .dest("port")
-    .set_default("2023");
+    .type("INT")
+    .set_default(2023);
   parser.add_option("-d", "--domain")
     .dest("domain")
     .help("site domain, with http:// or https:// prefix")
     .set_default("http://localhost");
   parser.add_option("-s", "--map-size")
     .dest("map_size")
-    .help("maximum database size, in MiB; also applies to search db if search type is lmdb")
-    .set_default("4096");
+    .type("INT")
+    .help("maximum database size, in MiB; also applies to search db if search type is lmdb (default = 4096)")
+    .set_default(4096);
   parser.add_option("--db")
     .dest("db")
-    .help("database filename, will be created if it does not exist")
+    .help("database filename, will be created if it does not exist (default = ludwig.mdb)")
     .set_default("ludwig.mdb");
   parser.add_option("--search")
     .dest("search")
-    .help(R"(search provider, can be "none" or "lmdb:filename.mdb")")
+    .help(R"(search provider, can be "none" or "lmdb:filename.mdb" (default = lmdb:search.mdb))")
     .set_default("lmdb:search.mdb");
   parser.add_option("--import")
     .dest("import")
@@ -57,11 +60,30 @@ int main(int argc, char** argv) {
     .dest("log_level")
     .help("log level (debug, info, warn, error, critical)")
     .set_default("info");
+  parser.add_option("--rate-limit")
+    .dest("rate_limit")
+    .type("INT")
+    .help("max requests per 5 minutes from a single IP (default = 3000)")
+    .set_default(3000);
+  parser.add_option("--threads")
+    .dest("threads")
+    .type("INT")
+    .help("number of request handler threads (default = number of cores)")
+    .set_default(0);
   parser.add_help_option();
 
   const optparse::Values options = parser.parse_args(argc, argv);
   const auto dbfile = options["db"].c_str();
   const auto map_size = std::stoull(options["map_size"]);
+  const auto rate_limit = (double)std::stoull(options["rate_limit"]);
+  auto threads = std::stoull(options["threads"]);
+  if (!threads) {
+#   ifdef LUDWIG_DEBUG
+    threads = 1;
+#   else
+    threads = std::thread::hardware_concurrency();
+#   endif
+  }
   const auto log_level = options["log_level"];
   spdlog::set_level(spdlog::level::from_str(log_level));
 
@@ -93,6 +115,7 @@ int main(int argc, char** argv) {
   // TODO: Load system root certificates
   //ssl_ctx->set_verify_mode(ssl::verify_peer | ssl::context::verify_fail_if_no_peer_cert);
   ssl_ctx->set_default_verify_paths();
+  auto rate_limiter = make_shared<IpRateLimiter>(rate_limit / 300.0, rate_limit);
   auto http_client = make_shared<AsioHttpClient>(io, ssl_ctx);
   auto event_bus = make_shared<AsioEventBus>(io);
   auto db = make_shared<DB>(dbfile, map_size);
@@ -101,7 +124,8 @@ int main(int argc, char** argv) {
   auto instance_c = make_shared<InstanceController>(db, http_client, rich_text, event_bus, search_engine);
   auto remote_media_c = make_shared<RemoteMediaController>(db, http_client, xml_ctx, event_bus, search_engine);
 
-  std::thread io_thread([io]{io->run();});
+  vector<std::thread> running_threads(threads);
+  running_threads.emplace_back([io]{io->run();});
 
   struct sigaction sigint_handler { .sa_flags = 0 }, sigterm_handler { .sa_flags = 0 };
   sigint_handler.sa_handler = signal_handler;
@@ -111,20 +135,25 @@ int main(int argc, char** argv) {
   sigaction(SIGINT, &sigint_handler, nullptr);
   sigaction(SIGTERM, &sigterm_handler, nullptr);
 
-  uWS::App app;
-  media_routes(app, remote_media_c);
-  webapp_routes(app, instance_c, rich_text);
-  app.listen(port, [port](auto *listen_socket) {
-    if (listen_socket) {
-      global_socket = listen_socket;
-      spdlog::info("Listening on port {}", port);
-    }
-  }).run();
+  auto run = [&] {
+    uWS::App app;
+    media_routes(app, remote_media_c);
+    webapp_routes(app, instance_c, rate_limiter, rich_text);
+    app.listen(port, [port](auto *listen_socket) {
+      if (listen_socket) {
+        lock_guard<mutex> lock(global_sockets_mutex);
+        global_sockets.push_back(listen_socket);
+        spdlog::info("Thread listening on port {}", port);
+      }
+    }).run();
+  };
+  for (size_t i = 1; i < threads; i++) running_threads.emplace_back(run);
+  run();
 
   io->stop();
-  io_thread.join();
+  for (auto& th : running_threads) if (th.joinable()) th.join();
 
-  if (global_socket != nullptr) {
+  if (!global_sockets.empty()) {
     spdlog::info("Shut down cleanly");
     return EXIT_SUCCESS;
   } else {

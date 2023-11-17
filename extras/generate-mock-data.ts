@@ -15,6 +15,7 @@ import {
   Salt,
   SettingRecord,
   SortType,
+  SubscriptionRecord,
   TextBlock,
   TextSpan,
   TextSpans,
@@ -585,6 +586,16 @@ async function genAll(scale = SCALE) {
         ]),
       ));
       write(user, DumpType.VoteRecord, fbb.asUint8Array());
+    }
+  }
+  for (const user of localUsers) {
+    const fbb = new flatbuffers.Builder(),
+      subCount = faker.number.int({ min: 2, max: boards.length * 0.75 }),
+      subs = faker.helpers.arrayElements(boards, subCount);
+    for (const board of subs) {
+      fbb.clear();
+      fbb.finish(SubscriptionRecord.createSubscriptionRecord(fbb, board));
+      write(user, DumpType.SubscriptionRecord, fbb.asUint8Array());
     }
   }
 

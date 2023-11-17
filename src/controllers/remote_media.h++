@@ -25,11 +25,11 @@ namespace Ludwig {
       std::optional<std::shared_ptr<SearchEngine>> search_engine = {}
     );
 
-    auto user_avatar(std::string_view user_name, ThumbnailCache::Callback&& cb) -> void;
-    auto user_banner(std::string_view user_name, ThumbnailCache::Callback&& cb) -> void;
-    auto board_icon(std::string_view board_name, ThumbnailCache::Callback&& cb) -> void;
-    auto board_banner(std::string_view board_name, ThumbnailCache::Callback&& cb) -> void;
-    auto thread_link_card_image(uint64_t thread_id, ThumbnailCache::Callback&& cb) -> void;
-    auto fetch_link_card_for_thread(uint64_t thread_id) -> void;
+    auto user_avatar(std::string_view user_name) -> asio::awaitable<ThumbnailCache::Image>;
+    auto user_banner(std::string_view user_name) -> asio::awaitable<ThumbnailCache::Image>;
+    auto board_icon(std::string_view board_name) -> asio::awaitable<ThumbnailCache::Image>;
+    auto board_banner(std::string_view board_name) -> asio::awaitable<ThumbnailCache::Image>;
+    auto thread_link_card_image(uint64_t thread_id) -> asio::awaitable<ThumbnailCache::Image>;
+    auto fetch_link_card_for_thread(uint64_t thread_id) -> asio::awaitable<void>;
   };
 }

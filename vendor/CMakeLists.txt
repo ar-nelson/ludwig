@@ -1,3 +1,13 @@
+add_library(vendor-misc STATIC
+  misc/src/mdb.c
+  misc/src/midl.c
+  misc/src/csprng.cpp
+  misc/src/mmd.c
+  misc/src/rate_limiter.cpp
+)
+target_include_directories(vendor-misc PUBLIC misc/include/)
+target_compile_definitions(vendor-misc INTERFACE XXH_INLINE_ALL)
+
 add_subdirectory(zlib zlib)
 set(ZLIB_LIBRARY libz.a)
 set(ZLIB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/zlib ${CMAKE_CURRENT_BINARY_DIR}/zlib)
@@ -10,9 +20,14 @@ add_library(asio STATIC
   asio/asio.cpp
   asio/asio_ssl.cpp
 )
-target_link_libraries(asio PUBLIC ssl crypto)
-target_include_directories(asio SYSTEM PUBLIC asio/)
-target_compile_definitions(asio PUBLIC ASIO_SEPARATE_COMPILATION)
+#if (LINUX)
+#  target_compile_definitions(asio PUBLIC ASIO_SEPARATE_COMPILATION ASIO_HAS_IO_URING ASIO_DISABLE_EPOLL)
+#  target_link_libraries(asio PUBLIC ssl crypto uring)
+#else()
+  target_compile_definitions(asio PUBLIC ASIO_SEPARATE_COMPILATION)
+  target_link_libraries(asio PUBLIC ssl crypto)
+#endif()
+target_include_directories(asio PUBLIC asio/)
 
 add_library(uWS STATIC
   uWS/uSockets/bsd.c
@@ -24,10 +39,10 @@ add_library(uWS STATIC
   uWS/uSockets/crypto/sni_tree.cpp
 )
 target_include_directories(uWS
-  SYSTEM PUBLIC
+  PUBLIC
     ${ZLIB_INCLUDE_DIRS}
     uWS/uSockets/
-  SYSTEM INTERFACE
+  INTERFACE
     uWS/
 )
 target_compile_definitions(uWS PUBLIC LIBUS_USE_ASIO LIBUS_USE_OPENSSL)
@@ -37,20 +52,6 @@ target_link_libraries(uWS
   INTERFACE
     zlibstatic
 )
-
-add_library(lmdb STATIC
-  lmdb/mdb.c
-  lmdb/midl.c
-)
-target_include_directories(lmdb SYSTEM PUBLIC lmdb/)
-
-add_library(xxHash INTERFACE)
-target_include_directories(xxHash SYSTEM INTERFACE xxHash/)
-target_compile_definitions(xxHash INTERFACE XXH_INLINE_ALL)
-
-add_library(csprng STATIC
-  csprng/source/csprng.cpp)
-target_include_directories(csprng PUBLIC csprng/source/)
 
 option(LIBXML2_WITH_C14N "Add the Canonicalization support" OFF)
 option(LIBXML2_WITH_CATALOG "Add the Catalog support" OFF)

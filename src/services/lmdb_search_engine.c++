@@ -4,7 +4,7 @@
 #include <map>
 
 using std::inserter, std::optional, std::pair, std::runtime_error, std::set,
-    std::string, std::string_view;
+    std::string, std::string_view, std::vector;
 
 namespace Ludwig {
   static inline auto int_val(uint64_t* i) -> MDB_val {
@@ -206,9 +206,10 @@ namespace Ludwig {
     }
   }
 
-  auto LmdbSearchEngine::search(SearchQuery query, Callback&& callback) -> void {
+  auto LmdbSearchEngine::search(SearchQuery query) -> asio::awaitable<vector<SearchResult>> {
     set<int> tokens;
     MatchMap matches;
+    vector<SearchResult> results;
 
     // string-start tokens are different from mid-string tokens
     into_set(tokens, processor.EncodeAsIds(query.query));
@@ -221,10 +222,7 @@ namespace Ludwig {
       if (query.include_threads) into_match_map(matches, SearchResultType::Thread, txn.get_all(Token_Threads, (uint64_t)token));
       if (query.include_comments) into_match_map(matches, SearchResultType::Comment, txn.get_all(Token_Comments, (uint64_t)token));
     }
-    if (matches.size() <= query.offset) {
-      std::move(callback)({});
-      return;
-    }
+    if (matches.size() <= query.offset) co_return results;
 
     // TODO: Filter and sort
 
@@ -233,12 +231,11 @@ namespace Ludwig {
       return a.second.second > b.second.second;
     });
     const auto n = std::min(matches.size() - query.offset, query.limit);
-    std::vector<SearchResult> results;
     results.reserve(n);
     for (size_t i = 0; i < n; i++) {
       results.emplace_back(buf[query.offset + i].second.first, buf[query.offset + i].first);
     }
 
-    std::move(callback)(results);
+    co_return results;
   }
 }

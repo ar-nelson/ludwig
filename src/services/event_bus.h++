@@ -1,5 +1,6 @@
 #pragma once
 #include "util/common.h++"
+#include <asio.hpp>
 
 namespace Ludwig {
 
@@ -26,7 +27,8 @@ namespace Ludwig {
     protected:
       virtual auto unsubscribe(uint64_t event_id, std::pair<Event, uint64_t> key) -> void = 0;
     public:
-      using Callback = std::move_only_function<void (Event, uint64_t)>;
+      using Callback = uWS::MoveOnlyFunction<void (Event, uint64_t)>;
+      using CoroCallback = uWS::MoveOnlyFunction<asio::awaitable<void> (Event, uint64_t)>;
 
       class Subscription {
       private:
@@ -58,7 +60,11 @@ namespace Ludwig {
       inline auto on_event(Event event, Callback&& callback) -> Subscription {
         return on_event(event, 0, std::move(callback));
       }
+      inline auto on_event_async(Event event, CoroCallback&& callback) -> Subscription {
+        return on_event_async(event, 0, std::move(callback));
+      }
       virtual auto on_event(Event event, uint64_t subject_id, Callback&& callback) -> Subscription = 0;
+      virtual auto on_event_async(Event event, uint64_t subject_id, CoroCallback&& callback) -> Subscription = 0;
   };
 
   class DummyEventBus : public EventBus {
@@ -67,5 +73,6 @@ namespace Ludwig {
     public:
       inline auto dispatch(Event, uint64_t = 0) -> void {}
       inline auto on_event(Event e, uint64_t s, Callback&&) -> Subscription { return Subscription(this->shared_from_this(), 0, {e,s}); }
+      inline auto on_event_async(Event e, uint64_t s, CoroCallback&&) -> Subscription { return Subscription(this->shared_from_this(), 0, {e,s}); }
   };
 }

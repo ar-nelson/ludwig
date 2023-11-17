@@ -4,16 +4,18 @@
 #include <asio/ssl.hpp>
 
 namespace Ludwig {
+  class AsioHttpClientResponse;
+
   class AsioHttpClient : public HttpClient {
   private:
     std::shared_ptr<asio::io_context> io;
     asio::executor_work_guard<decltype(io->get_executor())> work;
     std::shared_ptr<asio::ssl::context> ssl;
-    asio::ip::tcp::resolver resolver;
 
-    auto handle_resolve(const asio::error_code& ec, asio::ip::tcp::resolver::iterator endpoint_iterator) -> void;
+    auto https_fetch(std::unique_ptr<HttpClientRequest>& req) -> asio::awaitable<std::unique_ptr<AsioHttpClientResponse>>;
+    auto http_fetch(std::unique_ptr<HttpClientRequest>& req) -> asio::awaitable<std::unique_ptr<AsioHttpClientResponse>>;
   protected:
-    auto fetch(HttpClientRequest&& req, HttpResponseCallback&& callback) -> void;
+    auto fetch(std::unique_ptr<HttpClientRequest> req) -> asio::awaitable<std::unique_ptr<const HttpClientResponse>>;
   public:
     AsioHttpClient(std::shared_ptr<asio::io_context> io, std::shared_ptr<asio::ssl::context> ssl);
   };

@@ -20,11 +20,22 @@ namespace Ludwig {
     }
   }
 
-  auto AsioEventBus::on_event(Event event, uint64_t subject_id, EventCallback&& callback) -> Subscription {
+  auto AsioEventBus::on_event(Event event, uint64_t subject_id, Callback&& callback) -> Subscription {
     unique_lock<shared_mutex> lock(listener_lock);
     auto id = next_event_id++;
     const auto key = pair(event, subject_id);
     event_listeners.emplace(key, make_shared<EventListener>(id, event, subject_id, std::move(callback)));
+    return Subscription(shared_from_this(), id, {event, subject_id});
+  }
+
+  auto AsioEventBus::on_event_async(Event event, uint64_t subject_id, CoroCallback&& callback) -> Subscription {
+    auto cbsp = make_shared<CoroCallback>(std::forward<CoroCallback>(callback));
+    unique_lock<shared_mutex> lock(listener_lock);
+    auto id = next_event_id++;
+    const auto key = pair(event, subject_id);
+    event_listeners.emplace(key, make_shared<EventListener>(id, event, subject_id, [&, cb = cbsp](Event e, uint64_t i) {
+      asio::co_spawn(*io, [e, i, cb = cb] { return (*cb)(e, i); }, asio::detached);
+    }));
     return Subscription(shared_from_this(), id, {event, subject_id});
   }
 

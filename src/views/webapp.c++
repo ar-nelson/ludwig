@@ -92,13 +92,15 @@ namespace Ludwig {
 
   template <bool SSL> struct Webapp : public std::enable_shared_from_this<Webapp<SSL>> {
     shared_ptr<InstanceController> controller;
+    shared_ptr<IpRateLimiter> rate_limiter;
     shared_ptr<RichTextParser> rt;
     string buf;
 
     Webapp(
       shared_ptr<InstanceController> controller,
+      shared_ptr<IpRateLimiter> rate_limiter,
       shared_ptr<RichTextParser> rich_text
-    ) : controller(controller), rt(rich_text) {}
+    ) : controller(controller), rate_limiter(rate_limiter), rt(rich_text) {}
 
     using App = uWS::TemplatedApp<SSL>;
     using Response = uWS::HttpResponse<SSL>*;
@@ -176,6 +178,8 @@ namespace Ludwig {
 
     auto middleware(Response rsp, Request req) -> Meta {
       const auto start = chrono::steady_clock::now();
+      const auto ip = get_ip(rsp, req);
+      rate_limiter->acquire_or_throw(ip, req->getCaseSensitiveMethod() == "POST" ? 10 : 1);
       optional<string> session_cookie;
       optional<LoginResponse> new_session;
       const auto cookies = req->getHeader("cookie");
@@ -185,7 +189,7 @@ namespace Ludwig {
           auto txn = controller->open_read_txn();
           const auto old_session = stoull(match[1], nullptr, 16);
           new_session = controller->validate_or_regenerate_session(
-            txn, old_session, rsp->getRemoteAddressAsText(), req->getHeader("user-agent")
+            txn, old_session, ip, req->getHeader("user-agent")
           );
           if (!new_session) throw std::runtime_error("expired session");
           if (new_session->session_id != old_session) {
@@ -1676,9 +1680,52 @@ namespace Ludwig {
       return *board_id;
     }
 
-    auto register_routes(App& app) -> void {
+    using PostList = std::variant<PageOf<ThreadDetail>, PageOf<CommentDetail>>;
 
-      using PostList = std::variant<PageOf<ThreadDetail>, PageOf<CommentDetail>>;
+    auto feed_route(uint64_t feed_id, Response rsp, Request req, Meta& m) -> void {
+      auto txn = controller->open_read_txn();
+      m.populate(this->shared_from_this(), txn);
+      const auto sort = parse_sort_type(req->getQuery("sort"), m.login);
+      const auto show_threads = req->getQuery("type") != "comments",
+        show_images = req->getQuery("images") == "1" || (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_threads() : false);
+      const auto base_url = fmt::format("{}?type={}&sort={}&images={}",
+        req->getUrl(),
+        show_threads ? "threads" : "comments",
+        EnumNameSortType(sort),
+        show_images ? 1 : 0
+      );
+      const auto list = show_threads
+        ? PostList(controller->list_feed_threads(txn, feed_id, sort, m.login, req->getQuery("from")))
+        : PostList(controller->list_feed_comments(txn, feed_id, sort, m.login, req->getQuery("from")));
+      // ---
+      if (m.is_htmx) {
+        rsp->writeHeader("Content-Type", TYPE_HTML);
+        m.write_cookie(rsp);
+      } else {
+        write_html_header(rsp, m, {
+          .canonical_path = req->getUrl(),
+          .banner_title = m.site->name,
+          .banner_link = req->getUrl()
+        });
+        rsp->write("<div>");
+        write_sidebar(rsp, m.login, m.site);
+        rsp->write(R"(<section><h2 class="a11y">Sort and filter</h2>)");
+        write_sort_options(rsp, req->getUrl(), sort, show_threads, show_images);
+        rsp->write(R"(</section><main>)");
+      }
+      std::visit(overload{
+        [&](const PageOf<ThreadDetail>& l){write_thread_list(rsp, l, base_url, m.login, !m.is_htmx, true, true, show_images);},
+        [&](const PageOf<CommentDetail>& l){write_comment_list(rsp, l, base_url, m.login, !m.is_htmx, true, true, show_images);}
+      }, list);
+      if (m.is_htmx) {
+        rsp->end();
+      } else {
+        rsp->write("</main></div>");
+        end_with_html_footer(rsp, m);
+      }
+    }
+
+    auto register_routes(App& app) -> void {
 
       // -----------------------------------------------------------------------
       // STATIC FILES
@@ -1696,22 +1743,14 @@ namespace Ludwig {
         bind(&Webapp::error_middleware, self, _1, _2),
         bind(&Webapp::error_page, self, _1, _2, _3)
       )
-      .get("/", [self](auto* rsp, auto*, Meta& m) {
-        auto txn = self->controller->open_read_txn();
-        m.populate(self, txn);
-        const auto boards = self->controller->list_boards(txn, BoardSortType::MostPosts, true, false, m.login);
-        // ---
-        self->write_html_header(rsp, m, {
-          .canonical_path = "/",
-          .banner_title = m.site->name,
-          .banner_link = "/",
-        });
-        rsp->write("<div>");
-        self->write_sidebar(rsp, m.login, m.site);
-        rsp->write("<main>");
-        self->write_board_list(rsp, boards, "/");
-        rsp->write("</main></div>");
-        end_with_html_footer(rsp, m);
+      .get("/", [self](auto* rsp, auto* req, Meta& m) {
+        self->feed_route(m.logged_in_user_id ? InstanceController::FEED_HOME : InstanceController::FEED_LOCAL, rsp, req, m);
+      })
+      .get("/all", [self](auto* rsp, auto* req, Meta& m) {
+        self->feed_route(InstanceController::FEED_ALL, rsp, req, m);
+      })
+      .get("/local", [self](auto* rsp, auto* req, Meta& m) {
+        self->feed_route(InstanceController::FEED_LOCAL, rsp, req, m);
       })
       .get("/boards", [self](auto* rsp, auto* req, Meta& m) {
         auto txn = self->controller->open_read_txn();
@@ -1969,30 +2008,27 @@ namespace Ludwig {
           end_with_html_footer(rsp, m);
         }
       })
-      .get_async("/search", [self](auto* rsp, auto* req, auto m, auto wrap) {
+      .get_async("/search", [self](auto* rsp, auto* req, auto m) -> asio::awaitable<void> {
         SearchQuery query {
           .query = req->getQuery("search"),
           /// TODO: Other parameters
           .include_threads = true,
           .include_comments = true
         };
-        self->controller->search(query, m->login, [
-          self, rsp, m = std::move(m), wrap = std::move(wrap)
-        ](auto& txn, auto results) mutable {
-          wrap([&]{
-            m->populate(self, txn);
-            self->write_html_header(rsp, *m, {
-              .canonical_path = "/search",
-              .banner_title = "Search",
-            });
-            rsp->write("<div>");
-            self->write_sidebar(rsp, m->login, m->site);
-            rsp->write("<main>");
-            self->write_search_result_list(rsp, results, m->login, true);
-            rsp->write("</main></div>");
-            end_with_html_footer(rsp, *m);
-          });
+        const auto results = co_await self->controller->search_step_1(query);
+        auto txn = self->controller->open_read_txn();
+        m->populate(self, txn);
+        const auto results_detail = self->controller->search_step_2(txn, results, ITEMS_PER_PAGE, m->login);
+        self->write_html_header(rsp, *m, {
+          .canonical_path = "/search",
+          .banner_title = "Search",
         });
+        rsp->write("<div>");
+        self->write_sidebar(rsp, m->login, m->site);
+        rsp->write("<main>");
+        self->write_search_result_list(rsp, results_detail, m->login, true);
+        rsp->write("</main></div>");
+        end_with_html_footer(rsp, *m);
       })
       .get("/create_board", [self](auto* rsp, auto*, Meta& m) {
         auto txn = self->controller->open_read_txn();
@@ -2102,410 +2138,404 @@ namespace Ludwig {
         else rsp->writeHeader("Location", req->getHeader("referer"));
         rsp->end();
       })
-      .post_form("/login", [self](auto* rsp, auto* req, auto m) {
+      .post_form("/login", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
         if (m->logged_in_user_id) throw ApiError("Already logged in", 403);
-        const auto user_agent = string(req->getHeader("user-agent")),
-          referer = string(req->getHeader("referer"));
-        return [self, rsp, m = std::move(m), user_agent, referer](auto body) {
-          if (body.optional_string("username") /* actually a honeypot */) {
-            spdlog::warn("Caught a bot with honeypot field on login");
-            // just leave the connecting hanging, let the bots time out
-            rsp->writeStatus(http_status(418));
-            return;
-          }
-          LoginResponse login;
-          bool remember = body.optional_bool("remember");
-          try {
-            login = self->controller->login(
-              body.required_string("actual_username"),
-              body.required_string("password"),
-              rsp->getRemoteAddressAsText(),
-              user_agent,
-              remember
-            );
-          } catch (ApiError e) {
-            rsp->writeStatus(http_status(e.http_status));
-            m->site = self->controller->site_detail();
-            self->write_html_header(rsp, *m, {
-              .canonical_path = "/login",
-              .banner_title = "Login",
-            });
-            self->write_login_form(rsp, {e.message});
-            end_with_html_footer(rsp, *m);
-            return;
-          }
-          rsp->writeStatus(http_status(303))
-            ->writeHeader("Set-Cookie",
-              fmt::format(COOKIE_NAME "={:x}; path=/; expires={:%a, %d %b %Y %T %Z}",
-                login.session_id, fmt::gmtime((time_t)login.expiration)))
-            ->writeHeader("Location", referer.empty() || referer == "/login" ? "/" : referer)
-            ->end();
-        };
-      })
-      .post_form("/register", [self](auto* rsp, auto* req, auto m) {
-        if (m->logged_in_user_id) throw ApiError("Already logged in", 403);
-        const auto user_agent = string(req->getHeader("user-agent")),
-          referer = string(req->getHeader("referer"));
-        return [self, rsp, m = std::move(m), user_agent, referer](auto body) {
-          if (body.optional_string("username") /* actually a honeypot */) {
-            spdlog::warn("Caught a bot with honeypot field on register");
-            // just leave the connecting hanging, let the bots time out
-            rsp->writeStatus(http_status(418));
-            return;
-          }
+        const string ip(get_ip(rsp, req)),
+          user_agent(req->getHeader("user-agent")),
+          referer(req->getHeader("referer"));
+        auto body = co_await get_body();
+        if (body.optional_string("username") /* actually a honeypot */) {
+          spdlog::warn("Caught a bot with honeypot field on login");
+          // just leave the connecting hanging, let the bots time out
+          rsp->writeStatus(http_status(418));
+          co_return;
+        }
+        LoginResponse login;
+        bool remember = body.optional_bool("remember");
+        try {
+          login = self->controller->login(
+            body.required_string("actual_username"),
+            body.required_string("password"),
+            ip,
+            user_agent,
+            remember
+          );
+        } catch (ApiError e) {
+          rsp->writeStatus(http_status(e.http_status));
           m->site = self->controller->site_detail();
-          try {
-            SecretString password = body.required_string("password"),
-              confirm_password = body.required_string("confirm_password");
-            if (password.str != confirm_password.str) {
-              throw ApiError("Passwords do not match", 400);
-            }
-            self->controller->register_local_user(
-              body.required_string("actual_username"),
-              body.required_string("email"),
-              std::move(password),
-              rsp->getRemoteAddressAsText(),
-              user_agent,
-              body.optional_string("invite").transform(invite_code_to_id),
-              body.optional_string("application")
-            );
-          } catch (ApiError e) {
-            rsp->writeStatus(http_status(e.http_status));
-            self->write_html_header(rsp, *m, {
-              .canonical_path = "/register",
-              .banner_title = "Register",
-            });
-            self->write_register_form(rsp, {e.message});
-            end_with_html_footer(rsp, *m);
-            return;
-          }
-          self->write_html_header(rsp, *m, { .banner_title = "Register" });
-          rsp->write(R"(<main><div class="form form-page"><h2>Registration complete!</h2>)"
-            R"(<p>Log in to your new account:</p><p><a class="big-button" href="/login">Login</a></p>)"
-            "</div></main>");
+          self->write_html_header(rsp, *m, {
+            .canonical_path = "/login",
+            .banner_title = "Login",
+          });
+          self->write_login_form(rsp, {e.message});
           end_with_html_footer(rsp, *m);
-        };
+          co_return;
+        }
+        rsp->writeStatus(http_status(303))
+          ->writeHeader("Set-Cookie",
+            fmt::format(COOKIE_NAME "={:x}; path=/; expires={:%a, %d %b %Y %T %Z}",
+              login.session_id, fmt::gmtime((time_t)login.expiration)))
+          ->writeHeader("Location", referer.empty() || referer == "/login" ? "/" : referer)
+          ->end();
       })
-      .post_form("/create_board", [self](auto* rsp, auto*, auto m) {
-        const auto user = m->require_login();
-        return [self, rsp, m = std::move(m), user](auto body) {
-          const auto name = body.required_string("name");
-          self->controller->create_local_board(
-            user,
-            name,
-            body.optional_string("display_name"),
-            body.optional_string("content_warning"),
-            body.optional_bool("private"),
-            body.optional_bool("restricted_posting"),
-            body.optional_bool("local_only")
-          );
-          rsp->writeStatus(http_status(303));
-          m->write_cookie(rsp);
-          rsp->writeHeader("Location", fmt::format("/b/{}", name))
-            ->end();
-        };
-      })
-      .post_form("/b/:name/create_thread", [self](auto* rsp, auto* req, auto m) {
-        auto txn = self->controller->open_read_txn();
-        const auto board_id = board_name_param(txn, req, 0);
-        const auto user = m->require_login();
-        return [self, rsp, m = std::move(m), user, board_id](auto body) {
-          const auto id = self->controller->create_local_thread(
-            user,
-            board_id,
-            body.required_string("title"),
-            body.optional_string("submission_url"),
-            body.optional_string("text_content"),
-            body.optional_string("content_warning")
-          );
-          rsp->writeStatus(http_status(303));
-          m->write_cookie(rsp);
-          rsp->writeHeader("Location", fmt::format("/thread/{:x}", id))
-            ->end();
-        };
-      })
-      .post_form("/thread/:id/reply", [self](auto* rsp, auto* req, auto m) {
-        const auto user = m->require_login();
-        const auto thread_id = hex_id_param(req, 0);
-        return [self, rsp, m = std::move(m), user, thread_id](auto body) {
-          const auto id = self->controller->create_local_comment(
-            user,
-            thread_id,
-            body.required_string("text_content"),
-            body.optional_string("content_warning")
-          );
-          if (m->is_htmx) {
-            auto txn = self->controller->open_read_txn();
-            m->populate(self, txn);
-            const auto comment = CommentDetail::get(txn, id, m->login);
-            rsp->writeHeader("Content-Type", TYPE_HTML);
-            m->write_cookie(rsp);
-            self->write_comment_entry(rsp, comment, m->login, false, true, true, false, true);
-            self->write_toast(rsp, "Reply submitted");
-            rsp->end();
-          } else {
-            rsp->writeStatus(http_status(303));
-            m->write_cookie(rsp);
-            rsp->writeHeader("Location", fmt::format("/thread/{:x}", thread_id))
-              ->end();
+      .post_form("/register", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
+        if (m->logged_in_user_id) throw ApiError("Already logged in", 403);
+        const string ip(get_ip(rsp, req)),
+          user_agent(req->getHeader("user-agent")),
+          referer(req->getHeader("referer"));
+        auto body = co_await get_body();
+        if (body.optional_string("username") /* actually a honeypot */) {
+          spdlog::warn("Caught a bot with honeypot field on register");
+          // just leave the connecting hanging, let the bots time out
+          rsp->writeStatus(http_status(418));
+          co_return;
+        }
+        m->site = self->controller->site_detail();
+        try {
+          SecretString password = body.required_string("password"),
+            confirm_password = body.required_string("confirm_password");
+          if (password.str != confirm_password.str) {
+            throw ApiError("Passwords do not match", 400);
           }
-        };
+          self->controller->register_local_user(
+            body.required_string("actual_username"),
+            body.required_string("email"),
+            std::move(password),
+            ip,
+            user_agent,
+            body.optional_string("invite").transform(invite_code_to_id),
+            body.optional_string("application")
+          );
+        } catch (ApiError e) {
+          rsp->writeStatus(http_status(e.http_status));
+          self->write_html_header(rsp, *m, {
+            .canonical_path = "/register",
+            .banner_title = "Register",
+          });
+          self->write_register_form(rsp, {e.message});
+          end_with_html_footer(rsp, *m);
+          co_return;
+        }
+        self->write_html_header(rsp, *m, { .banner_title = "Register" });
+        rsp->write(R"(<main><div class="form form-page"><h2>Registration complete!</h2>)"
+          R"(<p>Log in to your new account:</p><p><a class="big-button" href="/login">Login</a></p>)"
+          "</div></main>");
+        end_with_html_footer(rsp, *m);
       })
-      .post_form("/comment/:id/reply", [self](auto* rsp, auto* req, auto m) {
+      .post_form("/create_board", [self](auto* rsp, auto*, auto m, auto get_body) -> asio::awaitable<void> {
+        const auto user_id = m->require_login();
+        auto body = co_await get_body();
+        const auto name = body.required_string("name");
+        self->controller->create_local_board(
+          user_id,
+          name,
+          body.optional_string("display_name"),
+          body.optional_string("content_warning"),
+          body.optional_bool("private"),
+          body.optional_bool("restricted_posting"),
+          body.optional_bool("local_only")
+        );
+        rsp->writeStatus(http_status(303));
+        m->write_cookie(rsp);
+        rsp->writeHeader("Location", fmt::format("/b/{}", name))
+          ->end();
+      })
+      .post_form("/b/:name/create_thread", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
+        uint64_t board_id, user_id;
+        {
+          auto txn = self->controller->open_read_txn();
+          board_id = board_name_param(txn, req, 0);
+          user_id = m->require_login();
+        }
+        auto body = co_await get_body();
+        const auto id = self->controller->create_local_thread(
+          user_id,
+          board_id,
+          body.required_string("title"),
+          body.optional_string("submission_url"),
+          body.optional_string("text_content"),
+          body.optional_string("content_warning")
+        );
+        rsp->writeStatus(http_status(303));
+        m->write_cookie(rsp);
+        rsp->writeHeader("Location", fmt::format("/thread/{:x}", id))
+          ->end();
+      })
+      .post_form("/thread/:id/reply", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
+        const auto user_id = m->require_login();
+        const auto thread_id = hex_id_param(req, 0);
+        auto body = co_await get_body();
+        const auto id = self->controller->create_local_comment(
+          user_id,
+          thread_id,
+          body.required_string("text_content"),
+          body.optional_string("content_warning")
+        );
+        if (m->is_htmx) {
+          auto txn = self->controller->open_read_txn();
+          m->populate(self, txn);
+          const auto comment = CommentDetail::get(txn, id, m->login);
+          rsp->writeHeader("Content-Type", TYPE_HTML);
+          m->write_cookie(rsp);
+          self->write_comment_entry(rsp, comment, m->login, false, true, true, false, true);
+          self->write_toast(rsp, "Reply submitted");
+          rsp->end();
+        } else {
+          rsp->writeStatus(http_status(303));
+          m->write_cookie(rsp);
+          rsp->writeHeader("Location", fmt::format("/thread/{:x}", thread_id))
+            ->end();
+        }
+      })
+      .post_form("/comment/:id/reply", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
         const auto user = m->require_login();
         const auto comment_id = hex_id_param(req, 0);
-        return [self, rsp, m = std::move(m), user, comment_id](auto body) {
-          const auto id = self->controller->create_local_comment(
-            user,
-            comment_id,
-            body.required_string("text_content"),
-            body.optional_string("content_warning")
-          );
-          if (m->is_htmx) {
-            auto txn = self->controller->open_read_txn();
-            m->populate(self, txn);
-            const auto comment = CommentDetail::get(txn, id, m->login);
-            rsp->writeHeader("Content-Type", TYPE_HTML);
-            m->write_cookie(rsp);
-            self->write_comment_entry(rsp, comment, m->login, false, true, true, false, true);
-            self->write_toast(rsp, "Reply submitted");
-            rsp->end();
-          } else {
-            rsp->writeStatus(http_status(303));
-            m->write_cookie(rsp);
-            rsp->writeHeader("Location", fmt::format("/comment/{:x}", comment_id))
-              ->end();
-          }
-        };
+        auto body = co_await get_body();
+        const auto id = self->controller->create_local_comment(
+          user,
+          comment_id,
+          body.required_string("text_content"),
+          body.optional_string("content_warning")
+        );
+        if (m->is_htmx) {
+          auto txn = self->controller->open_read_txn();
+          m->populate(self, txn);
+          const auto comment = CommentDetail::get(txn, id, m->login);
+          rsp->writeHeader("Content-Type", TYPE_HTML);
+          m->write_cookie(rsp);
+          self->write_comment_entry(rsp, comment, m->login, false, true, true, false, true);
+          self->write_toast(rsp, "Reply submitted");
+          rsp->end();
+        } else {
+          rsp->writeStatus(http_status(303));
+          m->write_cookie(rsp);
+          rsp->writeHeader("Location", fmt::format("/comment/{:x}", comment_id))
+            ->end();
+        }
       })
-      .post_form("/thread/:id/action", [self](auto* rsp, auto* req, auto m) {
+      .post_form("/thread/:id/action", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
         const auto id = hex_id_param(req, 0);
         const auto user = m->require_login();
         const auto referer = string(req->getHeader("referer"));
-        return [self, rsp, m = std::move(m), id, user, referer](auto body) {
-          const auto action = static_cast<SubmenuAction>(body.required_int("action"));
-          switch (action) {
-            case SubmenuAction::Reply:
-              write_redirect_to(rsp, *m, fmt::format("/thread/{:x}#reply", id));
-              return;
-            case SubmenuAction::Edit:
-              write_redirect_to(rsp, *m, fmt::format("/thread/{:x}/edit", id));
-              return;
-            case SubmenuAction::Delete:
-              throw ApiError("Delete is not yet implemented", 500);
-            case SubmenuAction::Share:
-              throw ApiError("Share is not yet implemented", 500);
-            case SubmenuAction::Save:
-              self->controller->save_post(user, id, true);
-              break;
-            case SubmenuAction::Unsave:
-              self->controller->save_post(user, id, false);
-              break;
-            case SubmenuAction::Hide:
-              self->controller->hide_post(user, id, true);
-              break;
-            case SubmenuAction::Unhide:
-              self->controller->hide_post(user, id, false);
-              break;
-            case SubmenuAction::Report:
-              throw ApiError("Report is not yet implemented", 500);
-            case SubmenuAction::MuteUser: {
-              auto txn = self->controller->open_read_txn();
-              const auto thread = txn.get_thread(id);
-              if (!thread) throw ApiError("Thread does not exist", 404);
-              self->controller->hide_user(user, thread->get().author(), true);
-              break;
-            }
-            case SubmenuAction::UnmuteUser: {
-              auto txn = self->controller->open_read_txn();
-              const auto thread = txn.get_thread(id);
-              if (!thread) throw ApiError("Thread does not exist", 404);
-              self->controller->hide_user(user, thread->get().author(), false);
-              break;
-            }
-            case SubmenuAction::MuteBoard: {
-              auto txn = self->controller->open_read_txn();
-              const auto thread = txn.get_thread(id);
-              if (!thread) throw ApiError("Thread does not exist", 404);
-              self->controller->hide_board(user, thread->get().board(), true);
-              break;
-            }
-            case SubmenuAction::UnmuteBoard:{
-              auto txn = self->controller->open_read_txn();
-              const auto thread = txn.get_thread(id);
-              if (!thread) throw ApiError("Thread does not exist", 404);
-              self->controller->hide_board(user, thread->get().board(), false);
-              break;
-            }
-            case SubmenuAction::ModRestore:
-            case SubmenuAction::ModFlag:
-            case SubmenuAction::ModLock:
-            case SubmenuAction::ModRemove:
-            case SubmenuAction::ModBan:
-            case SubmenuAction::ModPurge:
-            case SubmenuAction::ModPurgeUser:
-              throw ApiError("Mod actions are not yet implemented", 500);
-            default:
-              throw ApiError("No action selected", 400);
-          }
-          if (m->is_htmx) {
-            const auto show_user = body.optional_bool("show_user"),
-              show_board = body.optional_bool("show_board");
+        auto body = co_await get_body();
+        const auto action = static_cast<SubmenuAction>(body.required_int("action"));
+        switch (action) {
+          case SubmenuAction::Reply:
+            write_redirect_to(rsp, *m, fmt::format("/thread/{:x}#reply", id));
+            co_return;
+          case SubmenuAction::Edit:
+            write_redirect_to(rsp, *m, fmt::format("/thread/{:x}/edit", id));
+            co_return;
+          case SubmenuAction::Delete:
+            throw ApiError("Delete is not yet implemented", 500);
+          case SubmenuAction::Share:
+            throw ApiError("Share is not yet implemented", 500);
+          case SubmenuAction::Save:
+            self->controller->save_post(user, id, true);
+            break;
+          case SubmenuAction::Unsave:
+            self->controller->save_post(user, id, false);
+            break;
+          case SubmenuAction::Hide:
+            self->controller->hide_post(user, id, true);
+            break;
+          case SubmenuAction::Unhide:
+            self->controller->hide_post(user, id, false);
+            break;
+          case SubmenuAction::Report:
+            throw ApiError("Report is not yet implemented", 500);
+          case SubmenuAction::MuteUser: {
             auto txn = self->controller->open_read_txn();
-            const auto login = LocalUserDetail::get(txn, user);
-            const auto thread = ThreadDetail::get(txn, id, login);
-            rsp->writeHeader("Content-Type", TYPE_HTML);
-            m->write_cookie(rsp);
-            self->write_controls_submenu(rsp, thread, login, show_user, show_board);
-            rsp->end();
-          } else {
-            write_redirect_back(rsp, referer);
+            const auto thread = txn.get_thread(id);
+            if (!thread) throw ApiError("Thread does not exist", 404);
+            self->controller->hide_user(user, thread->get().author(), true);
+            break;
           }
-        };
+          case SubmenuAction::UnmuteUser: {
+            auto txn = self->controller->open_read_txn();
+            const auto thread = txn.get_thread(id);
+            if (!thread) throw ApiError("Thread does not exist", 404);
+            self->controller->hide_user(user, thread->get().author(), false);
+            break;
+          }
+          case SubmenuAction::MuteBoard: {
+            auto txn = self->controller->open_read_txn();
+            const auto thread = txn.get_thread(id);
+            if (!thread) throw ApiError("Thread does not exist", 404);
+            self->controller->hide_board(user, thread->get().board(), true);
+            break;
+          }
+          case SubmenuAction::UnmuteBoard:{
+            auto txn = self->controller->open_read_txn();
+            const auto thread = txn.get_thread(id);
+            if (!thread) throw ApiError("Thread does not exist", 404);
+            self->controller->hide_board(user, thread->get().board(), false);
+            break;
+          }
+          case SubmenuAction::ModRestore:
+          case SubmenuAction::ModFlag:
+          case SubmenuAction::ModLock:
+          case SubmenuAction::ModRemove:
+          case SubmenuAction::ModBan:
+          case SubmenuAction::ModPurge:
+          case SubmenuAction::ModPurgeUser:
+            throw ApiError("Mod actions are not yet implemented", 500);
+          default:
+            throw ApiError("No action selected", 400);
+        }
+        if (m->is_htmx) {
+          const auto show_user = body.optional_bool("show_user"),
+            show_board = body.optional_bool("show_board");
+          auto txn = self->controller->open_read_txn();
+          const auto login = LocalUserDetail::get(txn, user);
+          const auto thread = ThreadDetail::get(txn, id, login);
+          rsp->writeHeader("Content-Type", TYPE_HTML);
+          m->write_cookie(rsp);
+          self->write_controls_submenu(rsp, thread, login, show_user, show_board);
+          rsp->end();
+        } else {
+          write_redirect_back(rsp, referer);
+        }
       })
-      .post_form("/comment/:id/action", [self](auto* rsp, auto* req, auto m) {
+      .post_form("/comment/:id/action", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
         const auto id = hex_id_param(req, 0);
         const auto user = m->require_login();
         const auto referer = string(req->getHeader("referer"));
-        return [self, rsp, m = std::move(m), id, user, referer](auto body) {
-          const auto action = static_cast<SubmenuAction>(body.required_int("action"));
-          switch (action) {
-            case SubmenuAction::Reply:
-              write_redirect_to(rsp, *m, fmt::format("/comment/{:x}#reply", id));
-              return;
-            case SubmenuAction::Edit:
-              write_redirect_to(rsp, *m, fmt::format("/comment/{:x}/edit", id));
-              return;
-            case SubmenuAction::Delete:
-              throw ApiError("Delete is not yet implemented", 500);
-            case SubmenuAction::Share:
-              throw ApiError("Share is not yet implemented", 500);
-            case SubmenuAction::Save:
-              self->controller->save_post(user, id, true);
-              break;
-            case SubmenuAction::Unsave:
-              self->controller->save_post(user, id, false);
-              break;
-            case SubmenuAction::Hide:
-              self->controller->hide_post(user, id, true);
-              break;
-            case SubmenuAction::Unhide:
-              self->controller->hide_post(user, id, false);
-              break;
-            case SubmenuAction::Report:
-              throw ApiError("Report is not yet implemented", 500);
-            case SubmenuAction::MuteUser: {
-              auto txn = self->controller->open_read_txn();
-              const auto comment = txn.get_comment(id);
-              if (!comment) throw ApiError("Comment does not exist", 404);
-              self->controller->hide_user(user, comment->get().author(), true);
-              break;
-            }
-            case SubmenuAction::UnmuteUser: {
-              auto txn = self->controller->open_read_txn();
-              const auto comment = txn.get_comment(id);
-              if (!comment) throw ApiError("Comment does not exist", 404);
-              self->controller->hide_user(user, comment->get().author(), false);
-              break;
-            }
-            case SubmenuAction::MuteBoard: {
-              auto txn = self->controller->open_read_txn();
-              const auto comment = txn.get_comment(id);
-              if (!comment) throw ApiError("Comment does not exist", 404);
-              const auto thread = txn.get_thread(comment->get().thread());
-              if (!thread) throw ApiError("Thread does not exist", 404);
-              self->controller->hide_board(user, thread->get().board(), true);
-              break;
-            }
-            case SubmenuAction::UnmuteBoard:{
-              auto txn = self->controller->open_read_txn();
-              const auto comment = txn.get_comment(id);
-              if (!comment) throw ApiError("Comment does not exist", 404);
-              const auto thread = txn.get_thread(comment->get().thread());
-              if (!thread) throw ApiError("Thread does not exist", 404);
-              self->controller->hide_board(user, thread->get().board(), false);
-              break;
-            }
-            case SubmenuAction::ModRestore:
-            case SubmenuAction::ModFlag:
-            case SubmenuAction::ModLock:
-            case SubmenuAction::ModRemove:
-            case SubmenuAction::ModBan:
-            case SubmenuAction::ModPurge:
-            case SubmenuAction::ModPurgeUser:
-              throw ApiError("Mod actions are not yet implemented", 500);
-            default:
-              throw ApiError("No action selected", 400);
-          }
-          if (m->is_htmx) {
-            const auto show_user = body.optional_bool("show_user"),
-              show_board = body.optional_bool("show_board");
+        auto body = co_await get_body();
+        const auto action = static_cast<SubmenuAction>(body.required_int("action"));
+        switch (action) {
+          case SubmenuAction::Reply:
+            write_redirect_to(rsp, *m, fmt::format("/comment/{:x}#reply", id));
+            co_return;
+          case SubmenuAction::Edit:
+            write_redirect_to(rsp, *m, fmt::format("/comment/{:x}/edit", id));
+            co_return;
+          case SubmenuAction::Delete:
+            throw ApiError("Delete is not yet implemented", 500);
+          case SubmenuAction::Share:
+            throw ApiError("Share is not yet implemented", 500);
+          case SubmenuAction::Save:
+            self->controller->save_post(user, id, true);
+            break;
+          case SubmenuAction::Unsave:
+            self->controller->save_post(user, id, false);
+            break;
+          case SubmenuAction::Hide:
+            self->controller->hide_post(user, id, true);
+            break;
+          case SubmenuAction::Unhide:
+            self->controller->hide_post(user, id, false);
+            break;
+          case SubmenuAction::Report:
+            throw ApiError("Report is not yet implemented", 500);
+          case SubmenuAction::MuteUser: {
             auto txn = self->controller->open_read_txn();
-            const auto login = LocalUserDetail::get(txn, user);
-            const auto comment = CommentDetail::get(txn, id, login);
-            rsp->writeHeader("Content-Type", TYPE_HTML);
-            m->write_cookie(rsp);
-            self->write_controls_submenu(rsp, comment, login, show_user, show_board);
-            rsp->end();
-          } else {
-            write_redirect_back(rsp, referer);
+            const auto comment = txn.get_comment(id);
+            if (!comment) throw ApiError("Comment does not exist", 404);
+            self->controller->hide_user(user, comment->get().author(), true);
+            break;
           }
-        };
+          case SubmenuAction::UnmuteUser: {
+            auto txn = self->controller->open_read_txn();
+            const auto comment = txn.get_comment(id);
+            if (!comment) throw ApiError("Comment does not exist", 404);
+            self->controller->hide_user(user, comment->get().author(), false);
+            break;
+          }
+          case SubmenuAction::MuteBoard: {
+            auto txn = self->controller->open_read_txn();
+            const auto comment = txn.get_comment(id);
+            if (!comment) throw ApiError("Comment does not exist", 404);
+            const auto thread = txn.get_thread(comment->get().thread());
+            if (!thread) throw ApiError("Thread does not exist", 404);
+            self->controller->hide_board(user, thread->get().board(), true);
+            break;
+          }
+          case SubmenuAction::UnmuteBoard:{
+            auto txn = self->controller->open_read_txn();
+            const auto comment = txn.get_comment(id);
+            if (!comment) throw ApiError("Comment does not exist", 404);
+            const auto thread = txn.get_thread(comment->get().thread());
+            if (!thread) throw ApiError("Thread does not exist", 404);
+            self->controller->hide_board(user, thread->get().board(), false);
+            break;
+          }
+          case SubmenuAction::ModRestore:
+          case SubmenuAction::ModFlag:
+          case SubmenuAction::ModLock:
+          case SubmenuAction::ModRemove:
+          case SubmenuAction::ModBan:
+          case SubmenuAction::ModPurge:
+          case SubmenuAction::ModPurgeUser:
+            throw ApiError("Mod actions are not yet implemented", 500);
+          default:
+            throw ApiError("No action selected", 400);
+        }
+        if (m->is_htmx) {
+          const auto show_user = body.optional_bool("show_user"),
+            show_board = body.optional_bool("show_board");
+          auto txn = self->controller->open_read_txn();
+          const auto login = LocalUserDetail::get(txn, user);
+          const auto comment = CommentDetail::get(txn, id, login);
+          rsp->writeHeader("Content-Type", TYPE_HTML);
+          m->write_cookie(rsp);
+          self->write_controls_submenu(rsp, comment, login, show_user, show_board);
+          rsp->end();
+        } else {
+          write_redirect_back(rsp, referer);
+        }
       })
-      .post_form("/thread/:id/vote", [self](auto* rsp, auto* req, auto m) {
+      .post_form("/thread/:id/vote", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
         const auto user = m->require_login();
         const auto post_id = hex_id_param(req, 0);
         const auto referer = string(req->getHeader("referer"));
-        return [self, rsp, m = std::move(m), user, post_id, referer](auto body) {
-          const auto vote = body.required_vote("vote");
-          self->controller->vote(user, post_id, vote);
-          if (m->is_htmx) {
-            auto txn = self->controller->open_read_txn();
-            const auto login = LocalUserDetail::get(txn, user);
-            const auto thread = ThreadDetail::get(txn, post_id, login);
-            rsp->writeHeader("Content-Type", TYPE_HTML);
-            self->write_vote_buttons(rsp, thread, login);
-            rsp->end();
-          } else {
-            write_redirect_back(rsp, referer);
-          }
-        };
+        auto body = co_await get_body();
+        const auto vote = body.required_vote("vote");
+        self->controller->vote(user, post_id, vote);
+        if (m->is_htmx) {
+          auto txn = self->controller->open_read_txn();
+          const auto login = LocalUserDetail::get(txn, user);
+          const auto thread = ThreadDetail::get(txn, post_id, login);
+          rsp->writeHeader("Content-Type", TYPE_HTML);
+          self->write_vote_buttons(rsp, thread, login);
+          rsp->end();
+        } else {
+          write_redirect_back(rsp, referer);
+        }
       })
-      .post_form("/comment/:id/vote", [self](auto* rsp, auto* req, auto m) {
+      .post_form("/comment/:id/vote", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
         const auto user = m->require_login();
         const auto post_id = hex_id_param(req, 0);
         const auto referer = string(req->getHeader("referer"));
-        return [self, rsp, m = std::move(m), user, post_id, referer](auto body) {
-          const auto vote = body.required_vote("vote");
-          self->controller->vote(user, post_id, vote);
-          if (m->is_htmx) {
-            auto txn = self->controller->open_read_txn();
-            const auto login = LocalUserDetail::get(txn, user);
-            const auto comment = CommentDetail::get(txn, post_id, login);
-            rsp->writeHeader("Content-Type", TYPE_HTML);
-            self->write_vote_buttons(rsp, comment, login);
-            rsp->end();
-          } else {
-            write_redirect_back(rsp, referer);
-          }
-        };
+        auto body = co_await get_body();
+        const auto vote = body.required_vote("vote");
+        self->controller->vote(user, post_id, vote);
+        if (m->is_htmx) {
+          auto txn = self->controller->open_read_txn();
+          const auto login = LocalUserDetail::get(txn, user);
+          const auto comment = CommentDetail::get(txn, post_id, login);
+          rsp->writeHeader("Content-Type", TYPE_HTML);
+          self->write_vote_buttons(rsp, comment, login);
+          rsp->end();
+        } else {
+          write_redirect_back(rsp, referer);
+        }
       })
-      .post_form("/b/:name/subscribe", [self](auto* rsp, auto* req, auto m) {
+      .post_form("/b/:name/subscribe", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
         auto txn = self->controller->open_read_txn();
         const auto board_id = board_name_param(txn, req, 0);
         const auto name = string(req->getParameter(0));
         const auto user = m->require_login();
         const auto referer = string(req->getHeader("referer"));
-        return [self, rsp, board_id, name, m = std::move(m), user, referer](QueryString body) {
-          self->controller->subscribe(user, board_id, !body.optional_bool("unsubscribe"));
-          if (m->is_htmx) {
-            rsp->writeHeader("Content-Type", TYPE_HTML);
-            self->write_subscribe_button(rsp, name, true);
-            rsp->end();
-          } else {
-            write_redirect_back(rsp, referer);
-          }
-        };
+        auto body = co_await get_body();
+        self->controller->subscribe(user, board_id, !body.optional_bool("unsubscribe"));
+        if (m->is_htmx) {
+          rsp->writeHeader("Content-Type", TYPE_HTML);
+          self->write_subscribe_button(rsp, name, true);
+          rsp->end();
+        } else {
+          write_redirect_back(rsp, referer);
+        }
       });
     }
   };
@@ -2513,21 +2543,24 @@ namespace Ludwig {
   template <bool SSL> auto webapp_routes(
     uWS::TemplatedApp<SSL>& app,
     shared_ptr<InstanceController> controller,
+    shared_ptr<IpRateLimiter> rate_limiter,
     shared_ptr<RichTextParser> rt
   ) -> void {
-    auto router = std::make_shared<Webapp<SSL>>(controller, rt);
+    auto router = std::make_shared<Webapp<SSL>>(controller, rate_limiter, rt);
     router->register_routes(app);
   }
 
   template auto webapp_routes<true>(
     uWS::TemplatedApp<true>& app,
     shared_ptr<InstanceController> controller,
+    shared_ptr<IpRateLimiter> rate_limiter,
     shared_ptr<RichTextParser> rt
   ) -> void;
 
   template auto webapp_routes<false>(
     uWS::TemplatedApp<false>& app,
     shared_ptr<InstanceController> controller,
+    shared_ptr<IpRateLimiter> rate_limiter,
     shared_ptr<RichTextParser> rt
   ) -> void;
 }
