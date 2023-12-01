@@ -637,6 +637,42 @@ namespace Ludwig {
     if (db_get(txn, db.dbis[Thread_Thread], id, v)) return {};
     return get_fb<Thread>(v);
   }
+  auto ReadTxnBase::list_threads_new(OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ThreadsNew_Time],
+      txn,
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(ID_MAX), ID_MAX)),
+      Cursor(0)
+    );
+  }
+  auto ReadTxnBase::list_threads_old(OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ThreadsNew_Time],
+      txn,
+      Dir::Asc,
+      cursor.value_or(pair(Cursor(0), 0)),
+      Cursor(ID_MAX)
+    );
+  }
+  auto ReadTxnBase::list_threads_top(OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ThreadsTop_Karma],
+      txn,
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(ID_MAX), ID_MAX)),
+      Cursor(0)
+    );
+  }
+  auto ReadTxnBase::list_threads_most_comments(OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[ThreadsMostComments_Comments],
+      txn,
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(ID_MAX), ID_MAX)),
+      Cursor(0)
+    );
+  }
   auto ReadTxnBase::list_threads_of_board_new(uint64_t board_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ThreadsNew_BoardTime],
@@ -705,6 +741,42 @@ namespace Ludwig {
     MDB_val v;
     if (db_get(txn, db.dbis[Comment_Comment], id, v)) return {};
     return get_fb<Comment>(v);
+  }
+  auto ReadTxnBase::list_comments_new(OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[CommentsNew_Time],
+      txn,
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(ID_MAX), ID_MAX)),
+      Cursor(0)
+    );
+  }
+  auto ReadTxnBase::list_comments_old(OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[CommentsNew_Time],
+      txn,
+      Dir::Asc,
+      cursor.value_or(pair(Cursor(0), 0)),
+      Cursor(ID_MAX)
+    );
+  }
+  auto ReadTxnBase::list_comments_top(OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[CommentsTop_Karma],
+      txn,
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(ID_MAX), ID_MAX)),
+      Cursor(0)
+    );
+  }
+  auto ReadTxnBase::list_comments_most_comments(OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[CommentsMostComments_Comments],
+      txn,
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(ID_MAX), ID_MAX)),
+      Cursor(0)
+    );
   }
   auto ReadTxnBase::list_comments_of_post_new(uint64_t post_id, OptKV cursor) -> DBIter {
     return DBIter(
@@ -1690,7 +1762,8 @@ namespace Ludwig {
     db_put(txn, db.dbis[Application_User], user_id, span);
   }
   auto WriteTxn::create_invite(uint64_t sender_user_id, uint64_t lifetime_seconds) -> uint64_t {
-    const uint64_t id = next_id(), now = now_s();
+    uint64_t id, now = now_s();
+    duthomhas::csprng()(id);
     FlatBufferBuilder fbb;
     fbb.Finish(CreateInvite(fbb, now, now + lifetime_seconds, sender_user_id));
     set_invite(id, fbb.GetBufferSpan());

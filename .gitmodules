@@ -19,15 +19,9 @@
 [submodule "vendor/zlib"]
 	path = vendor/zlib
 	url = https://github.com/madler/zlib.git
-[submodule "vendor/libbsd"]
-	path = vendor/libbsd
-	url = https://gitlab.freedesktop.org/libbsd/libbsd.git
 [submodule "vendor/libwebp"]
 	path = vendor/libwebp
 	url = https://chromium.googlesource.com/webm/libwebp
-[submodule "vendor/libjpeg-turbo"]
-	path = vendor/libjpeg-turbo
-	url = https://github.com/libjpeg-turbo/libjpeg-turbo.git
 [submodule "vendor/libpng"]
 	path = vendor/libpng
 	url = https://github.com/glennrp/libpng.git

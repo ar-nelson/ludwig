@@ -1,14 +1,14 @@
 #include "media.h++"
 #include "util/web.h++"
 
-using std::function, std::move_only_function, std::shared_ptr, std::string;
+using std::function, std::shared_ptr, std::string;
 
 namespace Ludwig {
   template <bool SSL> static inline auto webp_route(
     uWS::HttpRequest* req,
     uWS::HttpResponse<SSL>* rsp,
-    move_only_function<void (function<void ()>)>&& wrap,
-    move_only_function<void (ThumbnailCache::Callback)>&& fn
+    uWS::MoveOnlyFunction<void (function<void ()>)>&& wrap,
+    uWS::MoveOnlyFunction<void (ThumbnailCache::Callback)>&& fn
   ) -> void {
     const string if_none_match(req->getHeader("if-none-match"));
     fn([rsp, wrap = std::move(wrap), if_none_match](ThumbnailCache::Image img) mutable {

@@ -6,7 +6,7 @@
 #include <asio.hpp>
 
 namespace Ludwig {
-  typedef std::move_only_function<void (Event, uint64_t)> EventCallback;
+  typedef uWS::MoveOnlyFunction<void (Event, uint64_t)> EventCallback;
 
   class AsioEventBus;
 

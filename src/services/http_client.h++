@@ -24,7 +24,7 @@ namespace Ludwig {
     auto body() const -> std::string_view { return { nullptr, 0 }; };
   };
 
-  using HttpResponseCallback = std::move_only_function<void (std::unique_ptr<const HttpClientResponse>&&)>;
+  using HttpResponseCallback = uWS::MoveOnlyFunction<void (std::unique_ptr<const HttpClientResponse>&&)>;
 
   class HttpClientRequest {
   public:

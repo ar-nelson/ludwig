@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdlib.h>
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <limits>
@@ -12,6 +13,7 @@
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
 #include <libxml/parser.h>
+#include <uWebSockets/MoveOnlyFunction.h>
 
 namespace Ludwig {
   constexpr uint64_t ID_MAX = std::numeric_limits<uint64_t>::max();

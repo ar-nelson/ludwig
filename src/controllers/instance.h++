@@ -234,7 +234,7 @@ namespace Ludwig {
     virtual ~InstanceController() = default;
 
     using SearchResultDetail = std::variant<UserDetail, BoardDetail, ThreadDetail, CommentDetail>;
-    using SearchCallback = std::move_only_function<void (ReadTxnBase&, std::vector<SearchResultDetail>)>;
+    using SearchCallback = uWS::MoveOnlyFunction<void (ReadTxnBase&, std::vector<SearchResultDetail>)>;
 
     static auto can_change_site_settings(Login login) -> bool;
     auto can_create_board(Login login) -> bool;

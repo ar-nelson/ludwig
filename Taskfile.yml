@@ -55,6 +55,12 @@ tasks:
     deps:
       - build-debug
     cmds:
+      - ./build.debug/test
+  test-lldb:
+    desc: 🚨 Run the unit test suite (in lldb)
+    deps:
+      - build-debug
+    cmds:
       - lldb -o run -- ./build.debug/test -b
   run-debug:
     desc: ▶️ Run the debug build of Ludwig, with default settings
@@ -84,10 +90,9 @@ tasks:
       - gen-typescript-flatbuffers
       - build-debug
     cmds:
-      - rm -f ludwig.mdb
-      - rm -f ludwig.mdb-lock
+      - rm -f ludwig.mdb ludwig.mdb-lock search.mdb search.mdb-lock random.dbdump.gz
       - deno run extras/generate-mock-data.ts > random.dbdump.gz
-      - ./build.debug/ludwig --log-level debug --import random.dbdump.gz
+      - ./build.debug/ludwig --import random.dbdump.gz
   html-sample:
     sources:
       - extras/static-sample-server.ts

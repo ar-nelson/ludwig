@@ -8,7 +8,7 @@ namespace Ludwig {
   class ThumbnailCache {
   public:
     using Image = std::shared_ptr<std::optional<std::pair<std::string, uint64_t>>>;
-    using Callback = std::move_only_function<void (Image)>;
+    using Callback = uWS::MoveOnlyFunction<void (Image)>;
   private:
     using Promise = std::list<std::shared_ptr<Callback>>;
     using Entry = std::variant<Promise, Image>;

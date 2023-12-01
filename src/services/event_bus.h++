@@ -26,7 +26,7 @@ namespace Ludwig {
     protected:
       virtual auto unsubscribe(uint64_t event_id, std::pair<Event, uint64_t> key) -> void = 0;
     public:
-      using Callback = std::move_only_function<void (Event, uint64_t)>;
+      using Callback = uWS::MoveOnlyFunction<void (Event, uint64_t)>;
 
       class Subscription {
       private:
