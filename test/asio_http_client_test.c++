@@ -8,11 +8,10 @@ TEST_CASE("send request to example.com", "[http_client]") {
   AsioHttpClient client(io, ssl);
   bool success = false;
   std::ostringstream response_body;
-  asio::co_spawn(*io, [&] -> asio::awaitable<void> {
+  asio::co_spawn(*io, [&] -> Async<void> {
     auto response = co_await client.get("https://example.com")
       .header("Accept", "text/html")
       .dispatch();
-    REQUIRE(response->error().value_or("") == "");
     REQUIRE(response->status() == 200);
     REQUIRE(response->header("content-type").starts_with("text/html"));
     success = true;

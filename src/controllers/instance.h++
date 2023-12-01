@@ -350,7 +350,7 @@ namespace Ludwig {
       Login login = {},
       PageCursor from = {}
     ) -> PageOf<CommentDetail>;
-    auto search_step_1(SearchQuery query) -> asio::awaitable<std::vector<SearchResult>>;
+    auto search_step_1(SearchQuery query) -> Async<std::vector<SearchResult>>;
     auto search_step_2(
       ReadTxnBase& txn,
       const std::vector<SearchResult>& results,

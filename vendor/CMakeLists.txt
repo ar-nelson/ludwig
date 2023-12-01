@@ -21,7 +21,7 @@ add_library(asio STATIC
   asio/asio_ssl.cpp
 )
 #if (LINUX)
-#  target_compile_definitions(asio PUBLIC ASIO_SEPARATE_COMPILATION ASIO_HAS_IO_URING ASIO_DISABLE_EPOLL)
+#  target_compile_definitions(asio PUBLIC ASIO_SEPARATE_COMPILATION ASIO_HAS_IO_URING ASIO_DISABLE_EPOLL ASIO_HAS_IO_URING_AS_DEFAULT)
 #  target_link_libraries(asio PUBLIC ssl crypto uring)
 #else()
   target_compile_definitions(asio PUBLIC ASIO_SEPARATE_COMPILATION)
@@ -100,19 +100,39 @@ add_library(giflib STATIC
 )
 target_include_directories(giflib SYSTEM PUBLIC giflib/)
 
-# libjpeg-turbo: the modern version doesn't support add_subdirectory,
-# so we use an old commit. And it needs dummy install directories.
-option(WITH_SIMD "libjpeg-turbo" ON)
-option(WITH_MEM_SRCDST "libjpeg-turbo" ON)
-option(WITH_TURBOJPEG "libjpeg-turbo" ON)
-option(WITH_CRT_DLL "libjpeg-turbo" OFF)
-option(WITH_FUZZ "libjpeg-turbo" OFF)
-option(WITH_JAVA "libjpeg-turbo" OFF)
-set(CMAKE_INSTALL_DOCDIR "${CMAKE_CURRENT_BINARY_DIR}/libjpeg-turbo/install/docdir")
-set(CMAKE_INSTALL_MANDIR "${CMAKE_CURRENT_BINARY_DIR}/libjpeg-turbo/install/mandir")
-add_subdirectory(libjpeg-turbo libjpeg-turbo)
-unset(CMAKE_INSTALL_DOCDIR)
-unset(CMAKE_INSTALL_MANDIR)
+add_library(jpeg STATIC
+  libjpeg/jdapimin.c # Application program interface: core routines for decompression.
+  libjpeg/jdapistd.c # Application program interface: standard decompression.
+  libjpeg/jcomapi.c  # Application program interface routines common to compression and decompression.
+
+  libjpeg/jdmaster.c # Master control: determines which other modules to use.
+  libjpeg/jdinput.c # Input controller: controls input processing modules.
+  libjpeg/jdmainct.c # Main buffer controller (JPEG decompressor => postprocessor).
+  libjpeg/jdcoefct.c # Buffer controller for DCT coefficient buffer.
+  libjpeg/jdpostct.c # Postprocessor buffer controller.
+  libjpeg/jdmarker.c # JPEG marker reading.
+  libjpeg/jdhuff.c # Huffman entropy decoding for sequential JPEG.
+  libjpeg/jdphuff.c # Huffman entropy decoding for progressive JPEG.
+  libjpeg/jddctmgr.c # IDCT manager (IDCT implementation selection & control).
+  libjpeg/jidctint.c # Inverse DCT using slow-but-accurate integer method.
+  libjpeg/jidctfst.c # Inverse DCT using faster, less accurate integer method.
+  libjpeg/jidctflt.c # Inverse DCT using floating-point arithmetic.
+  libjpeg/jidctred.c # Inverse DCTs with reduced-size outputs.
+  libjpeg/jdsample.c # Upsampling.
+  libjpeg/jdcolor.c # Color space conversion.
+  libjpeg/jdmerge.c # Merged upsampling/color conversion (faster, lower quality).
+  libjpeg/jquant1.c # One-pass color quantization using a fixed-spacing colormap.
+  libjpeg/jquant2.c # Two-pass color quantization using a custom-generated colormap. Also handles one-pass quantization to an externally given map.
+  libjpeg/jdatasrc.c # Data source manager for stdio input.
+
+  libjpeg/jerror.c # Standard error handling routines (application replaceable).
+  libjpeg/jmemmgr.c # System-independent (more or less) memory management code.
+  libjpeg/jutils.c # Miscellaneous utility routines.
+
+  libjpeg/jmemmgr.c # relies on a system-dependent memory management module.
+  libjpeg/jmemnobs.c # "No backing store": assumes adequate virtual memory exists.
+)
+target_include_directories(jpeg SYSTEM PUBLIC libjpeg/)
 
 # manipulating libpng cmake options from within cmake script
 set(PNG_BUILD_ZLIB ON CACHE INTERNAL "" FORCE)
@@ -123,15 +143,15 @@ add_dependencies(png_static zlibstatic)
 
 set(ZLIB_LIBRARY zlibstatic)
 set(ZLIB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/zlib ${CMAKE_CURRENT_BINARY_DIR}/zlib)
-set(JPEG_LIBRARY turbojpeg-static)
-set(JPEG_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libjpeg-turbo/ ${CMAKE_CURRENT_BINARY_DIR}/libjpeg-turbo/)
+set(JPEG_LIBRARY jpeg)
+set(JPEG_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libjpeg)
 set(PNG_LIBRARY png_static)
 set(PNG_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libpng/ ${CMAKE_CURRENT_BINARY_DIR}/libpng/)
 set(PNG_PNG_INCLUDE_DIR ${PNG_INCLUDE_DIR}) # Bug in the webp cmake file?
 set(GIF_LIBRARY giflib)
 set(GIF_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/giflib/)
 add_subdirectory(libwebp libwebp)
-add_dependencies(webp png_static turbojpeg-static giflib)
+add_dependencies(webp png_static jpeg giflib)
 target_include_directories(imagedec SYSTEM INTERFACE libwebp/imageio/)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)

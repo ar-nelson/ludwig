@@ -7,8 +7,8 @@ namespace Ludwig {
   template <bool SSL> static auto webp_route(
     uWS::HttpRequest* req,
     uWS::HttpResponse<SSL>* rsp,
-    asio::awaitable<ThumbnailCache::Image>&& await_img
-  ) -> asio::awaitable<void> {
+    Async<ThumbnailCache::Image>&& await_img
+  ) -> Async<void> {
     const string if_none_match(req->getHeader("if-none-match"));
     const auto img = co_await std::move(await_img);
     const auto& [data, hash] = *img;
@@ -27,19 +27,19 @@ namespace Ludwig {
     shared_ptr<RemoteMediaController> controller
   ) -> void {
     Router(app)
-      .get_async("/media/user/:name/avatar.webp", [controller](auto* rsp, auto* req, auto) -> asio::awaitable<void> {
+      .get_async("/media/user/:name/avatar.webp", [controller](auto* rsp, auto* req, auto) -> Async<void> {
         co_await webp_route(req, rsp, controller->user_avatar(req->getParameter(0)));
       })
-      .get_async("/media/user/:name/banner.webp", [controller](auto* rsp, auto* req, auto) -> asio::awaitable<void> {
+      .get_async("/media/user/:name/banner.webp", [controller](auto* rsp, auto* req, auto) -> Async<void> {
         co_await webp_route(req, rsp, controller->user_banner(req->getParameter(0)));
       })
-      .get_async("/media/board/:name/icon.webp", [controller](auto* rsp, auto* req, auto) -> asio::awaitable<void> {
+      .get_async("/media/board/:name/icon.webp", [controller](auto* rsp, auto* req, auto) -> Async<void> {
         co_await webp_route(req, rsp, controller->board_icon(req->getParameter(0)));
       })
-      .get_async("/media/board/:name/banner.webp", [controller](auto* rsp, auto* req, auto) -> asio::awaitable<void> {
+      .get_async("/media/board/:name/banner.webp", [controller](auto* rsp, auto* req, auto) -> Async<void> {
         co_await webp_route(req, rsp, controller->board_banner(req->getParameter(0)));
       })
-      .get_async("/media/thread/:id/thumbnail.webp", [controller](auto* rsp, auto* req, auto) -> asio::awaitable<void> {
+      .get_async("/media/thread/:id/thumbnail.webp", [controller](auto* rsp, auto* req, auto) -> Async<void> {
         const auto id = hex_id_param(req, 0);
         co_await webp_route(req, rsp, controller->thread_link_card_image(id));
       });

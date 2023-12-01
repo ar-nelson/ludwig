@@ -17,6 +17,8 @@
 #include <spdlog/spdlog.h>
 #include <libxml/parser.h>
 #include <asio.hpp>
+#include <asio/experimental/channel.hpp>
+#include <asio/experimental/concurrent_channel.hpp>
 #include <uWebSockets/MoveOnlyFunction.h>
 
 namespace Ludwig {
@@ -33,10 +35,9 @@ namespace Ludwig {
   }
 
   static inline auto now_s() -> uint64_t {
+    using namespace std::chrono;
     return static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()
-      ).count()
+      duration_cast<seconds>(system_clock::now().time_since_epoch()).count()
     );
   }
 
@@ -89,44 +90,24 @@ namespace Ludwig {
     }
   };
 
-    template <typename T = std::monostate> class AsyncCell {
-    private:
-      using Handles = std::list<uWS::MoveOnlyFunction<void()>>;
-      struct State {
-        std::mutex mutex;
-        std::variant<Handles, T> v;
-      };
-      std::shared_ptr<State> state = std::make_shared<State>();
-    public:
-      template<asio::completion_token_for<void(T&)> CompletionToken>
-      inline auto async_get(CompletionToken&& token) const {
-        auto init = [&](asio::completion_handler_for<void(T&)> auto handler) {
-          auto complete = [state = std::weak_ptr(state), handler = std::move(handler)] mutable {
-            auto work = asio::make_work_guard(handler);
-            auto alloc = asio::get_associated_allocator(handler, asio::recycling_allocator<void>());
-            asio::dispatch(work.get_executor(),
-              asio::bind_allocator(alloc, [state = state, handler = std::move(handler)] mutable {
-                if (auto s = state.lock()) std::move(handler)(std::get<1>(s->v));
-              })
-            );
-          };
-          std::lock_guard<std::mutex> lock(state->mutex);
-          if (auto* handles = std::get_if<Handles>(&state->v)) handles->push_back(std::move(complete));
-          else complete();
-        };
-        return asio::async_initiate<CompletionToken, void(T&)>(init, token);
-      }
+  template <typename T> using Async = asio::awaitable<T, asio::io_context::executor_type>;
+  template <typename ...Ts> using Chan = asio::experimental::channel<asio::io_context::executor_type, void(asio::error_code, Ts...)>;
+  template <typename ...Ts> using ConcurrentChan = asio::experimental::concurrent_channel<asio::io_context::executor_type, void(asio::error_code, Ts...)>;
 
-      inline auto set(T new_value) -> void {
-        Handles handles;
-        {
-          std::lock_guard<std::mutex> lock(state->mutex);
-          if (auto* existing_handles = std::get_if<Handles>(&state->v)) {
-            std::swap(handles, *existing_handles);
-            state->v = new_value;
-          } else return;
-        }
-        for (auto& handle : handles) std::move(handle)();
-      }
-    };
+  template <typename T = std::monostate> class CacheChan {
+  private:
+    ConcurrentChan<T> chan;
+  public:
+    CacheChan(asio::io_context& io) : chan(io.get_executor()) {}
+
+    inline auto get() -> Async<T> {
+      auto t = co_await chan.async_receive(asio::deferred);
+      chan.async_send({}, t, asio::detached);
+      co_return t;
+    }
+
+    inline auto set(T&& new_value) -> void {
+      chan.async_send({}, std::forward<T>(new_value), asio::detached);
+    }
+  };
 }

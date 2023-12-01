@@ -947,7 +947,7 @@ namespace Ludwig {
     }
     return out;
   }
-  auto InstanceController::search_step_1(SearchQuery query) -> asio::awaitable<vector<SearchResult>> {
+  auto InstanceController::search_step_1(SearchQuery query) -> Async<vector<SearchResult>> {
     if (!search_engine) throw ApiError("Search is not enabled on this server", 403);
     query.limit = (query.limit ? query.limit : ITEMS_PER_PAGE) * 2;
     return (*search_engine)->search(query);

@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
   auto xml_ctx = make_shared<LibXmlContext>();
   auto rich_text = make_shared<RichTextParser>(xml_ctx);
   auto instance_c = make_shared<InstanceController>(db, http_client, rich_text, event_bus, search_engine);
-  auto remote_media_c = make_shared<RemoteMediaController>(db, http_client, xml_ctx, event_bus, search_engine);
+  auto remote_media_c = make_shared<RemoteMediaController>(db, io, http_client, xml_ctx, event_bus, search_engine);
 
   vector<std::thread> running_threads(threads);
   running_threads.emplace_back([io]{io->run();});

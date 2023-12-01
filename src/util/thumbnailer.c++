@@ -3,12 +3,13 @@
 #include <webp/encode.h>
 #include <image_dec.h>
 #include <gif_lib.h>
-#include <iostream>
-#include <sstream>
+
+using std::make_unique, std::min, std::optional, std::round, std::runtime_error,
+    std::string, std::string_view;
 
 namespace Ludwig {
 
-  static const std::string ENC_ERROR_MESSAGES[VP8_ENC_ERROR_LAST] = {
+  static const string ENC_ERROR_MESSAGES[VP8_ENC_ERROR_LAST] = {
     "OK",
     "OUT_OF_MEMORY",
     "BITSTREAM_OUT_OF_MEMORY",
@@ -22,7 +23,7 @@ namespace Ludwig {
     "USER_ABORT"
   };
 
-  static const std::string DEC_ERROR_MESSAGES[] = {
+  static const string DEC_ERROR_MESSAGES[] = {
     "OK",
     "OUT_OF_MEMORY",
     "INVALID_PARAM",
@@ -54,7 +55,7 @@ namespace Ludwig {
   static auto gif_reader(GifFileType* gif, GifByteType* dest, int bytes_to_read) -> int {
     auto& buf = *reinterpret_cast<GifBuffer*>(gif->UserData);
     if (buf.off >= buf.sz) return -1;
-    size_t bytes = std::min((size_t)bytes_to_read, buf.sz - buf.off);
+    size_t bytes = min((size_t)bytes_to_read, buf.sz - buf.off);
     memcpy(dest, buf.buf + buf.off, bytes);
     buf.off += bytes;
     return (int)bytes;
@@ -69,26 +70,26 @@ namespace Ludwig {
       gif = DGifOpen(&buf, gif_reader, &err);
       if (err) {
         auto msg = GifErrorString(err);
-        throw std::runtime_error("GIF open failed: " + (msg == nullptr ? "?" : std::string(msg)));
+        throw runtime_error("GIF open failed: " + (msg == nullptr ? "?" : string(msg)));
       }
       if (DGifSlurp(gif) != GIF_OK || gif->SavedImages == nullptr) {
         DGifCloseFile(gif, &err);
-        throw std::runtime_error("GIF read failed");
+        throw runtime_error("GIF read failed");
       }
     }
     auto decode(WebPPicture* pic) -> void {
-      if (gif->ImageCount < 1) throw std::runtime_error("GIF has 0 subimages");
+      if (gif->ImageCount < 1) throw runtime_error("GIF has 0 subimages");
       SavedImage& s = gif->SavedImages[0];
 
       const size_t width = (size_t)s.ImageDesc.Width, height = (size_t)s.ImageDesc.Height;
-      if (!width || !height) throw std::runtime_error("GIF has 0 width/height");
+      if (!width || !height) throw runtime_error("GIF has 0 width/height");
 
       ColorMapObject* cmap;
       if (s.ImageDesc.ColorMap != nullptr) cmap = s.ImageDesc.ColorMap;
       else if (gif->SColorMap != nullptr) cmap = gif->SColorMap;
-      else throw std::runtime_error("GIF has no color map");
+      else throw runtime_error("GIF has no color map");
 
-      auto rgba = std::make_unique<uint8_t[]>(width * height * 4);
+      auto rgba = make_unique<uint8_t[]>(width * height * 4);
       auto d = rgba.get();
 
       for (size_t i = 0; i < width * height; i++) {
@@ -111,7 +112,7 @@ namespace Ludwig {
       pic->height = (int)height;
       pic->use_argb = true;
       if (!WebPPictureImportRGBA(pic, rgba.get(), (int)width * 4)) {
-        throw std::runtime_error("GIF data import failed, cannot generate thumbnail.");
+        throw runtime_error("GIF data import failed, cannot generate thumbnail.");
       }
     }
     ~GifFile() {
@@ -132,9 +133,9 @@ namespace Ludwig {
   // decoder. But to decode, you first have to encode, hence the
   // src->RGBA->WebP->RGBA->WebP dance.
 
-  static auto ostream_writer(const uint8_t* data, size_t sz, const WebPPicture* pic) -> int {
-    auto& out = *reinterpret_cast<std::ostream*>(pic->custom_ptr);
-    out.write(reinterpret_cast<const char*>(data), (long)sz);
+  static auto string_writer(const uint8_t* data, size_t sz, const WebPPicture* pic) -> int {
+    auto& out = *reinterpret_cast<string*>(pic->custom_ptr);
+    out.append(reinterpret_cast<const char*>(data), sz);
     return true;
   }
 
@@ -150,26 +151,25 @@ namespace Ludwig {
     };
     WebPPicture pic;
     Thumbnailer() {
-      if (!WebPPictureInit(&pic)) throw std::runtime_error("Failed to initialize WebP");
+      if (!WebPPictureInit(&pic)) throw runtime_error("Failed to initialize WebP");
     }
     auto generate(
-      std::string_view mimetype,
+      string_view mimetype,
       const uint8_t* data,
       size_t sz,
       uint16_t target_width,
       uint16_t target_height,
       size_t target_size_bytes
-    ) -> std::string {
-      std::string intermediate;
+    ) -> string {
+      string intermediate;
 
       /////////////////////////////////////////////////////////////////////////
       // Step 1: Parse non-WebP images
       //
       if (mimetype != "image/webp") {
-        std::ostringstream out;
         pic.use_argb = true;
-        pic.writer = ostream_writer;
-        pic.custom_ptr = &out;
+        pic.writer = string_writer;
+        pic.custom_ptr = &intermediate;
         if (mimetype == "image/gif") {
           GifFile gif(data, sz);
           gif.decode(&pic);
@@ -177,25 +177,23 @@ namespace Ludwig {
           WebPImageReader reader;
           if (mimetype == "image/jpeg" || mimetype == "image/jpg") reader = WebPGetImageReader(WEBP_JPEG_FORMAT);
           else if (mimetype == "image/png") reader = WebPGetImageReader(WEBP_PNG_FORMAT);
-          else if (mimetype == "image/gif") throw std::runtime_error("GIF is not yet supported");
           else reader = WebPGuessImageReader(data, sz);
 
           if (!reader(data, sz, &pic, true, nullptr)) {
-            throw std::runtime_error("Image parse failed, cannot generate thumbnail.");
+            throw runtime_error("Image parse failed, cannot generate thumbnail.");
           }
         }
         WebPConfig enc_config = { .lossless = true, .segments = 1, .pass = 1 };
         if (!WebPEncode(&enc_config, &pic)) {
-          throw std::runtime_error(
+          throw runtime_error(
             "Intermediate image encode failed, cannot generate thumbnail. Error: " + ENC_ERROR_MESSAGES[pic.error_code]
           );
         }
-        intermediate = out.str();
         data = reinterpret_cast<const uint8_t*>(intermediate.data());
         sz = intermediate.length();
 
         WebPPictureFree(&pic);
-        if (!WebPPictureInit(&pic)) throw std::runtime_error("Failed to initialize WebP");
+        if (!WebPPictureInit(&pic)) throw runtime_error("Failed to initialize WebP");
       }
 
       /////////////////////////////////////////////////////////////////////////
@@ -203,51 +201,51 @@ namespace Ludwig {
       //
       int original_w, original_h;
       if (!WebPGetInfo(data, sz, &original_w, &original_h)) {
-        throw std::runtime_error("WebP stream is invalid");
+        throw runtime_error("WebP stream is invalid");
       }
       const float aspect_ratio = (float)target_width / (float)target_height,
         original_aspect_ratio = (float)original_w / (float)original_h;
-      if ((int)std::round((float)original_h * aspect_ratio) != original_w) {
+      if ((int)round((float)original_h * aspect_ratio) != original_w) {
         config.options.use_cropping = true;
         if (original_aspect_ratio < aspect_ratio) /* tall */ {
           config.options.crop_width = original_w;
-          const auto h = config.options.crop_height = (int)std::round((float)original_w / aspect_ratio);
+          const auto h = config.options.crop_height = (int)round((float)original_w / aspect_ratio);
           config.options.crop_top = (original_h - h) / 2;
-          config.options.scaled_width = std::min((uint16_t)original_w, target_width);
-          config.options.scaled_height = (int)std::round((float)config.options.scaled_width / aspect_ratio);
+          config.options.scaled_width = min((uint16_t)original_w, target_width);
+          config.options.scaled_height = (int)round((float)config.options.scaled_width / aspect_ratio);
         } else /* wide */ {
           config.options.crop_height = original_h;
-          const auto w = config.options.crop_width = (int)std::round((float)original_h * aspect_ratio);
+          const auto w = config.options.crop_width = (int)round((float)original_h * aspect_ratio);
           config.options.crop_left = (original_w - w) / 2;
-          config.options.scaled_height = std::min((uint16_t)original_h, target_height);
-          config.options.scaled_width = (int)std::round((float)config.options.scaled_height * aspect_ratio);
+          config.options.scaled_height = min((uint16_t)original_h, target_height);
+          config.options.scaled_width = (int)round((float)config.options.scaled_height * aspect_ratio);
         }
       } else {
-        config.options.scaled_width = std::min((uint16_t)original_w, target_width);
-        config.options.scaled_height = std::min((uint16_t)original_h, target_height);
+        config.options.scaled_width = min((uint16_t)original_w, target_width);
+        config.options.scaled_height = min((uint16_t)original_h, target_height);
       }
       if (auto err = WebPDecode(data, sz, &config)) {
-        throw std::runtime_error("WebP decode failed. Error: " + DEC_ERROR_MESSAGES[err]);
+        throw runtime_error("WebP decode failed. Error: " + DEC_ERROR_MESSAGES[err]);
       }
 
       /////////////////////////////////////////////////////////////////////////
       // Step 3: Re-encode scaled and cropped WebP
       //
-      std::ostringstream out;
-      pic.writer = ostream_writer;
+      string out;
+      pic.writer = string_writer;
       pic.custom_ptr = &out;
       pic.width = config.output.width;
       pic.height = config.output.height;
       if (!WebPPictureImportRGBA(&pic, config.output.u.RGBA.rgba, config.output.u.RGBA.stride)) {
-        throw std::runtime_error("Image data import failed, cannot generate thumbnail.");
+        throw runtime_error("Image data import failed, cannot generate thumbnail.");
       }
       WebPConfig enc_config = { .target_size = (int)target_size_bytes, .segments = 1, .pass = 1, .qmin = 50, .qmax = 100 };
       if (!WebPEncode(&enc_config, &pic)) {
-        throw std::runtime_error(
+        throw runtime_error(
           "Image encode failed, cannot generate thumbnail. Error: " + ENC_ERROR_MESSAGES[pic.error_code]
         );
       }
-      return out.str();
+      return out;
     }
     ~Thumbnailer() {
       WebPPictureFree(&pic);
@@ -256,11 +254,11 @@ namespace Ludwig {
   };
 
   auto generate_thumbnail(
-    std::optional<std::string_view> mimetype,
-    std::string_view data,
+    optional<string_view> mimetype,
+    string_view data,
     uint16_t width,
     uint16_t height
-  ) -> std::string {
+  ) -> string {
     Thumbnailer t;
     return t.generate(
       to_ascii_lowercase(mimetype.value_or("")),

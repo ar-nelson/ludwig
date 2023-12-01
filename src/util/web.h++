@@ -5,13 +5,11 @@
 #include <sstream>
 #include <variant>
 #include <asio.hpp>
-#include <asio/experimental/awaitable_operators.hpp>
+#include <asio/experimental/parallel_group.hpp>
 #include <uWebSockets/App.h>
 #include <uSockets/internal/eventing/asio.h>
 #include <flatbuffers/string.h>
 #include <simdjson.h>
-
-using namespace asio::experimental::awaitable_operators;
 
 namespace Ludwig {
   static constexpr std::string_view ESCAPED = "<>'\"&",
@@ -137,7 +135,19 @@ namespace Ludwig {
     using Middleware = std::function<M (uWS::HttpResponse<SSL>*, uWS::HttpRequest*)>;
     using ErrorMiddleware = std::function<E (const uWS::HttpResponse<SSL>*, uWS::HttpRequest*)>;
     using ErrorHandler = std::function<void (uWS::HttpResponse<SSL>*, const ApiError&, const E&)>;
+    using GetAsyncHandler = uWS::MoveOnlyFunction<Async<void> (
+      uWS::HttpResponse<SSL>*,
+      uWS::HttpRequest*,
+      std::unique_ptr<M>
+    )>;
+    using PostFormHandler = uWS::MoveOnlyFunction<Async<void> (
+      uWS::HttpResponse<SSL>*,
+      uWS::HttpRequest*,
+      std::unique_ptr<M>,
+      std::function<Async<QueryString>()>
+    )>;
   private:
+    using Cancellation = std::pair<std::atomic<bool>, Chan<>>;
     uWS::TemplatedApp<SSL>& app;
 
     static auto default_error_handler(uWS::HttpResponse<SSL>* rsp, const ApiError& err, const E&) -> void {
@@ -211,6 +221,140 @@ namespace Ludwig {
     };
 
     std::shared_ptr<Impl> impl;
+
+    struct GetAsyncRoute {
+      std::shared_ptr<Impl> impl;
+      GetAsyncHandler handler;
+
+      auto run(
+        uWS::HttpResponse<SSL>* rsp,
+        uWS::HttpRequest* req,
+        std::shared_ptr<Cancellation> cancellation
+      ) -> Async<void> {
+        std::string url(req->getUrl());
+        impl->check_thread();
+        auto error_meta = impl->error_middleware(rsp, req);
+        try {
+          std::string msg = spdlog::get_level() == spdlog::level::debug
+            ? fmt::format("[GET {}] - {} {}", url, get_ip(rsp, req), req->getHeader("user-agent"))
+            : "";
+          if (!cancellation->first) {
+            co_await handler(rsp, req, std::make_unique<M>(impl->middleware(rsp, req)));
+            spdlog::debug("{}", msg);
+          }
+        } catch (...) {
+          if (!cancellation->first) {
+            impl->handle_error(std::current_exception(), rsp, error_meta, "GET", url);
+          }
+        }
+      }
+
+      auto operator()(uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) -> void {
+        using namespace asio;
+        using namespace asio::experimental;
+        impl->check_thread();
+        // We have to make sure this runs on the router's loop thread.
+        //
+        // This *should* have been doable with uWS::Loop::defer, but that
+        // causes a buffer overflow for some reason.
+        //
+        // So instead we access the interals of a uSockets loop directly
+        // and extract the asio io_context to schedule something on it.
+        const auto* loop = us_socket_context_loop(SSL, us_socket_context(SSL, (us_socket_t*)rsp));
+        auto* io = (io_context*)loop->io;
+        auto cancellation = std::make_shared<Cancellation>(false, *io);
+        rsp->onAborted([cancellation, url = std::string(req->getUrl())] mutable {
+          cancellation->first = true;
+          cancellation->second.try_send(error_code{});
+          spdlog::debug("[GET {}] - HTTP session aborted", url);
+        });
+        // Run until the first co_await so req stays on the stack
+        make_parallel_group(
+          co_spawn(*io, run(rsp, req, cancellation), deferred),
+          cancellation->second.async_receive(deferred)
+        ).async_wait(
+          wait_for_one(),
+          [cancellation](auto, auto, auto) { /* do nothing, just hold the shared_ptr */ }
+        );
+      }
+    };
+
+    struct PostFormRoute {
+      std::shared_ptr<Impl> impl;
+      PostFormHandler handler;
+      uint64_t max_size;
+      using BodyChan = Chan<std::variant<QueryString, std::exception_ptr>>;
+
+      auto run(
+        uWS::HttpResponse<SSL>* rsp,
+        uWS::HttpRequest* req,
+        std::shared_ptr<Cancellation> cancellation,
+        std::shared_ptr<BodyChan> body
+      ) -> Async<void> {
+        impl->check_thread();
+        std::string url(req->getUrl());
+        auto error_meta = impl->error_middleware(rsp, req);
+        try {
+          const auto content_type = req->getHeader("content-type");
+          if (content_type.data() && !content_type.starts_with(TYPE_FORM)) {
+            throw ApiError("Wrong POST request Content-Type (expected application/x-www-form-urlencoded)", 415);
+          }
+          std::string msg = spdlog::get_level() == spdlog::level::debug
+            ? fmt::format("[POST {}] - {} {}", url, get_ip(rsp, req), req->getHeader("user-agent"))
+            : "";
+          if (!cancellation->first) {
+            co_await handler(rsp, req, std::make_unique<M>(impl->middleware(rsp, req)), [body = body] -> Async<QueryString> {
+              auto v = co_await body->async_receive(asio::deferred);
+              if (auto* b = std::get_if<QueryString>(&v)) co_return *b;
+              std::rethrow_exception(std::get<1>(v));
+            });
+            spdlog::debug("{}", msg);
+          }
+        }  catch (...) {
+          if (!cancellation->first) {
+            impl->handle_error(std::current_exception(), rsp, error_meta, "POST", url);
+          }
+        }
+      }
+
+      auto operator()(uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) -> void {
+        using namespace asio;
+        using namespace asio::experimental;
+        const auto* loop = us_socket_context_loop(SSL, us_socket_context(SSL, (us_socket_t*)rsp));
+        auto* io = (io_context*)loop->io;
+        auto cancellation = std::make_shared<Cancellation>(false, *io);
+        auto body = std::make_shared<BodyChan>(*io);
+        rsp->onAborted([cancellation, url = std::string(req->getUrl())] mutable {
+          cancellation->first = true;
+          cancellation->second.try_send(error_code{});
+          spdlog::debug("[POST {}] - HTTP session aborted", url);
+        });
+        rsp->onData([
+          impl = impl, max_size = max_size, rsp, body,
+          buffer = std::string("?")
+        ](std::string_view data, bool last) mutable {
+          impl->check_thread();
+          buffer.append(data);
+          try {
+            if (buffer.length() > max_size) throw ApiError("POST body is too large", 413);
+            if (!last) return;
+            if (!simdjson::validate_utf8(buffer)) throw ApiError("POST body is not valid UTF-8", 415);
+            body->async_send({}, QueryString{buffer}, [body](const error_code& ec) {
+              if (ec) body->async_send(ec, std::exception_ptr{}, detached);
+            });
+          } catch (...) {
+            body->async_send({}, std::current_exception(), detached);
+          }
+        });
+        make_parallel_group(
+          co_spawn(*io, run(rsp, req, cancellation, body), deferred),
+          cancellation->second.async_receive(deferred)
+        ).async_wait(
+          wait_for_one(),
+          [cancellation](auto, auto, auto) {}
+        );
+      }
+    };
   public:
     Router(
       uWS::TemplatedApp<SSL>& app,
@@ -247,148 +391,17 @@ namespace Ludwig {
       return std::move(*this);
     }
 
-    using GetAsyncHandler = uWS::MoveOnlyFunction<asio::awaitable<void> (
-      uWS::HttpResponse<SSL>*,
-      uWS::HttpRequest*,
-      std::unique_ptr<M>
-    )>;
-
     Router &&get_async(std::string pattern, GetAsyncHandler&& handler) {
-      auto hsp = std::make_shared<GetAsyncHandler>(std::forward<GetAsyncHandler>(handler));
-      app.get(pattern, [impl = impl, hsp = hsp](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
-        impl->check_thread();
-        // We have to make sure this runs on the router's loop thread.
-        //
-        // This *should* have been doable with uWS::Loop::defer, but that
-        // causes a buffer overflow for some reason.
-        //
-        // So instead we access the interals of a uSockets loop directly
-        // and extract the asio io_context to schedule something on it.
-        const auto* loop = us_socket_context_loop(SSL, us_socket_context(SSL, (us_socket_t*)rsp));
-        auto* io = (asio::io_context*)loop->io;
-        struct Coroutine {
-          std::shared_ptr<Impl> impl;
-          std::shared_ptr<GetAsyncHandler> handler;
-          uWS::HttpResponse<SSL>* rsp;
-          uWS::HttpRequest* req;
-          std::string url;
-          E error_meta;
-
-          auto run() -> asio::awaitable<void> {
-            auto cs = co_await asio::this_coro::cancellation_state;
-            try {
-              std::string msg = spdlog::get_level() == spdlog::level::debug
-                ? fmt::format("[GET {}] - {} {}", url, get_ip(rsp, req), req->getHeader("user-agent"))
-                : "";
-              impl->check_thread();
-              if (cs.cancelled() == asio::cancellation_type::none) {
-                co_await (*handler)(rsp, req, std::make_unique<M>(impl->middleware(rsp, req)));
-                impl->check_thread();
-                spdlog::debug("{}", msg);
-              }
-            } catch (...) {
-              if (cs.cancelled() == asio::cancellation_type::none) {
-                impl->handle_error(std::current_exception(), rsp, error_meta, "GET", url);
-              }
-            }
-            delete this;
-          }
-        };
-        auto coroutine = new Coroutine{impl, hsp, rsp, req, std::string(req->getUrl()), impl->error_middleware(rsp, req)};
-        AsyncCell cancel_signal;
-        rsp->onAborted([cancel_signal, coroutine] mutable {
-          cancel_signal.set({});
-          spdlog::debug("[GET {}] - HTTP session aborted", coroutine->url);
-        });
-        // Run until the first co_await so req stays on the stack
-        asio::co_spawn(*io, coroutine->run() || cancel_signal.async_get(asio::use_awaitable), asio::detached);
-      });
+      app.get(pattern, GetAsyncRoute{impl, std::forward<GetAsyncHandler>(handler)});
       return std::move(*this);
     }
 
-    using PostFormHandler = uWS::MoveOnlyFunction<asio::awaitable<void> (
-      uWS::HttpResponse<SSL>*,
-      uWS::HttpRequest*,
-      std::unique_ptr<M>,
-      std::function<asio::awaitable<QueryString>()>
-    )>;
-
-    // TODO: Continue here, make it match get_async
     Router &&post_form(
       std::string pattern,
       PostFormHandler &&handler,
       size_t max_size = 10 * 1024 * 1024 // 10MiB
     ) {
-      auto hsp = std::make_shared<PostFormHandler>(std::forward<PostFormHandler>(handler));
-      app.post(pattern, [impl = impl, hsp = hsp, max_size](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
-        impl->check_thread();
-        const auto url = std::string(req->getUrl());
-        auto error_meta = std::make_shared<E>(impl->error_middleware(rsp, req));
-        bool canceled = false;
-        rsp->onAborted([url, canceled] mutable {
-          canceled = true;
-          spdlog::debug("[POST {}] - HTTP session aborted", url);
-        });
-        const auto ip = get_ip(rsp, req);
-        const auto user_agent = std::string(req->getHeader("user-agent"));
-        std::string buffer = "?";
-
-        const auto* loop = us_socket_context_loop(SSL, us_socket_context(SSL, (us_socket_t*)rsp));
-        auto* io = (asio::io_context*)loop->io;
-        AsyncCell<std::variant<QueryString, std::exception_ptr>> body;
-        rsp->onData([
-          impl = impl, rsp, max_size, url, ip, user_agent,
-          error_meta = error_meta,
-          body,
-          buffer = std::move(buffer)
-        ](std::string_view data, bool last) mutable {
-          impl->check_thread();
-          buffer.append(data);
-          try {
-            if (buffer.length() > max_size) throw ApiError("POST body is too large", 413);
-            if (!last) return;
-            if (!simdjson::validate_utf8(buffer)) throw ApiError("POST body is not valid UTF-8", 415);
-            body.set(QueryString{buffer});
-          } catch (...) {
-            body.set(std::current_exception());
-          }
-        });
-        struct Coroutine {
-          std::shared_ptr<Impl> _impl;
-          std::shared_ptr<PostFormHandler> _handler;
-          AsyncCell<std::variant<QueryString, std::exception_ptr>> _body;
-          uWS::HttpResponse<SSL>* _rsp;
-          uWS::HttpRequest* _req;
-          std::string _url;
-          E error_meta;
-
-          auto run() -> asio::awaitable<void> {
-            try {
-              const auto content_type = _req->getHeader("content-type");
-              if (content_type.data() && !content_type.starts_with(TYPE_FORM)) {
-                throw ApiError("Wrong POST request Content-Type (expected application/x-www-form-urlencoded)", 415);
-              }
-              co_await (*_handler)(_rsp, _req, std::make_unique<M>(_impl->middleware(_rsp, _req)), [body = _body] -> asio::awaitable<QueryString> {
-                auto v = co_await body.async_get(asio::use_awaitable);
-                if (auto* b = std::get_if<QueryString>(&v)) co_return *b;
-                std::rethrow_exception(std::get<1>(v));
-              });
-            } catch (const asio::system_error& e) {
-              // This error can be thrown after the request completes.
-              // Just ignore it.
-              if (e.code() != asio::error::operation_aborted) {
-                spdlog::error("Ignoring asio error from {}: {}", _url, e.what());
-              }
-            } catch (...) {
-              _impl->handle_error(std::current_exception(), _rsp, error_meta, "POST", _url);
-            }
-            delete this;
-          }
-        };
-        auto coroutine = new Coroutine{impl, hsp, body, rsp, req, url, impl->error_middleware(rsp, req)};
-        asio::co_spawn(*io, coroutine->run(), asio::detached);
-        spdlog::debug("[POST {}] - {} {}", url, get_ip(rsp, req), req->getHeader("user-agent"));
-      });
+      app.post(pattern, PostFormRoute{impl, std::forward<PostFormHandler>(handler), max_size});
       return std::move(*this);
     }
   };

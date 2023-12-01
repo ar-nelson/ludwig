@@ -106,8 +106,7 @@ private:
   };
 
 protected:
-  auto fetch(unique_ptr<HttpClientRequest> req)
-      -> asio::awaitable<unique_ptr<const HttpClientResponse>> {
+  auto fetch(unique_ptr<HttpClientRequest> req) -> Async<unique_ptr<const HttpClientResponse>> {
     requests++;
     const auto rsp = get_responses.find(req->url.to_string());
     if (rsp == get_responses.end())
@@ -116,7 +115,7 @@ protected:
       co_return make_unique<Response>(405);
     if (delay) {
       asio::steady_timer timer(co_await asio::this_coro::executor, *delay);
-      co_await timer.async_wait(asio::use_awaitable);
+      co_await timer.async_wait(asio::deferred);
     }
     const auto [status, mimetype, body] = rsp->second;
     co_return make_unique<Response>(status, mimetype, body);

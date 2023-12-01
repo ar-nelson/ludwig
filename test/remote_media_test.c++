@@ -50,11 +50,11 @@ TEST_CASE("fetch Wikipedia link card", "[remote_media]") {
 
   auto http_client = make_shared<MockHttpClient>();
   http_client->on_get(WIKI_URL, 200, TYPE_HTML, load_file(test_root() / "fixtures" / "wikipedia_red_panda.html"));
-  RemoteMediaController remote_media(db, http_client, xml_ctx);
+  auto io = make_shared<asio::io_context>();
+  RemoteMediaController remote_media(db, io, http_client, xml_ctx);
 
-  asio::io_context io;
-  auto f = asio::co_spawn(io, remote_media.fetch_link_card_for_thread(thread_id), asio::use_future);
-  io.run();
+  auto f = asio::co_spawn(*io, remote_media.fetch_link_card_for_thread(thread_id), asio::use_future);
+  io->run();
   f.get();
 
   auto txn = db->open_read_txn();

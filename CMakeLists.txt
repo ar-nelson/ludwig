@@ -138,31 +138,18 @@ set (ludwig_common_src
   src/views/webapp.c++
 )
 
-if (CMAKE_BUILD_TYPE MATCHES Release AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-
-  # A hack for static compilation.
-  #
-  # I don't know why, but clang's libstdc++ references arc4random from libbsd,
-  # and with -static this function isn't available anymore‽
-  #
-  # Linux only, because this function should be available on BSD and Mac.
-
-  set (ludwig_common_src ${ludwig_common_src} vendor/libbsd/src/arc4random.c)
-
-endif ()
-
 set (ludwig_libs
   crypto
   flatbuffers
   giflib
   imagedec
+  jpeg
   LibXml2
   png_static
   sentencepiece-static
   simdjson_static
   spdlog
   ssl
-  turbojpeg-static
   uWS
   webp
   vendor-misc

@@ -206,7 +206,7 @@ namespace Ludwig {
     }
   }
 
-  auto LmdbSearchEngine::search(SearchQuery query) -> asio::awaitable<vector<SearchResult>> {
+  auto LmdbSearchEngine::search(SearchQuery query) -> Async<vector<SearchResult>> {
     set<int> tokens;
     MatchMap matches;
     vector<SearchResult> results;

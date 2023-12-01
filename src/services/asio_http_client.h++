@@ -12,10 +12,10 @@ namespace Ludwig {
     asio::executor_work_guard<decltype(io->get_executor())> work;
     std::shared_ptr<asio::ssl::context> ssl;
 
-    auto https_fetch(std::unique_ptr<HttpClientRequest>& req) -> asio::awaitable<std::unique_ptr<AsioHttpClientResponse>>;
-    auto http_fetch(std::unique_ptr<HttpClientRequest>& req) -> asio::awaitable<std::unique_ptr<AsioHttpClientResponse>>;
+    auto https_fetch(std::unique_ptr<HttpClientRequest>& req) -> Async<AsioHttpClientResponse*>;
+    auto http_fetch(std::unique_ptr<HttpClientRequest>& req) -> Async<AsioHttpClientResponse*>;
   protected:
-    auto fetch(std::unique_ptr<HttpClientRequest> req) -> asio::awaitable<std::unique_ptr<const HttpClientResponse>>;
+    auto fetch(std::unique_ptr<HttpClientRequest> req) -> Async<std::unique_ptr<const HttpClientResponse>>;
   public:
     AsioHttpClient(std::shared_ptr<asio::io_context> io, std::shared_ptr<asio::ssl::context> ssl);
   };

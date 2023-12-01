@@ -2008,7 +2008,7 @@ namespace Ludwig {
           end_with_html_footer(rsp, m);
         }
       })
-      .get_async("/search", [self](auto* rsp, auto* req, auto m) -> asio::awaitable<void> {
+      .get_async("/search", [self](auto* rsp, auto* req, auto m) -> Async<void> {
         SearchQuery query {
           .query = req->getQuery("search"),
           /// TODO: Other parameters
@@ -2138,7 +2138,7 @@ namespace Ludwig {
         else rsp->writeHeader("Location", req->getHeader("referer"));
         rsp->end();
       })
-      .post_form("/login", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
+      .post_form("/login", [self](auto* rsp, auto* req, auto m, auto get_body) -> Async<void> {
         if (m->logged_in_user_id) throw ApiError("Already logged in", 403);
         const string ip(get_ip(rsp, req)),
           user_agent(req->getHeader("user-agent")),
@@ -2178,7 +2178,7 @@ namespace Ludwig {
           ->writeHeader("Location", referer.empty() || referer == "/login" ? "/" : referer)
           ->end();
       })
-      .post_form("/register", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
+      .post_form("/register", [self](auto* rsp, auto* req, auto m, auto get_body) -> Async<void> {
         if (m->logged_in_user_id) throw ApiError("Already logged in", 403);
         const string ip(get_ip(rsp, req)),
           user_agent(req->getHeader("user-agent")),
@@ -2222,7 +2222,7 @@ namespace Ludwig {
           "</div></main>");
         end_with_html_footer(rsp, *m);
       })
-      .post_form("/create_board", [self](auto* rsp, auto*, auto m, auto get_body) -> asio::awaitable<void> {
+      .post_form("/create_board", [self](auto* rsp, auto*, auto m, auto get_body) -> Async<void> {
         const auto user_id = m->require_login();
         auto body = co_await get_body();
         const auto name = body.required_string("name");
@@ -2240,7 +2240,7 @@ namespace Ludwig {
         rsp->writeHeader("Location", fmt::format("/b/{}", name))
           ->end();
       })
-      .post_form("/b/:name/create_thread", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
+      .post_form("/b/:name/create_thread", [self](auto* rsp, auto* req, auto m, auto get_body) -> Async<void> {
         uint64_t board_id, user_id;
         {
           auto txn = self->controller->open_read_txn();
@@ -2261,7 +2261,7 @@ namespace Ludwig {
         rsp->writeHeader("Location", fmt::format("/thread/{:x}", id))
           ->end();
       })
-      .post_form("/thread/:id/reply", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
+      .post_form("/thread/:id/reply", [self](auto* rsp, auto* req, auto m, auto get_body) -> Async<void> {
         const auto user_id = m->require_login();
         const auto thread_id = hex_id_param(req, 0);
         auto body = co_await get_body();
@@ -2287,7 +2287,7 @@ namespace Ludwig {
             ->end();
         }
       })
-      .post_form("/comment/:id/reply", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
+      .post_form("/comment/:id/reply", [self](auto* rsp, auto* req, auto m, auto get_body) -> Async<void> {
         const auto user = m->require_login();
         const auto comment_id = hex_id_param(req, 0);
         auto body = co_await get_body();
@@ -2313,7 +2313,7 @@ namespace Ludwig {
             ->end();
         }
       })
-      .post_form("/thread/:id/action", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
+      .post_form("/thread/:id/action", [self](auto* rsp, auto* req, auto m, auto get_body) -> Async<void> {
         const auto id = hex_id_param(req, 0);
         const auto user = m->require_login();
         const auto referer = string(req->getHeader("referer"));
@@ -2397,7 +2397,7 @@ namespace Ludwig {
           write_redirect_back(rsp, referer);
         }
       })
-      .post_form("/comment/:id/action", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
+      .post_form("/comment/:id/action", [self](auto* rsp, auto* req, auto m, auto get_body) -> Async<void> {
         const auto id = hex_id_param(req, 0);
         const auto user = m->require_login();
         const auto referer = string(req->getHeader("referer"));
@@ -2485,7 +2485,7 @@ namespace Ludwig {
           write_redirect_back(rsp, referer);
         }
       })
-      .post_form("/thread/:id/vote", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
+      .post_form("/thread/:id/vote", [self](auto* rsp, auto* req, auto m, auto get_body) -> Async<void> {
         const auto user = m->require_login();
         const auto post_id = hex_id_param(req, 0);
         const auto referer = string(req->getHeader("referer"));
@@ -2503,7 +2503,7 @@ namespace Ludwig {
           write_redirect_back(rsp, referer);
         }
       })
-      .post_form("/comment/:id/vote", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
+      .post_form("/comment/:id/vote", [self](auto* rsp, auto* req, auto m, auto get_body) -> Async<void> {
         const auto user = m->require_login();
         const auto post_id = hex_id_param(req, 0);
         const auto referer = string(req->getHeader("referer"));
@@ -2521,7 +2521,7 @@ namespace Ludwig {
           write_redirect_back(rsp, referer);
         }
       })
-      .post_form("/b/:name/subscribe", [self](auto* rsp, auto* req, auto m, auto get_body) -> asio::awaitable<void> {
+      .post_form("/b/:name/subscribe", [self](auto* rsp, auto* req, auto m, auto get_body) -> Async<void> {
         auto txn = self->controller->open_read_txn();
         const auto board_id = board_name_param(txn, req, 0);
         const auto name = string(req->getParameter(0));
