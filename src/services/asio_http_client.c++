@@ -1,21 +1,29 @@
 #include "asio_http_client.h++"
 #include "util/web.h++"
 #include <uWebSockets/HttpParser.h>
+#include <asio/experimental/parallel_group.hpp>
 #include <duthomhas/csprng.hpp>
 #include <chrono>
 
 using namespace std::literals;
-using std::bind, std::make_shared, std::make_unique, std::match_results,
-      std::nullopt, std::optional, std::placeholders::_1, std::placeholders::_2,
-      std::regex, std::regex_match, std::runtime_error, std::shared_ptr,
-      std::string, std::string_view, std::unique_ptr, asio::ip::tcp;
+using asio::deferred, asio::error_code, asio::io_context, asio::ip::tcp,
+    asio::redirect_error, std::exception_ptr, std::make_unique,
+    std::match_results, std::nullopt, std::optional, std::regex,
+    std::regex_match, std::rethrow_exception, std::runtime_error,
+    std::shared_ptr, std::string, std::string_view, std::unique_ptr;
 namespace ssl = asio::ssl;
 
 namespace Ludwig {
   AsioHttpClient::AsioHttpClient(
-    shared_ptr<asio::io_context> io,
-    shared_ptr<ssl::context> ssl
-  ) : io(io), work(io->get_executor()), ssl(ssl), resolver(*io) {}
+    shared_ptr<io_context> io
+  ) : io(io), ssl(ssl::context::sslv23) {
+    // TODO: Load system root certificates
+    //ssl.set_verify_mode(ssl::verify_peer | ssl::context::verify_fail_if_no_peer_cert);
+    ssl.set_default_verify_paths();
+  }
+
+  using TcpSocket = asio::basic_stream_socket<tcp, io_context::executor_type>;
+  using SslSocket = ssl::stream<TcpSocket>;
 
   class AsioHttpClientResponse : public HttpClientResponse {
     static inline constexpr size_t MAX_RESPONSE_BYTES = 1024 * 1024 * 64; // 64MiB
@@ -36,7 +44,6 @@ namespace Ludwig {
     inline auto append(const void* data, size_t size) -> void {
       if (fake_request_buf.length() + size > MAX_RESPONSE_BYTES) {
         throw runtime_error(fmt::format("Response is larger than max of {} bytes", MAX_RESPONSE_BYTES));
-        return;
       }
       fake_request_buf.append((const char*)data, size);
     }
@@ -86,147 +93,143 @@ namespace Ludwig {
     };
   };
 
-  // Based on https://github.com/alexandruc/SimpleHttpsClient/blob/712908677f1380a47ff8460ad05d3a8a78c9d599/https_client.cpp
-  class AsioFetch {
-  private:
-    asio::io_context& io;
-    ssl::context& ssl;
-    asio::steady_timer timeout;
-    HttpClientRequest request;
-    HttpResponseCallback callback;
+  template <typename Socket> static inline auto close_socket(Socket& s) -> void {
+    s.close();
+  }
+
+  template<> inline auto close_socket<SslSocket>(SslSocket& s) -> void {
+    try { s.shutdown(); } catch (...) { /* ignore "stream truncated", which may happen here */ }
+  }
+
+  inline auto check_ec(const error_code& ec, string_view step) -> void {
+    if (ec) throw runtime_error(fmt::format("{} (while {})", ec.message(), step));
+  }
+
+  template <typename Socket> struct AsioFetchCtx {
     tcp::resolver resolver;
-    ssl::stream<tcp::socket> socket;
-    asio::streambuf req_buf, rsp_buf;
-    unique_ptr<AsioHttpClientResponse> response;
+    Socket socket;
 
-    auto die(string err) -> void {
-      callback(make_unique<ErrorHttpClientResponse>(err));
-      delete this;
+    template <class... Args> AsioFetchCtx(io_context& io, Args&& ...args) : resolver(io), socket(std::forward<Args>(args)...) {}
+
+    ~AsioFetchCtx() {
+      resolver.cancel();
+      close_socket(socket);
     }
 
-    auto complete() -> void {
-      timeout.cancel();
-      switch (response->status()) {
-      case 301:
-      case 302:
-      case 303:
-      case 307:
-      case 308:
-        if (response->header("location").empty()) {
-          die("Got redirect with no Location header");
-        } else try {
-          string location(response->header("location"));
-          new AsioFetch(io, ssl, request.with_new_url(location), std::move(callback));
-          delete this;
-        } catch (const runtime_error& e) {
-          die(e.what());
-        }
-        break;
-      default:
-        callback(std::move(response));
-        delete this;
-        break;
+    inline auto send_and_recv(HttpClientRequest& req, unique_ptr<AsioHttpClientResponse>& response) -> Async<void> {
+      asio::streambuf req_buf, rsp_buf;
+      error_code ec;
+      req_buf.sputn(req.request.data(), (std::streamsize)req.request.size());
+      size_t bytes = co_await asio::async_write(socket, req_buf, redirect_error(deferred, ec));
+      check_ec(ec, "writing HTTP request");
+      while (
+        (bytes = co_await asio::async_read(socket, rsp_buf, redirect_error(deferred, ec))),
+        ec != asio::error::eof && ec != ssl::error::stream_truncated
+      ) {
+        check_ec(ec, "reading HTTP response");
+        response->append(rsp_buf.data().data(), bytes);
+        rsp_buf.consume(bytes);
       }
+      response->append(rsp_buf.data().data(), bytes);
     }
+  };
 
-    auto on_resolve(
-      const asio::error_code& ec,
-      tcp::resolver::iterator endpoint_iterator
-    ) -> void {
-      if (ec) {
-        die(fmt::format("Error resolving {}: {}", request.url, ec.message()));
-        return;
-      }
-      socket.set_verify_mode(ssl::verify_peer);
-      socket.set_verify_callback(bind(&AsioFetch::on_verify_certificate, this, _1, _2));
-
-      //spdlog::info("Connecting to {}", endpoint_iterator->endpoint().address().to_string());
-
-      asio::async_connect(socket.lowest_layer(), endpoint_iterator, bind(&AsioFetch::on_connect, this, _1, _2));
-    }
-
-    auto on_verify_certificate(bool /*preverified*/, ssl::verify_context& ctx) -> bool {
+  auto AsioHttpClient::https_fetch(HttpClientRequest& req) -> Async<AsioHttpClientResponse*> {
+    error_code ec;
+    auto response = make_unique<AsioHttpClientResponse>();
+    AsioFetchCtx<SslSocket> c(*io, *io, ssl);
+    auto endpoint_iterator = co_await c.resolver.async_resolve(
+      string_view(req.url.host),
+      req.url.port.empty() ? "https" : req.url.port,
+      redirect_error(deferred, ec)
+    );
+    check_ec(ec, "resolving address");
+    c.socket.set_verify_mode(ssl::verify_peer);
+    c.socket.set_verify_callback([](bool /*preverified*/, ssl::verify_context& ctx) {
       // TODO: Actually verify SSL certificates
       char subject_name[256];
       X509* cert = X509_STORE_CTX_get_current_cert(ctx.native_handle());
       X509_NAME_oneline(X509_get_subject_name(cert), subject_name, 256);
       //spdlog::debug("Verifying SSL cert: {} (preverified: {})", subject_name, preverified);
       return true;
+    });
+    co_await asio::async_connect(c.socket.lowest_layer(), endpoint_iterator, redirect_error(deferred, ec));
+    check_ec(ec, "connecting");
+
+    // SNI - This is barely documented, but it's necessary to connect to some HTTPS sites without a handshake error!
+    // Based on https://stackoverflow.com/a/59225060/548027
+    if (!SSL_set_tlsext_host_name(c.socket.native_handle(), req.url.host.c_str())) {
+      check_ec({static_cast<int>(::ERR_get_error()), asio::error::get_ssl_category()}, "setting TLS host name");
     }
 
-    auto on_connect(const asio::error_code& ec, tcp::resolver::iterator) -> void {
-      if (ec) {
-        die(fmt::format("Error connecting to {}: {}", request.url, ec.message()));
-        return;
-      }
+    co_await c.socket.async_handshake(ssl::stream_base::client, redirect_error(deferred, ec));
+    check_ec(ec, "performing TLS handshake");
+    co_await c.send_and_recv(req, response);
+    co_return response.release();
+  }
 
-      // SNI - This is barely documented, but it's necessary to connect to some HTTPS sites without a handshake error!
-      // Based on https://stackoverflow.com/a/59225060/548027
-      if (!SSL_set_tlsext_host_name(socket.native_handle(), request.host.c_str())) {
-        const asio::error_code ec{static_cast<int>(::ERR_get_error()), asio::error::get_ssl_category()};
-        die(fmt::format("Error setting TLS host name for {}: {}", request.url, ec.message()));
-        return;
-      }
+  auto AsioHttpClient::http_fetch(HttpClientRequest& req) -> Async<AsioHttpClientResponse*> {
+    error_code ec;
+    auto response = make_unique<AsioHttpClientResponse>();
+    AsioFetchCtx<asio::buffered_stream<TcpSocket>> c(*io, *io);
+    auto endpoint_iterator = co_await c.resolver.async_resolve(
+      string_view(req.url.host),
+      req.url.port.empty() ? "http" : req.url.port,
+      redirect_error(deferred, ec)
+    );
+    check_ec(ec, "resolving address");
+    co_await asio::async_connect(c.socket.lowest_layer(), endpoint_iterator, redirect_error(deferred, ec));
+    check_ec(ec, "connecting");
+    co_await c.send_and_recv(req, response);
+    co_return response.release();
+  }
 
-      socket.async_handshake(ssl::stream_base::client, bind(&AsioFetch::on_handshake, this, _1));
-    }
-
-    auto on_handshake(const asio::error_code& ec) -> void {
-      if (ec) {
-        die(fmt::format("TCP handshake error connecting to {}: {}", request.url, ec.message()));
-        return;
-      }
-      std::ostream(&req_buf) << request.request;
-      asio::async_write(socket, req_buf, bind(&AsioFetch::on_write, this, _1, _2));
-    }
-
-    auto on_write(const asio::error_code& ec, size_t) -> void {
-      if (ec) {
-        die(fmt::format("Error sending HTTP request to {}: {}", request.url, ec.message()));
-        return;
-      }
-      asio::async_read(socket, rsp_buf, bind(&AsioFetch::on_read, this, _1, _2));
-    }
-
-    auto on_read(const asio::error_code& ec, size_t bytes) -> void {
-      // We have to account for 'stream truncated' errors because misbehaved
-      // servers will just truncate streams instead of closing sometimes…
-      if (ec && ec != asio::error::eof && ec != ssl::error::stream_truncated) {
-        die(fmt::format("Error reading HTTP response from {}: {}", request.url, ec.message()));
-        return;
-      }
-      try {
-        response->append(rsp_buf.data().data(), bytes);
-        if (ec == asio::error::eof || ec == ssl::error::stream_truncated) {
+  auto AsioHttpClient::fetch(HttpClientRequest&& from_req, HttpResponseCallback&& callback) -> void {
+    asio::co_spawn(
+      io->get_executor(),
+      [this, req = std::forward<HttpClientRequest>(from_req)] mutable -> Async<unique_ptr<const HttpClientResponse>> {
+        spdlog::debug("CLIENT HTTP {} {}", req.method, req.url.to_string());
+        for (uint8_t redirects = 0; redirects < 10; redirects++) {
+          asio::steady_timer timeout(*io, 30s);
+          auto [order, ec, ex, rsp_ptr] = co_await asio::experimental::make_parallel_group(
+            timeout.async_wait(deferred),
+            asio::co_spawn(*io, req.url.scheme == "https" ? https_fetch(req) : http_fetch(req), deferred)
+          ).async_wait(
+            asio::experimental::wait_for_one(),
+            deferred
+          );
+          if (order[0] == 0) {
+            if (ec) throw asio::system_error(ec);
+            throw runtime_error("Request timed out");
+          }
+          unique_ptr<AsioHttpClientResponse> response(rsp_ptr);
+          if (ex) rethrow_exception(ex);
           response->parse();
-          complete();
-        } else {
-          rsp_buf.consume(bytes);
-          asio::async_read(socket, rsp_buf, bind(&AsioFetch::on_read, this, _1, _2));
+          const auto status = response->status();
+          switch (status) {
+          case 301:
+          case 302:
+          case 303:
+          case 307:
+          case 308:
+            if (response->header("location").empty()) throw runtime_error("Got redirect with no Location header");
+            else req.redirect(string(response->header("location")));
+            break;
+          default:
+            co_return response;
+          }
         }
-      } catch (const runtime_error& e) {
-        die(fmt::format("Error reading HTTP response from {}: {}", request.url, e.what()));
+        throw runtime_error("Too many redirects");
+      },
+      [callback = std::move(callback)](exception_ptr ep, unique_ptr<const HttpClientResponse> rsp) mutable {
+        if (ep) {
+          try { rethrow_exception(ep); }
+          catch (const std::exception& e) { callback(make_unique<ErrorHttpClientResponse>(e.what())); }
+          catch (...) { callback(make_unique<ErrorHttpClientResponse>("Unknown error")); }
+        } else {
+          callback(std::move(rsp));
+        }
       }
-    }
-
-  public:
-    AsioFetch(asio::io_context& io, ssl::context& ssl, HttpClientRequest&& request, HttpResponseCallback&& callback)
-      : io(io), ssl(ssl), timeout(io, 1min), request(request), callback(std::move(callback)), resolver(io), socket(io, ssl), response(make_unique<AsioHttpClientResponse>()) {
-      timeout.async_wait([this](const asio::error_code& ec) {
-        if (ec) return;
-        die("Request timed out");
-      });
-      resolver.async_resolve(string_view(request.host), "https", bind(&AsioFetch::on_resolve, this, _1, _2));
-    }
-    ~AsioFetch() {
-      timeout.cancel();
-      resolver.cancel();
-      socket.shutdown();
-    }
-  };
-
-  auto AsioHttpClient::fetch(HttpClientRequest&& req, HttpResponseCallback&& callback) -> void {
-    spdlog::debug("CLIENT HTTP {} {}", req.method, req.url);
-    new AsioFetch(*io, *ssl, std::move(req), std::move(callback));
+    );
   }
 }

@@ -12,7 +12,6 @@
 #include <string_view>
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
-#include <libxml/parser.h>
 #include <uWebSockets/MoveOnlyFunction.h>
 
 namespace Ludwig {
@@ -29,10 +28,9 @@ namespace Ludwig {
   }
 
   static inline auto now_s() -> uint64_t {
+    using namespace std::chrono;
     return static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()
-      ).count()
+      duration_cast<seconds>(system_clock::now().time_since_epoch()).count()
     );
   }
 

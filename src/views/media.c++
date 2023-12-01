@@ -1,18 +1,19 @@
 #include "media.h++"
 #include "util/web.h++"
 
-using std::function, std::shared_ptr, std::string;
+using std::shared_ptr, std::string;
+using namespace uWS;
 
 namespace Ludwig {
   template <bool SSL> static inline auto webp_route(
-    uWS::HttpRequest* req,
-    uWS::HttpResponse<SSL>* rsp,
-    uWS::MoveOnlyFunction<void (function<void ()>)>&& wrap,
-    uWS::MoveOnlyFunction<void (ThumbnailCache::Callback)>&& fn
+    HttpRequest* req,
+    HttpResponse<SSL>* rsp,
+    MoveOnlyFunction<void (MoveOnlyFunction<void ()>&&)>&& wrap,
+    MoveOnlyFunction<void (ThumbnailCache::Callback)>&& fn
   ) -> void {
     const string if_none_match(req->getHeader("if-none-match"));
     fn([rsp, wrap = std::move(wrap), if_none_match](ThumbnailCache::Image img) mutable {
-      wrap([&]{
+      wrap([rsp, img, if_none_match]{
         if (!*img) throw ApiError("No thumbnail available", 404);
         const auto& [data, hash] = **img;
         const auto hash_hex = fmt::format("\"{:016x}\"", hash);
@@ -28,7 +29,7 @@ namespace Ludwig {
   }
 
   template <bool SSL> auto media_routes(
-    uWS::TemplatedApp<SSL>& app,
+    TemplatedApp<SSL>& app,
     shared_ptr<RemoteMediaController> controller
   ) -> void {
     Router(app)
@@ -51,12 +52,12 @@ namespace Ludwig {
   }
 
   template auto media_routes<true>(
-    uWS::TemplatedApp<true>& app,
+    TemplatedApp<true>& app,
     shared_ptr<RemoteMediaController> controller
   ) -> void;
 
   template auto media_routes<false>(
-    uWS::TemplatedApp<false>& app,
+    TemplatedApp<false>& app,
     shared_ptr<RemoteMediaController> controller
   ) -> void;
 }

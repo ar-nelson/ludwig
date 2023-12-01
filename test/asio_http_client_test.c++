@@ -3,9 +3,7 @@
 
 TEST_CASE("send request to example.com", "[http_client]") {
   auto io = std::make_shared<asio::io_context>();
-  auto ssl = std::make_shared<asio::ssl::context>(asio::ssl::context::sslv23);
-  ssl->set_default_verify_paths();
-  AsioHttpClient client(io, ssl);
+  AsioHttpClient client(io);
   bool success = false;
   std::ostringstream response_body;
   client.get("https://example.com")

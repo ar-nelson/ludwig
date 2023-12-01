@@ -22,6 +22,7 @@ namespace Ludwig {
       std::shared_ptr<HttpClient> http_client,
       std::shared_ptr<LibXmlContext> xml_ctx,
       std::shared_ptr<EventBus> event_bus = std::make_shared<DummyEventBus>(),
+      ThumbnailCache::Dispatcher dispatcher = [](auto f) { f(); },
       std::optional<std::shared_ptr<SearchEngine>> search_engine = {}
     );
 

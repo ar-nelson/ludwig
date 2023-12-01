@@ -34,7 +34,7 @@ add_library(uWS STATIC
   uWS/uSockets/context.c
   uWS/uSockets/loop.c
   uWS/uSockets/socket.c
-  uWS/uSockets/eventing/asio.cpp
+  uWS/uSockets/eventing/epoll_kqueue.c
   uWS/uSockets/crypto/openssl.c
   uWS/uSockets/crypto/sni_tree.cpp
 )
@@ -45,13 +45,8 @@ target_include_directories(uWS
   INTERFACE
     uWS/
 )
-target_compile_definitions(uWS PUBLIC LIBUS_USE_ASIO LIBUS_USE_OPENSSL)
-target_link_libraries(uWS
-  PUBLIC
-    asio
-  INTERFACE
-    zlibstatic
-)
+target_compile_definitions(uWS PUBLIC LIBUS_USE_OPENSSL)
+target_link_libraries(uWS INTERFACE zlibstatic)
 
 option(LIBXML2_WITH_C14N "Add the Canonicalization support" OFF)
 option(LIBXML2_WITH_CATALOG "Add the Catalog support" OFF)

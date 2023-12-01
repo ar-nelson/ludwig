@@ -52,7 +52,6 @@ add_compile_options (
   -fcolor-diagnostics
   -ferror-limit=0
   -DASIO_SEPARATE_COMPILATION
-  -DLIBUS_USE_ASIO
   -Wno-gnu-anonymous-struct
   -Wno-nested-anon-types
 )
@@ -103,7 +102,7 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
   )
   set (link_options -fsanitize=address,undefined -fno-sanitize=alignment -stdlib=libc++ -lc++abi)
 else ()
-  set (buildtype_compile_options -O2)
+  set (buildtype_compile_options -O3)
   set (link_options -stdlib=libc++ -lc++abi)
 endif ()
 
@@ -138,6 +137,7 @@ set (ludwig_common_src
 )
 
 set (ludwig_libs
+  asio
   crypto
   flatbuffers
   giflib

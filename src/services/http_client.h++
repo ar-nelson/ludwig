@@ -26,48 +26,65 @@ namespace Ludwig {
 
   using HttpResponseCallback = uWS::MoveOnlyFunction<void (std::unique_ptr<const HttpClientResponse>&&)>;
 
-  class HttpClientRequest {
-  public:
-    HttpClient& client;
-    std::string url, method, host, request;
-    bool https = false, has_body = false;
+  struct HttpClientRequest {
+    Url url;
+    std::string method, request;
+    bool has_body = false;
 
-    HttpClientRequest(HttpClient& client, std::string url, std::string method)
-      : client(client), url(url), method(method) {
-      const auto parsed_url = Url::parse(url);
-      if (!parsed_url || !parsed_url->is_http_s()) {
-        throw std::runtime_error(fmt::format("Invalid HTTP URL: {}", url));
-      }
-      https = parsed_url->scheme == "https";
-      host = parsed_url->host;
+    HttpClientRequest(std::string url_str, std::string method)
+      : url(*Url::parse(url_str).or_else([&url_str] -> std::optional<Url> {
+          throw std::runtime_error("Invalid HTTP URL: " + url_str);
+        })),
+        method(method)
+    {
+      if (!url.is_http_s()) throw std::runtime_error("Not an HTTP(S) URL: " + url_str);
       fmt::format_to(
         std::back_inserter(request), "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nUser-Agent: ludwig",
-        method, parsed_url->path.empty() ? "/" : parsed_url->path, host
+        method, url.path.empty() ? "/" : url.path, url.host
       );
     }
 
-    inline auto header(std::string_view header, std::string_view value) && -> HttpClientRequest {
-      fmt::format_to(std::back_inserter(request), "\r\n{}: {}", header, value);
-      return *this;
+    auto redirect(std::string new_url) -> void {
+      if (new_url.starts_with("/")) {
+        new_url = fmt::format("{}://{}{}", url.scheme, url.host, new_url);
+      }
+      url = *Url::parse(new_url).or_else([&] -> std::optional<Url> {
+        throw std::runtime_error("Redirect to invalid HTTP URL: " + new_url);
+      });
+      if (!url.is_http_s()) {
+        throw std::runtime_error("Redirect to non-HTTP(S) URL: " + new_url);
+      }
+      const auto request_suffix = request.substr(request.find("User-Agent: ludwig\r\n") + 18);
+      request.clear();
+      fmt::format_to(
+        std::back_inserter(request), "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nUser-Agent: ludwig",
+        method, url.path.empty() ? "/" : url.path, url.host
+      );
+      request.append(request_suffix);
+    }
+  };
+
+  struct HttpClientRequestBuilder {
+    HttpClient& client;
+    HttpClientRequest req;
+
+    HttpClientRequestBuilder(HttpClient& client, std::string url, std::string method)
+      : client(client), req(url, method) {}
+
+    auto header(std::string_view header, std::string_view value)&& -> HttpClientRequestBuilder&& {
+      assert(!req.has_body);
+      fmt::format_to(std::back_inserter(req.request), "\r\n{}: {}", header, value);
+      return std::move(*this);
     }
 
-    inline auto body(std::string_view content_type, std::string_view body) && -> HttpClientRequest {
+    auto body(std::string_view content_type, std::string_view body)&& -> HttpClientRequestBuilder&&{
+      assert(!req.has_body);
       fmt::format_to(
-        std::back_inserter(request), "\r\nContent-Type: {}\r\nContent-Length: {:x}\r\n\r\n{}",
+        std::back_inserter(req.request), "\r\nContent-Type: {}\r\nContent-Length: {:x}\r\n\r\n{}",
         content_type, body.length(), body
       );
-      has_body = true;
-      return *this;
-    }
-
-    inline auto with_new_url(std::string new_url) -> HttpClientRequest {
-      if (new_url.starts_with("/")) {
-        new_url = fmt::format("{}://{}{}", https ? "https" : "http", host, new_url);
-      }
-      auto new_req = HttpClientRequest(client, new_url, method);
-      new_req.has_body = has_body || request.ends_with("\r\n\r\n");
-      new_req.request.append(request.substr(request.find("User-Agent: ludwig\r\n") + 18));
-      return new_req;
+      req.has_body = true;
+      return std::move(*this);
     }
 
     auto dispatch(HttpResponseCallback&& callback) && -> void;
@@ -77,25 +94,25 @@ namespace Ludwig {
   protected:
     virtual auto fetch(HttpClientRequest&& req, HttpResponseCallback&& callback) -> void = 0;
   public:
-    virtual inline ~HttpClient() {};
-    inline auto get(std::string url) -> HttpClientRequest {
-      return HttpClientRequest(*this, url, "GET");
+    virtual ~HttpClient() {};
+    auto get(std::string url) -> HttpClientRequestBuilder {
+      return HttpClientRequestBuilder(*this, url, "GET");
     }
-    inline auto post(std::string url) -> HttpClientRequest {
-      return HttpClientRequest(*this, url, "POST");
+    auto post(std::string url) -> HttpClientRequestBuilder {
+      return HttpClientRequestBuilder(*this, url, "POST");
     }
-    inline auto put(std::string url) -> HttpClientRequest {
-      return HttpClientRequest(*this, url, "PUT");
+    auto put(std::string url) -> HttpClientRequestBuilder {
+      return HttpClientRequestBuilder(*this, url, "PUT");
     }
-    inline auto delete_(std::string url) -> HttpClientRequest {
-      return HttpClientRequest(*this, url, "DELETE");
+    auto delete_(std::string url) -> HttpClientRequestBuilder {
+      return HttpClientRequestBuilder(*this, url, "DELETE");
     }
 
-    friend class HttpClientRequest;
+    friend struct HttpClientRequestBuilder;
   };
 
-  inline auto HttpClientRequest::dispatch(HttpResponseCallback&& callback) && -> void {
-    if (!has_body) request.append("\r\n\r\n");
-    client.fetch(std::move(*this), std::move(callback));
+  inline auto HttpClientRequestBuilder::dispatch(HttpResponseCallback&& callback) && -> void {
+    if (!req.has_body) req.request.append("\r\n\r\n");
+    client.fetch(std::move(req), std::move(callback));
   }
 }

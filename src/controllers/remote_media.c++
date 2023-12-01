@@ -14,11 +14,12 @@ namespace Ludwig {
     shared_ptr<HttpClient> http_client,
     shared_ptr<LibXmlContext> xml_ctx,
     shared_ptr<EventBus> event_bus,
+    ThumbnailCache::Dispatcher dispatcher,
     optional<shared_ptr<SearchEngine>> search_engine
   ) : db(db), http_client(http_client), xml_ctx(xml_ctx), event_bus(event_bus), search_engine(search_engine),
       sub_fetch(event_bus->on_event(Event::ThreadFetchLinkCard, [&](Event, uint64_t id){fetch_link_card_for_thread(id);})),
-      small_cache(http_client, 16384, 256),
-      banner_cache(http_client, 256, 960, 160) {}
+      small_cache(http_client, 16384, 256, dispatcher),
+      banner_cache(http_client, 256, 960, 160, dispatcher) {}
 
   auto RemoteMediaController::user_avatar(string_view user_name, ThumbnailCache::Callback&& cb) -> void {
     auto txn = db->open_read_txn();

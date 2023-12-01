@@ -94,7 +94,7 @@ private:
   };
 protected:
   auto fetch(HttpClientRequest&& req, HttpResponseCallback&& callback) -> void {
-    const auto rsp = get_responses.find(req.url);
+    const auto rsp = get_responses.find(req.url.to_string());
     if (rsp == get_responses.end()) callback(make_unique<Response>(404));
     else if (req.method != "GET") callback(make_unique<Response>(405));
     else {

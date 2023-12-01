@@ -20,7 +20,7 @@ namespace Ludwig {
     }
   }
 
-  auto AsioEventBus::on_event(Event event, uint64_t subject_id, EventCallback&& callback) -> Subscription {
+  auto AsioEventBus::on_event(Event event, uint64_t subject_id, Callback&& callback) -> Subscription {
     unique_lock<shared_mutex> lock(listener_lock);
     auto id = next_event_id++;
     const auto key = pair(event, subject_id);

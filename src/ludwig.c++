@@ -17,7 +17,6 @@
 
 using namespace Ludwig;
 using std::make_shared, std::optional, std::shared_ptr;
-namespace ssl = asio::ssl;
 
 static us_listen_socket_t* global_socket = nullptr;
 
@@ -89,19 +88,17 @@ int main(int argc, char** argv) {
   }
 
   auto io = make_shared<asio::io_context>();
-  auto ssl_ctx = make_shared<ssl::context>(ssl::context::sslv23);
-  // TODO: Load system root certificates
-  //ssl_ctx->set_verify_mode(ssl::verify_peer | ssl::context::verify_fail_if_no_peer_cert);
-  ssl_ctx->set_default_verify_paths();
-  auto http_client = make_shared<AsioHttpClient>(io, ssl_ctx);
+  auto http_client = make_shared<AsioHttpClient>(io);
   auto event_bus = make_shared<AsioEventBus>(io);
   auto db = make_shared<DB>(dbfile, map_size);
   auto xml_ctx = make_shared<LibXmlContext>();
   auto rich_text = make_shared<RichTextParser>(xml_ctx);
   auto instance_c = make_shared<InstanceController>(db, http_client, rich_text, event_bus, search_engine);
-  auto remote_media_c = make_shared<RemoteMediaController>(db, http_client, xml_ctx, event_bus, search_engine);
-
-  std::thread io_thread([io]{io->run();});
+  auto remote_media_c = make_shared<RemoteMediaController>(
+    db, http_client, xml_ctx, event_bus,
+    [io](auto f) { asio::post(*io, std::move(f)); },
+    search_engine
+  );
 
   struct sigaction sigint_handler { .sa_flags = 0 }, sigterm_handler { .sa_flags = 0 };
   sigint_handler.sa_handler = signal_handler;
@@ -111,18 +108,25 @@ int main(int argc, char** argv) {
   sigaction(SIGINT, &sigint_handler, nullptr);
   sigaction(SIGTERM, &sigterm_handler, nullptr);
 
-  uWS::App app;
-  media_routes(app, remote_media_c);
-  webapp_routes(app, instance_c, rich_text);
-  app.listen(port, [port](auto *listen_socket) {
-    if (listen_socket) {
-      global_socket = listen_socket;
-      spdlog::info("Listening on port {}", port);
-    }
-  }).run();
+  {
+    asio::executor_work_guard<asio::io_context::executor_type> work(io->get_executor());
+    std::thread io_thread([io]{ io->run(); });
 
-  io->stop();
-  io_thread.join();
+    uWS::App app;
+    media_routes(app, remote_media_c);
+    webapp_routes(app, instance_c, rich_text);
+    app.listen(port, [port](auto *listen_socket) {
+      if (listen_socket) {
+        global_socket = listen_socket;
+        spdlog::info("Listening on port {}", port);
+      }
+    }).run();
+
+    work.reset();
+    io->stop();
+    if (io_thread.joinable()) io_thread.join();
+  }
+
 
   if (global_socket != nullptr) {
     spdlog::info("Shut down cleanly");

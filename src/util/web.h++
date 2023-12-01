@@ -216,7 +216,7 @@ namespace Ludwig {
         uWS::HttpResponse<SSL>*,
         uWS::HttpRequest*,
         std::unique_ptr<M>,
-        uWS::MoveOnlyFunction<void (std::function<void ()>)>
+        uWS::MoveOnlyFunction<void (uWS::MoveOnlyFunction<void ()>&&)>
       )> &&handler
     ) {
       app.get(pattern, [impl = impl, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
@@ -229,11 +229,13 @@ namespace Ludwig {
         auto error_meta = std::make_shared<E>(impl->error_middleware(rsp, req));
         try {
           auto meta = std::make_unique<M>(impl->middleware(rsp, req));
-          handler(rsp, req, std::move(meta), [impl = impl, rsp, url, error_meta, abort_flag](std::function<void()> body) mutable {
+          handler(rsp, req, std::move(meta), [impl = impl, loop = uWS::Loop::get(), rsp, url, error_meta, abort_flag](uWS::MoveOnlyFunction<void()>&& body) mutable {
             if (*abort_flag) return;
-            rsp->cork([&]{
-              try { body(); }
-              catch (...) { impl->handle_error(std::current_exception(), rsp, *error_meta, "GET", url); }
+            loop->defer([impl = impl, body = std::forward<uWS::MoveOnlyFunction<void()>>(body), rsp, url, error_meta] mutable {
+              rsp->cork([&]{
+                try { body(); }
+                catch (...) { impl->handle_error(std::current_exception(), rsp, *error_meta, "GET", url); }
+              });
             });
           });
           spdlog::debug("[GET {}] - {} {}", url, rsp->getRemoteAddressAsText(), req->getHeader("user-agent"));
