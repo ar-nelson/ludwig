@@ -1,4 +1,5 @@
 #pragma once
+#include "util/common.h++"
 #include <asio.hpp>
 #include <asio/ssl.hpp>
 #include <asio/experimental/channel.hpp>
@@ -23,6 +24,35 @@ namespace Ludwig {
 
     inline auto set(T&& new_value) -> void {
       chan.async_send({}, std::forward<T>(new_value), asio::detached);
+    }
+  };
+
+  class AsioThreadPool {
+  public:
+    std::shared_ptr<asio::io_context> io;
+  private:
+    std::vector<std::thread> threads;
+    asio::executor_work_guard<asio::io_context::executor_type> work;
+    bool done = false;
+  public:
+    AsioThreadPool(size_t thread_count = std::thread::hardware_concurrency())
+      : io(std::make_shared<asio::io_context>()), work(io->get_executor())
+    {
+      threads.reserve(thread_count);
+      for (size_t i = 0; i < thread_count; i++) {
+        threads.emplace_back([io = io]() { io->run(); });
+      }
+    }
+    ~AsioThreadPool() { stop(); }
+    auto stop() -> void {
+      if (done) return;
+      done = true;
+      work.reset();
+      io->stop();
+      for (auto& th : threads) if (th.joinable()) th.join();
+    }
+    auto post(uWS::MoveOnlyFunction<void()>&& task) -> void {
+      asio::post(*io, std::move(task));
     }
   };
 }
