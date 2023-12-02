@@ -15,8 +15,9 @@ namespace ssl = asio::ssl;
 
 namespace Ludwig {
   AsioHttpClient::AsioHttpClient(
-    shared_ptr<io_context> io
-  ) : io(io), ssl(ssl::context::sslv23) {
+    shared_ptr<io_context> io,
+    uint32_t req_per_5min
+  ) : io(io), ssl(ssl::context::sslv23), rate_limiter((double)req_per_5min / 300.0, req_per_5min) {
     // TODO: Load system root certificates
     //ssl.set_verify_mode(ssl::verify_peer | ssl::context::verify_fail_if_no_peer_cert);
     ssl.set_default_verify_paths();
@@ -190,6 +191,9 @@ namespace Ludwig {
       [this, req = std::forward<HttpClientRequest>(from_req)] mutable -> Async<unique_ptr<const HttpClientResponse>> {
         spdlog::debug("CLIENT HTTP {} {}", req.method, req.url.to_string());
         for (uint8_t redirects = 0; redirects < 10; redirects++) {
+          if (!co_await rate_limiter.try_acquire_or_asio_await(req.url.host, 30s)) {
+            throw runtime_error("HTTP client rate limited (too many requests to the same host)");
+          }
           asio::steady_timer timeout(*io, 30s);
           auto [order, ec, ex, rsp_ptr] = co_await asio::experimental::make_parallel_group(
             timeout.async_wait(deferred),

@@ -58,11 +58,11 @@ int main(int argc, char** argv) {
     .dest("log_level")
     .help("log level (debug, info, warn, error, critical)")
     .set_default("info");
-  //parser.add_option("--rate-limit")
-  //  .dest("rate_limit")
-  //  .type("INT")
-  //  .help("max requests per 5 minutes from a single IP (default = 3000)")
-  //  .set_default(3000);
+  parser.add_option("--rate-limit")
+    .dest("rate_limit")
+    .type("INT")
+    .help("max requests per 5 minutes from a single IP (default = 3000)")
+    .set_default(3000);
   parser.add_option("--threads")
     .dest("threads")
     .type("INT")
@@ -73,6 +73,7 @@ int main(int argc, char** argv) {
   const optparse::Values options = parser.parse_args(argc, argv);
   const auto dbfile = options["db"].c_str();
   const auto map_size = std::stoull(options["map_size"]);
+  const auto rate_limit = (double)std::stoull(options["rate_limit"]);
   auto threads = std::stoull(options["threads"]);
   if (!threads) {
 #   ifdef LUDWIG_DEBUG
@@ -108,6 +109,7 @@ int main(int argc, char** argv) {
   }
 
   AsioThreadPool pool(threads);
+  auto rate_limiter = make_shared<KeyedRateLimiter>(rate_limit / 300.0, rate_limit);
   auto http_client = make_shared<AsioHttpClient>(pool.io);
   auto event_bus = make_shared<AsioEventBus>(pool.io);
   auto db = make_shared<DB>(dbfile, map_size);
@@ -132,7 +134,7 @@ int main(int argc, char** argv) {
   auto run = [&] {
     uWS::App app;
     media_routes(app, remote_media_c);
-    webapp_routes(app, instance_c, rich_text);
+    webapp_routes(app, instance_c, rich_text, rate_limiter);
     app.listen(port, [port](auto *listen_socket) {
       if (listen_socket) {
         lock_guard<mutex> lock(global_sockets_mutex);

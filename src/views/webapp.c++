@@ -93,12 +93,14 @@ namespace Ludwig {
   template <bool SSL> struct Webapp : public std::enable_shared_from_this<Webapp<SSL>> {
     shared_ptr<InstanceController> controller;
     shared_ptr<RichTextParser> rt;
+    shared_ptr<KeyedRateLimiter> rate_limiter; // may be null!
     string buf;
 
     Webapp(
       shared_ptr<InstanceController> controller,
-      shared_ptr<RichTextParser> rich_text
-    ) : controller(controller), rt(rich_text) {}
+      shared_ptr<RichTextParser> rt,
+      shared_ptr<KeyedRateLimiter> rl
+    ) : controller(controller), rt(rt), rate_limiter(rl) {}
 
     using App = uWS::TemplatedApp<SSL>;
     using Response = uWS::HttpResponse<SSL>*;
@@ -177,6 +179,11 @@ namespace Ludwig {
     auto middleware(Response rsp, Request req) -> Meta {
       const auto start = chrono::steady_clock::now();
       const auto ip = get_ip(rsp, req);
+
+      if (rate_limiter && !rate_limiter->try_acquire(ip, req->getMethod() == "GET" ? 1 : 10)) {
+        throw ApiError("Rate limited, try again later", 429);
+      }
+
       optional<string> session_cookie;
       optional<LoginResponse> new_session;
       const auto cookies = req->getHeader("cookie");
@@ -2549,21 +2556,24 @@ namespace Ludwig {
   template <bool SSL> auto webapp_routes(
     uWS::TemplatedApp<SSL>& app,
     shared_ptr<InstanceController> controller,
-    shared_ptr<RichTextParser> rt
+    shared_ptr<RichTextParser> rt,
+    shared_ptr<KeyedRateLimiter> rl
   ) -> void {
-    auto router = std::make_shared<Webapp<SSL>>(controller, rt);
+    auto router = std::make_shared<Webapp<SSL>>(controller, rt, rl);
     router->register_routes(app);
   }
 
   template auto webapp_routes<true>(
     uWS::TemplatedApp<true>& app,
     shared_ptr<InstanceController> controller,
-    shared_ptr<RichTextParser> rt
+    shared_ptr<RichTextParser> rt,
+    shared_ptr<KeyedRateLimiter> rl
   ) -> void;
 
   template auto webapp_routes<false>(
     uWS::TemplatedApp<false>& app,
     shared_ptr<InstanceController> controller,
-    shared_ptr<RichTextParser> rt
+    shared_ptr<RichTextParser> rt,
+    shared_ptr<KeyedRateLimiter> rl
   ) -> void;
 }

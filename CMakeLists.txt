@@ -119,17 +119,18 @@ set (compile_options
 set (ludwig_common_src
   ${static_asm}
   src/util/base64.c++
-  src/util/thumbnailer.c++
-  src/util/rich_text.c++
-  src/util/jwt.c++
   src/util/iter.c++
-  src/services/db.c++
+  src/util/jwt.c++
+  src/util/rate_limiter.c++
+  src/util/rich_text.c++
+  src/util/thumbnailer.c++
   src/services/asio_event_bus.c++
   src/services/asio_http_client.c++
+  src/services/db.c++
   src/services/lmdb_search_engine.c++
   src/services/thumbnail_cache.c++
-  src/models/protocols_parser.c++
   src/models/detail.c++
+  src/models/protocols_parser.c++
   src/controllers/instance.c++
   src/controllers/remote_media.c++
   src/views/media.c++
