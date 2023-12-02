@@ -7,6 +7,7 @@
 #include "services/event_bus.h++"
 #include "services/http_client.h++"
 #include "services/search_engine.h++"
+#include <atomic>
 #include <map>
 #include <regex>
 #include <variant>
@@ -18,11 +19,16 @@ namespace Ludwig {
 
   struct SecretString {
     std::string_view str;
-    SecretString(std::string_view str) : str(str) {};
+    bool can_cleanse;
+    SecretString(std::string_view str) : str(str), can_cleanse(true) {};
+
+    // Special case: don't OPENSSL_cleanse string literals
+    SecretString(const char string_literal[]) : str(string_literal), can_cleanse(false) {};
+
     SecretString(const SecretString&) = delete;
     SecretString& operator=(const SecretString&) = delete;
     ~SecretString() {
-      OPENSSL_cleanse((char*)str.data(), str.length());
+      if (can_cleanse) OPENSSL_cleanse((char*)str.data(), str.length());
     }
   };
 
@@ -108,25 +114,26 @@ namespace Ludwig {
   };
 
   struct LocalUserUpdate {
-    std::optional<std::string_view> email;
+    std::optional<const char*> email;
     std::optional<std::optional<std::string_view>> display_name, bio, avatar_url, banner_url;
-    std::optional<bool> open_links_in_new_tab, show_avatars, show_bot_accounts,
-      show_karma, hide_cw_posts, expand_cw_images, expand_cw_posts, javascript_enabled;
+    std::optional<bool> approved, accepted_application, email_verified,
+        open_links_in_new_tab, show_avatars, show_bot_accounts, show_karma,
+        hide_cw_posts, expand_cw_images, expand_cw_posts, javascript_enabled;
   };
 
   struct LocalBoardUpdate {
-    std::optional<std::optional<std::string_view>> display_name, description, icon_url, banner_url;
+    std::optional<std::optional<const char*>> display_name, description, icon_url, banner_url;
     std::optional<bool> is_private, restricted_posting, approve_subscribe, can_upvote, can_downvote;
   };
 
   struct ThreadUpdate {
-    std::optional<std::string_view> title;
+    std::optional<const char*> title;
     std::optional<std::optional<std::string_view>> text_content, content_warning;
   };
 
   struct CommentUpdate {
-    std::optional<std::string_view> text_content;
-    std::optional<std::optional<std::string_view>> content_warning;
+    std::optional<const char*> text_content;
+    std::optional<std::optional<const char*>> content_warning;
   };
 
   static inline auto invite_code_to_id(std::string_view invite_code) -> uint64_t {
@@ -211,19 +218,22 @@ namespace Ludwig {
     std::shared_ptr<RichTextParser> rich_text;
     std::shared_ptr<EventBus> event_bus;
     std::optional<std::shared_ptr<SearchEngine>> search_engine;
-    SiteDetail cached_site_detail;
+    std::atomic<const SiteDetail*> cached_site_detail;
 
     auto create_local_user_internal(
       WriteTxn& txn,
       std::string_view username,
       std::optional<std::string_view> email,
       SecretString&& password,
+      bool is_approved,
       bool is_bot,
       std::optional<uint64_t> invite
     ) -> uint64_t;
 
     class SearchFunctor;
   public:
+    static constexpr uint64_t FEED_ALL = 0, FEED_LOCAL = 1, FEED_HOME = 2;
+
     InstanceController(
       std::shared_ptr<DB> db,
       std::shared_ptr<HttpClient> http_client,
@@ -231,10 +241,9 @@ namespace Ludwig {
       std::shared_ptr<EventBus> event_bus = std::make_shared<DummyEventBus>(),
       std::optional<std::shared_ptr<SearchEngine>> search_engine = {}
     );
-    virtual ~InstanceController() = default;
+    ~InstanceController();
 
     using SearchResultDetail = std::variant<UserDetail, BoardDetail, ThreadDetail, CommentDetail>;
-    using SearchCallback = uWS::MoveOnlyFunction<void (ReadTxnBase&, std::vector<SearchResultDetail>)>;
 
     static auto can_change_site_settings(Login login) -> bool;
     auto can_create_board(Login login) -> bool;
@@ -264,7 +273,7 @@ namespace Ludwig {
       bool remember = false
     ) -> LoginResponse;
     inline auto site_detail() -> const SiteDetail* {
-      return &cached_site_detail;
+      return cached_site_detail;
     }
     auto thread_detail(
       ReadTxnBase& txn,
@@ -313,6 +322,20 @@ namespace Ludwig {
       Login login = {},
       PageCursor from = {}
     ) -> PageOf<CommentDetail>;
+    auto list_feed_threads(
+      ReadTxnBase& txn,
+      uint64_t feed_id,
+      SortType sort = SortType::Active,
+      Login login = {},
+      PageCursor from = {}
+    ) -> PageOf<ThreadDetail>;
+    auto list_feed_comments(
+      ReadTxnBase& txn,
+      uint64_t feed_id,
+      SortType sort = SortType::Active,
+      Login login = {},
+      PageCursor from = {}
+    ) -> PageOf<CommentDetail>;
     auto list_user_threads(
       ReadTxnBase& txn,
       uint64_t user_id,
@@ -327,8 +350,15 @@ namespace Ludwig {
       Login login = {},
       PageCursor from = {}
     ) -> PageOf<CommentDetail>;
-    auto search(SearchQuery query, Login login, SearchCallback callback) -> void;
+    auto search_step_1(SearchQuery query, SearchEngine::Callback&& callback) -> void;
+    auto search_step_2(
+      ReadTxnBase& txn,
+      const std::vector<SearchResult>& results,
+      size_t max_len,
+      Login login
+    ) -> std::vector<SearchResultDetail>;
 
+    auto update_site(const SiteUpdate& update) -> void;
     auto register_local_user(
       std::string_view username,
       std::string_view email,
@@ -345,8 +375,9 @@ namespace Ludwig {
       bool is_bot,
       std::optional<uint64_t> invite = {}
     ) -> uint64_t;
-    auto update_local_user(uint64_t id, LocalUserUpdate update) -> void;
+    auto update_local_user(uint64_t id, const LocalUserUpdate& update) -> void;
     auto approve_local_user_application(uint64_t user_id) -> void;
+    auto create_site_invite(uint64_t inviter_user_id) -> uint64_t;
     auto create_local_board(
       uint64_t owner,
       std::string_view name,
@@ -356,7 +387,7 @@ namespace Ludwig {
       bool is_restricted_posting = false,
       bool is_local_only = false
     ) -> uint64_t;
-    auto update_local_board(uint64_t id, LocalBoardUpdate update) -> void;
+    auto update_local_board(uint64_t id, const LocalBoardUpdate& update) -> void;
     auto create_local_thread(
       uint64_t author,
       uint64_t board,
@@ -365,21 +396,19 @@ namespace Ludwig {
       std::optional<std::string_view> text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
-    auto update_thread(uint64_t id, ThreadUpdate update) -> void;
+    auto update_thread(uint64_t id, const ThreadUpdate& update) -> void;
     auto create_local_comment(
       uint64_t author,
       uint64_t parent,
       std::string_view text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
-    auto update_comment(uint64_t id, CommentUpdate update) -> void;
+    auto update_comment(uint64_t id, const CommentUpdate& update) -> void;
     auto vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;
     auto subscribe(uint64_t user_id, uint64_t board_id, bool subscribed = true) -> void;
     auto save_post(uint64_t user_id, uint64_t post_id, bool saved = true) -> void;
     auto hide_post(uint64_t user_id, uint64_t post_id, bool hidden = true) -> void;
     auto hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden = true) -> void;
     auto hide_board(uint64_t user_id, uint64_t board_id, bool hidden = true) -> void;
-
-    auto create_site_invite(uint64_t inviter_user_id) -> uint64_t;
   };
 }

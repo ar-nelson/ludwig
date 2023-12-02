@@ -14,7 +14,6 @@ auto rich_text = std::make_shared<RichTextParser>(std::make_shared<LibXmlContext
 struct Instance {
   TempFile file;
   shared_ptr<InstanceController> controller;
-  uint64_t users[6], boards[3];
 
   Instance() {
     auto epoch = now_s() - DAY * 7;
@@ -22,7 +21,24 @@ struct Instance {
     auto txn = db->open_write_txn();
     txn.set_setting(SettingsKey::created_at, epoch);
     txn.set_setting(SettingsKey::domain, "ludwig.test");
-    txn.set_setting(SettingsKey::registration_application_required, 1);
+    txn.commit();
+    controller = make_shared<InstanceController>(db, nullptr, rich_text);
+  }
+};
+
+#define NUM_THREADS 7
+
+struct PopulatedInstance {
+  TempFile file;
+  shared_ptr<InstanceController> controller;
+  uint64_t users[6], boards[3], threads[NUM_THREADS];
+
+  PopulatedInstance() {
+    auto epoch = now_s() - DAY * 7;
+    auto db = make_shared<DB>(file.name);
+    auto txn = db->open_write_txn();
+    txn.set_setting(SettingsKey::created_at, epoch);
+    txn.set_setting(SettingsKey::domain, "ludwig.test");
     FlatBufferBuilder fbb;
     fbb.ForceDefaults(true);
     {
@@ -167,7 +183,7 @@ struct Instance {
     users[5] = txn.create_user(fbb.GetBufferSpan());
     fbb.Clear();
     {
-      auto email = fbb.CreateString("unapproved@ludwig.test");
+      const auto email = fbb.CreateString("unapproved@ludwig.test");
       LocalUserBuilder lu(fbb);
       lu.add_email(email);
       lu.add_approved(false);
@@ -176,9 +192,9 @@ struct Instance {
     txn.set_local_user(users[5], fbb.GetBufferSpan());
     for (int i = 0; i < ITEMS_PER_PAGE; i++) {
       fbb.Clear();
-      const auto name = fbb.CreateString(fmt::format("filler{}@federated.test", i)),
-        actor_url = fbb.CreateString(fmt::format("https://federated.test/ap/user/filler{}", i)),
-        inbox_url = fbb.CreateString(fmt::format("https://federated.test/ap/user/filler{}/inbox", i));
+      const auto name = fbb.CreateString(fmt::format("filler_u{}@federated.test", i)),
+        actor_url = fbb.CreateString(fmt::format("https://federated.test/ap/user/filler_u{}", i)),
+        inbox_url = fbb.CreateString(fmt::format("https://federated.test/ap/user/filler_u{}/inbox", i));
       UserBuilder u(fbb);
       u.add_name(name);
       u.add_actor_id(actor_url);
@@ -188,12 +204,109 @@ struct Instance {
       fbb.Finish(u.Finish());
       txn.create_user(fbb.GetBufferSpan());
     }
+    fbb.Clear();
+    {
+      const auto name = fbb.CreateString("foo");
+      BoardBuilder b(fbb);
+      b.add_name(name);
+      b.add_created_at(epoch);
+      fbb.Finish(b.Finish());
+    }
+    boards[0] = txn.create_board(fbb.GetBufferSpan());
+    fbb.Clear();
+    {
+      LocalBoardBuilder b(fbb);
+      b.add_owner(users[0]);
+      fbb.Finish(b.Finish());
+    }
+    txn.set_local_board(boards[0], fbb.GetBufferSpan());
+    fbb.Clear();
+    {
+      const auto name = fbb.CreateString("bar");
+      BoardBuilder b(fbb);
+      b.add_name(name);
+      b.add_created_at(epoch + 2 * DAY);
+      b.add_approve_subscribe(true);
+      b.add_restricted_posting(true);
+      fbb.Finish(b.Finish());
+    }
+    boards[1] = txn.create_board(fbb.GetBufferSpan());
+    fbb.Clear();
+    {
+      LocalBoardBuilder b(fbb);
+      b.add_owner(users[1]);
+      fbb.Finish(b.Finish());
+    }
+    txn.set_local_board(boards[1], fbb.GetBufferSpan());
+    fbb.Clear();
+    {
+      const auto name = fbb.CreateString("baz@federated.test"),
+        actor_url = fbb.CreateString("https://federated.test/ap/group/baz"),
+        inbox_url = fbb.CreateString("https://federated.test/ap/group/baz/inbox");
+      BoardBuilder b(fbb);
+      b.add_name(name);
+      b.add_actor_id(actor_url);
+      b.add_inbox_url(inbox_url);
+      b.add_instance(1);
+      b.add_created_at(epoch + DAY);
+      fbb.Finish(b.Finish());
+    }
+    boards[2] = txn.create_board(fbb.GetBufferSpan());
+    for (int i = 0; i < ITEMS_PER_PAGE; i++) {
+      fbb.Clear();
+      const auto name = fbb.CreateString(fmt::format("filler_b{}@federated.test", i)),
+        actor_url = fbb.CreateString(fmt::format("https://federated.test/ap/group/filler_b{}", i)),
+        inbox_url = fbb.CreateString(fmt::format("https://federated.test/ap/group/filler_b{}/inbox", i));
+      BoardBuilder b(fbb);
+      b.add_name(name);
+      b.add_actor_id(actor_url);
+      b.add_inbox_url(inbox_url);
+      b.add_instance(1);
+      b.add_created_at(epoch + DAY * 6 + i);
+      fbb.Finish(b.Finish());
+      txn.create_board(fbb.GetBufferSpan());
+    }
+    //               board    user     time      title        content_warning        mod_state
+    const std::tuple<uint8_t, uint8_t, uint64_t, string_view, optional<string_view>, optional<ModState>> thread_data[NUM_THREADS] = {
+      {0, 0, 0, "Hello, world!", {}, {}},
+      {0, 1, HOUR, "Another post", {}, {}},
+      {0, 1, HOUR * 2, "cthulhu fhtagn", "may summon cthulhu", {}},
+      {0, 2, DAY, "I am going to cause problems on purpose", {}, {}},
+      {0, 3, DAY + HOUR, "beep boop", {}, {}},
+      {0, 4, DAY * 2, "Is a hot dog a taco?", {}, ModState::Locked},
+      {0, 4, DAY * 3, "Is a Pop-Tart a calzone?", {}, ModState::Removed}
+    };
+    for (size_t i = 0; i < NUM_THREADS; i++) {
+      fbb.Clear();
+      const auto [board, user, time, title, content_warning, mod_state] = thread_data[i];
+      const auto title_s = fbb.CreateString(title),
+        url_s = fbb.CreateString("https://example.com"),
+        content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
+      ThreadBuilder t(fbb);
+      t.add_board(boards[board]);
+      t.add_author(users[user]);
+      t.add_created_at(epoch + time);
+      t.add_title(title_s);
+      t.add_content_url(url_s);
+      if (content_warning) t.add_content_warning(content_warning_s);
+      if (mod_state) t.add_mod_state(*mod_state);
+      fbb.Finish(t.Finish());
+      threads[i] = txn.create_thread(fbb.GetBufferSpan());
+    }
+    for (size_t i = 0; i < ITEMS_PER_PAGE * 3; i++) {
+      fbb.Clear();
+      const auto title_s = fbb.CreateString(fmt::format("filler post {}", i)),
+        url_s = fbb.CreateString("https://example.com");
+      ThreadBuilder t(fbb);
+      t.add_board(boards[1]);
+      t.add_author(users[3]);
+      t.add_created_at(epoch + DAY * 3 + HOUR * i);
+      t.add_title(title_s);
+      t.add_content_url(url_s);
+      fbb.Finish(t.Finish());
+    }
     txn.commit();
     controller = make_shared<InstanceController>(db, nullptr, rich_text);
-  }
-
-  inline auto operator->() -> InstanceController* {
-    return controller.get();
   }
 };
 
@@ -212,92 +325,296 @@ TEST_CASE("hash password", "[instance]") {
   REQUIRE(actual_hash == expected_hash);
 }
 
-TEST_CASE("list users", "[instance]") {
-  Instance instance;
-  auto txn = instance->open_read_txn();
+TEST_CASE_METHOD(PopulatedInstance, "list users", "[instance]") {
+  auto txn = controller->open_read_txn();
+  PageOf<UserDetail> page;
   vector<string> vec;
 
   // New, not logged in, local and federated
-  auto page = instance->list_users(txn, UserSortType::New, false);
+  page = controller->list_users(txn, UserSortType::New, false);
   REQUIRE(page.entries.size() > 0);
   for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
   {
     vector<string> tmp;
     for (int i = 0; i < ITEMS_PER_PAGE; i++) {
-      tmp.emplace_back(fmt::format("filler{}@federated.test", ITEMS_PER_PAGE - (i + 1)));
+      tmp.emplace_back(fmt::format("filler_u{}@federated.test", ITEMS_PER_PAGE - (i + 1)));
     }
-    REQUIRE(vec == tmp);
+    CHECK(vec == tmp);
   }
-  REQUIRE(page.is_first);
-  REQUIRE(!!page.next);
-  page = instance->list_users(txn, UserSortType::New, false, {}, page.next);
+  CHECK(page.is_first);
+  CHECK(!!page.next);
+  page = controller->list_users(txn, UserSortType::New, false, {}, page.next);
   REQUIRE(page.entries.size() > 0);
   vec.clear();
   for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
-  REQUIRE(vec == vector<string>{
+  CHECK(vec == vector<string>{
     "robot", "visitor@federated.test", "rando", "admin"
   });
-  REQUIRE(!page.is_first);
-  REQUIRE(!page.next);
+  CHECK_FALSE(page.is_first);
+  CHECK_FALSE(page.next);
 
   // New, not logged in, local only
-  page = instance->list_users(txn, UserSortType::New, true);
+  page = controller->list_users(txn, UserSortType::New, true);
   REQUIRE(page.entries.size() > 0);
   vec.clear();
   for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
-  REQUIRE(vec == vector<string>{"robot", "rando", "admin"});
-  REQUIRE(page.is_first);
-  REQUIRE(!page.next);
+  CHECK(vec == vector<string>{"robot", "rando", "admin"});
+  CHECK(page.is_first);
+  CHECK_FALSE(page.next);
 
   // Old, not logged in, local and federated
-  page = instance->list_users(txn, UserSortType::Old, false);
-  REQUIRE(page.entries.size() == ITEMS_PER_PAGE);
+  page = controller->list_users(txn, UserSortType::Old, false);
+  CHECK(page.entries.size() == ITEMS_PER_PAGE);
   vec.clear();
   for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
   vec.resize(5);
-  REQUIRE(vec == vector<string>{
-    "admin", "rando", "visitor@federated.test", "robot", "filler0@federated.test"
+  CHECK(vec == vector<string>{
+    "admin", "rando", "visitor@federated.test", "robot", "filler_u0@federated.test"
   });
-  REQUIRE(page.is_first);
-  REQUIRE(!!page.next);
-  page = instance->list_users(txn, UserSortType::Old, false, {}, page.next);
-  REQUIRE(page.entries.size() == 4);
-  REQUIRE(!page.is_first);
-  REQUIRE(!page.next);
+  CHECK(page.is_first);
+  REQUIRE(page.next);
+  page = controller->list_users(txn, UserSortType::Old, false, {}, page.next);
+  CHECK(page.entries.size() == 4);
+  CHECK_FALSE(page.is_first);
+  CHECK_FALSE(page.next);
 
   // Old, not logged in, local only
-  page = instance->list_users(txn, UserSortType::Old, true);
+  page = controller->list_users(txn, UserSortType::Old, true);
   REQUIRE(page.entries.size() > 0);
   vec.clear();
   for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
-  REQUIRE(vec == vector<string>{"admin", "rando", "robot"});
-  REQUIRE(page.is_first);
-  REQUIRE(!page.next);
+  CHECK(vec == vector<string>{"admin", "rando", "robot"});
+  CHECK(page.is_first);
+  CHECK_FALSE(page.next);
 
   // New, logged in as admin, local only
-  page = instance->list_users(txn, UserSortType::New, true, LocalUserDetail::get(txn, instance.users[0]));
+  page = controller->list_users(txn, UserSortType::New, true, LocalUserDetail::get(txn, users[0]));
   REQUIRE(page.entries.size() > 0);
   vec.clear();
   for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
-  REQUIRE(vec == vector<string>{"unapproved", "robot", "troll", "rando", "admin"});
-  REQUIRE(page.is_first);
-  REQUIRE(!page.next);
+  CHECK(vec == vector<string>{"unapproved", "robot", "troll", "rando", "admin"});
+  CHECK(page.is_first);
+  CHECK_FALSE(page.next);
 
   // New, logged in as rando (excludes bots), local only
-  page = instance->list_users(txn, UserSortType::New, true, LocalUserDetail::get(txn, instance.users[1]));
+  page = controller->list_users(txn, UserSortType::New, true, LocalUserDetail::get(txn, users[1]));
   REQUIRE(page.entries.size() > 0);
   vec.clear();
   for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
-  REQUIRE(vec == vector<string>{"rando", "admin"});
-  REQUIRE(page.is_first);
-  REQUIRE(!page.next);
+  CHECK(vec == vector<string>{"rando", "admin"});
+  CHECK(page.is_first);
+  CHECK_FALSE(page.next);
 
   // New, logged in as troll (includes self, hides admin), local only
-  page = instance->list_users(txn, UserSortType::New, true, LocalUserDetail::get(txn, instance.users[2]));
+  page = controller->list_users(txn, UserSortType::New, true, LocalUserDetail::get(txn, users[2]));
   REQUIRE(page.entries.size() > 0);
   vec.clear();
   for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
-  REQUIRE(vec == vector<string>{"robot", "troll", "rando"});
-  REQUIRE(page.is_first);
-  REQUIRE(!page.next);
+  CHECK(vec == vector<string>{"robot", "troll", "rando"});
+  CHECK(page.is_first);
+  CHECK_FALSE(page.next);
+}
+
+TEST_CASE_METHOD(Instance, "register and login", "[instance]") {
+  // Try registration (forbidden by default)
+  REQUIRE_THROWS_AS(
+    controller->register_local_user(
+      "somebody",
+      "somebody@example.test",
+      {"foobarbaz"},
+      "0.0.0.0",
+      "internet exploder -1"
+    ),
+    ApiError
+  );
+
+  // Enable registration, then it should work
+  controller->update_site({
+    .registration_enabled = true,
+    .registration_application_required = false,
+    .registration_invite_required = false
+  });
+  pair<uint64_t, bool> result;
+  REQUIRE_NOTHROW(
+    result = controller->register_local_user(
+      "somebody",
+      "somebody@example.test",
+      {"foobarbaz"},
+      "0.0.0.0",
+      "internet exploder -1"
+    )
+  );
+  const auto [id, approved] = result;
+  REQUIRE(id > 0);
+  CHECK(approved);
+
+  // get created user
+  {
+    auto txn = controller->open_read_txn();
+    const auto u = LocalUserDetail::get(txn, id);
+    REQUIRE(u.id == id);
+    CHECK(u.user().name()->string_view() == "somebody");
+    CHECK(u.local_user().email()->string_view() == "somebody@example.test");
+    CHECK(u.local_user().approved());
+    CHECK_FALSE(u.local_user().accepted_application());
+    CHECK_FALSE(u.local_user().email_verified());
+    CHECK_FALSE(u.local_user().invite());
+  }
+
+  // login with wrong password
+  CHECK_THROWS_AS(
+    controller->login("somebody", {"foobarbazqux"}, "0.0.0.0", "internet exploder -1"),
+    ApiError
+  );
+
+  // login with wrong username
+  CHECK_THROWS_AS(
+    controller->login("somebodyy", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"),
+    ApiError
+  );
+
+  SECTION("login attempts") {
+    LoginResponse login;
+    SECTION("login with correct password (by username)") {
+      REQUIRE_NOTHROW(login = controller->login("somebody", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"));
+    }
+    SECTION("login with correct password (by email)") {
+      REQUIRE_NOTHROW(login = controller->login("somebody@example.test", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"));
+    }
+    SECTION("login with correct password (by username, case-insensitive)") {
+      REQUIRE_NOTHROW(login = controller->login("sOmEbOdY", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"));
+    }
+    SECTION("login with correct password (by email, case-insensitive)") {
+      REQUIRE_NOTHROW(login = controller->login("SOMEBODY@EXAMPLE.TEST", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"));
+    }
+
+    CHECK(login.user_id == id);
+    CHECK(login.expiration > now_s());
+
+    auto txn = controller->open_read_txn();
+    CHECK(controller->validate_session(txn, login.session_id) == optional(id));
+  }
+}
+
+TEST_CASE_METHOD(Instance, "register with application", "[instance]") {
+  controller->update_site({
+    .registration_enabled = true,
+    .registration_application_required = true,
+    .registration_invite_required = false
+  });
+
+  // Try registration with no application
+  REQUIRE_THROWS_AS(
+    controller->register_local_user(
+      "somebody",
+      "somebody@example.test",
+      {"foobarbaz"},
+      "0.0.0.0",
+      "internet exploder -1"
+    ),
+    ApiError
+  );
+
+  // Now try with application
+  pair<uint64_t, bool> result;
+  REQUIRE_NOTHROW(
+    result = controller->register_local_user(
+      "somebody",
+      "somebody@example.test",
+      {"foobarbaz"},
+      "0.0.0.0",
+      "internet exploder -1",
+      {},
+      "please let me into the forum\n\ni am normal and can be trusted with post"
+    )
+  );
+  const auto [id, approved] = result;
+  REQUIRE(id > 0);
+  CHECK_FALSE(approved);
+
+  {
+    auto txn = controller->open_read_txn();
+    const auto u = LocalUserDetail::get(txn, id);
+    REQUIRE(u.id == id);
+    CHECK(u.user().name()->string_view() == "somebody");
+    CHECK(u.local_user().email()->string_view() == "somebody@example.test");
+    CHECK_FALSE(u.local_user().approved());
+    CHECK_FALSE(u.local_user().accepted_application());
+    CHECK_FALSE(u.local_user().email_verified());
+    CHECK_FALSE(u.local_user().invite());
+
+    const auto a_opt = txn.get_application(id);
+    REQUIRE(a_opt);
+    const auto& a = a_opt->get();
+    CHECK(a.ip()->string_view() == "0.0.0.0");
+    CHECK(a.user_agent()->string_view() == "internet exploder -1");
+    CHECK(a.text()->string_view() == "please let me into the forum\n\ni am normal and can be trusted with post");
+  }
+
+  REQUIRE_NOTHROW(controller->approve_local_user_application(id));
+
+  {
+    auto txn = controller->open_read_txn();
+    const auto u = LocalUserDetail::get(txn, id);
+    CHECK(u.user().name()->string_view() == "somebody");
+    CHECK(u.local_user().email()->string_view() == "somebody@example.test");
+    CHECK(u.local_user().approved());
+    CHECK(u.local_user().accepted_application());
+  }
+}
+
+TEST_CASE_METHOD(PopulatedInstance, "register with invite", "[instance]") {
+  controller->update_site({
+    .registration_enabled = true,
+    .registration_application_required = false,
+    .registration_invite_required = true
+  });
+
+  // Try registration with no invite
+  REQUIRE_THROWS_AS(
+    controller->register_local_user(
+      "somebody",
+      "somebody@example.test",
+      {"foobarbaz"},
+      "0.0.0.0",
+      "internet exploder -1"
+    ),
+    ApiError
+  );
+
+  // Create invite from admin
+  const auto invite = controller->create_site_invite(users[0]);
+
+  // Now try with invite
+  pair<uint64_t, bool> result;
+  REQUIRE_NOTHROW(
+    result = controller->register_local_user(
+      "somebody",
+      "somebody@example.test",
+      {"foobarbaz"},
+      "0.0.0.0",
+      "internet exploder -1",
+      invite
+    )
+  );
+  const auto [id, approved] = result;
+  REQUIRE(id > 0);
+  CHECK(approved);
+
+  auto txn = controller->open_read_txn();
+  const auto u = LocalUserDetail::get(txn, id);
+  REQUIRE(u.id == id);
+  CHECK(u.user().name()->string_view() == "somebody");
+  CHECK(u.local_user().email()->string_view() == "somebody@example.test");
+  CHECK(u.local_user().approved());
+  CHECK_FALSE(u.local_user().accepted_application());
+  CHECK_FALSE(u.local_user().email_verified());
+  CHECK(u.local_user().invite() == optional(invite));
+
+  const auto i_opt = txn.get_invite(invite);
+  REQUIRE(i_opt);
+  const auto& i = i_opt->get();
+  CHECK(i.accepted_at() > 0);
+  CHECK(i.accepted_at() <= now_s());
+  CHECK(i.from() == users[0]);
 }

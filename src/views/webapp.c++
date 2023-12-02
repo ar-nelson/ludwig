@@ -176,6 +176,7 @@ namespace Ludwig {
 
     auto middleware(Response rsp, Request req) -> Meta {
       const auto start = chrono::steady_clock::now();
+      const auto ip = get_ip(rsp, req);
       optional<string> session_cookie;
       optional<LoginResponse> new_session;
       const auto cookies = req->getHeader("cookie");
@@ -185,7 +186,7 @@ namespace Ludwig {
           auto txn = controller->open_read_txn();
           const auto old_session = stoull(match[1], nullptr, 16);
           new_session = controller->validate_or_regenerate_session(
-            txn, old_session, rsp->getRemoteAddressAsText(), req->getHeader("user-agent")
+            txn, old_session, ip, req->getHeader("user-agent")
           );
           if (!new_session) throw std::runtime_error("expired session");
           if (new_session->session_id != old_session) {
@@ -1676,9 +1677,52 @@ namespace Ludwig {
       return *board_id;
     }
 
-    auto register_routes(App& app) -> void {
+    using PostList = std::variant<PageOf<ThreadDetail>, PageOf<CommentDetail>>;
 
-      using PostList = std::variant<PageOf<ThreadDetail>, PageOf<CommentDetail>>;
+    auto feed_route(uint64_t feed_id, Response rsp, Request req, Meta& m) -> void {
+      auto txn = controller->open_read_txn();
+      m.populate(this->shared_from_this(), txn);
+      const auto sort = parse_sort_type(req->getQuery("sort"), m.login);
+      const auto show_threads = req->getQuery("type") != "comments",
+        show_images = req->getQuery("images") == "1" || (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_threads() : false);
+      const auto base_url = fmt::format("{}?type={}&sort={}&images={}",
+        req->getUrl(),
+        show_threads ? "threads" : "comments",
+        EnumNameSortType(sort),
+        show_images ? 1 : 0
+      );
+      const auto list = show_threads
+        ? PostList(controller->list_feed_threads(txn, feed_id, sort, m.login, req->getQuery("from")))
+        : PostList(controller->list_feed_comments(txn, feed_id, sort, m.login, req->getQuery("from")));
+      // ---
+      if (m.is_htmx) {
+        rsp->writeHeader("Content-Type", TYPE_HTML);
+        m.write_cookie(rsp);
+      } else {
+        write_html_header(rsp, m, {
+          .canonical_path = req->getUrl(),
+          .banner_title = m.site->name,
+          .banner_link = req->getUrl()
+        });
+        rsp->write("<div>");
+        write_sidebar(rsp, m.login, m.site);
+        rsp->write(R"(<section><h2 class="a11y">Sort and filter</h2>)");
+        write_sort_options(rsp, req->getUrl(), sort, show_threads, show_images);
+        rsp->write(R"(</section><main>)");
+      }
+      std::visit(overload{
+        [&](const PageOf<ThreadDetail>& l){write_thread_list(rsp, l, base_url, m.login, !m.is_htmx, true, true, show_images);},
+        [&](const PageOf<CommentDetail>& l){write_comment_list(rsp, l, base_url, m.login, !m.is_htmx, true, true, show_images);}
+      }, list);
+      if (m.is_htmx) {
+        rsp->end();
+      } else {
+        rsp->write("</main></div>");
+        end_with_html_footer(rsp, m);
+      }
+    }
+
+    auto register_routes(App& app) -> void {
 
       // -----------------------------------------------------------------------
       // STATIC FILES
@@ -1696,22 +1740,14 @@ namespace Ludwig {
         bind(&Webapp::error_middleware, self, _1, _2),
         bind(&Webapp::error_page, self, _1, _2, _3)
       )
-      .get("/", [self](auto* rsp, auto*, Meta& m) {
-        auto txn = self->controller->open_read_txn();
-        m.populate(self, txn);
-        const auto boards = self->controller->list_boards(txn, BoardSortType::MostPosts, true, false, m.login);
-        // ---
-        self->write_html_header(rsp, m, {
-          .canonical_path = "/",
-          .banner_title = m.site->name,
-          .banner_link = "/",
-        });
-        rsp->write("<div>");
-        self->write_sidebar(rsp, m.login, m.site);
-        rsp->write("<main>");
-        self->write_board_list(rsp, boards, "/");
-        rsp->write("</main></div>");
-        end_with_html_footer(rsp, m);
+      .get("/", [self](auto* rsp, auto* req, Meta& m) {
+        self->feed_route(m.logged_in_user_id ? InstanceController::FEED_HOME : InstanceController::FEED_LOCAL, rsp, req, m);
+      })
+      .get("/all", [self](auto* rsp, auto* req, Meta& m) {
+        self->feed_route(InstanceController::FEED_ALL, rsp, req, m);
+      })
+      .get("/local", [self](auto* rsp, auto* req, Meta& m) {
+        self->feed_route(InstanceController::FEED_LOCAL, rsp, req, m);
       })
       .get("/boards", [self](auto* rsp, auto* req, Meta& m) {
         auto txn = self->controller->open_read_txn();
@@ -1969,18 +2005,18 @@ namespace Ludwig {
           end_with_html_footer(rsp, m);
         }
       })
-      .get_async("/search", [self](auto* rsp, auto* req, auto m, auto wrap) {
+      .get_async("/search", [self](auto* rsp, auto* req, auto m, auto&& resume) {
         SearchQuery query {
           .query = req->getQuery("search"),
           /// TODO: Other parameters
           .include_threads = true,
           .include_comments = true
         };
-        self->controller->search(query, m->login, [
-          self, rsp, m = std::move(m), wrap = std::move(wrap)
-        ](auto& txn, auto results) mutable {
-          wrap([&]{
+        self->controller->search_step_1(query, [self, rsp, m = std::move(m), resume = std::move(resume)](auto results) mutable {
+          resume([self, rsp, results, m = std::move(m)] {
+            auto txn = self->controller->open_read_txn();
             m->populate(self, txn);
+            const auto results_detail = self->controller->search_step_2(txn, results, ITEMS_PER_PAGE, m->login);
             self->write_html_header(rsp, *m, {
               .canonical_path = "/search",
               .banner_title = "Search",
@@ -1988,7 +2024,7 @@ namespace Ludwig {
             rsp->write("<div>");
             self->write_sidebar(rsp, m->login, m->site);
             rsp->write("<main>");
-            self->write_search_result_list(rsp, results, m->login, true);
+            self->write_search_result_list(rsp, results_detail, m->login, true);
             rsp->write("</main></div>");
             end_with_html_footer(rsp, *m);
           });

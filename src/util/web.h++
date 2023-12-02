@@ -60,6 +60,25 @@ namespace Ludwig {
         http_status(http_status), message(message), internal_message(internal_message) {}
   };
 
+  static bool behind_reverse_proxy = true;
+
+  static inline auto get_ip(uWS::HttpResponse<false>* rsp, uWS::HttpRequest* req) -> std::string_view {
+    // Hacky way to deal with x-forwarded-for:
+    // If we're behind a reverse proxy, then every request will have x-forwarded-for.
+    // If we EVER see a request without x-forwarded-for, ignore it from now on.
+    if (behind_reverse_proxy) {
+      auto forwarded_for = req->getHeader("x-forwarded-for");
+      if (!forwarded_for.empty()) return forwarded_for.substr(0, forwarded_for.find(','));
+      behind_reverse_proxy = false;
+    }
+    return rsp->getRemoteAddressAsText();
+  };
+
+  static inline auto get_ip(uWS::HttpResponse<true>* rsp, uWS::HttpRequest*) -> std::string_view {
+    // Assume that SSL connections will never be behind a reverse proxy
+    return rsp->getRemoteAddressAsText();
+  };
+
   struct QueryString {
     std::string_view query;
     inline auto required_hex_id(std::string_view key) -> uint64_t {

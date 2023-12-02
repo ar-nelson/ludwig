@@ -6,9 +6,10 @@
 #include "util/web.h++"
 #include "util/lambda_macros.h++"
 
-using std::function, std::nullopt, std::regex, std::regex_match, std::optional,
-    std::pair, std::prev, std::shared_ptr, std::string, std::string_view, std::vector,
-    flatbuffers::Offset, flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot, flatbuffers::Vector;
+using std::back_inserter, std::function, std::min, std::nullopt, std::optional,
+    std::pair, std::prev, std::regex, std::regex_match, std::shared_ptr,
+    std::string, std::string_view, std::tuple, std::vector, flatbuffers::Offset,
+    flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot, flatbuffers::Vector;
 
 namespace Ludwig {
   // PBKDF2-HMAC-SHA256 iteration count, as suggested by
@@ -51,8 +52,8 @@ namespace Ludwig {
     ReadTxnBase& txn,
     DBIter iter_by_new,
     DBIter iter_by_top,
-    Login login,
     function<T (uint64_t)> get_entry,
+    function<bool (const T&)> filter_entry,
     function<uint64_t (const T&)> get_timestamp,
     optional<function<uint64_t (const T&)>> get_latest_possible_timestamp = {},
     optional<uint64_t> from = {},
@@ -73,7 +74,7 @@ namespace Ludwig {
     for (auto id : iter_by_new) {
       try {
         auto entry = get_entry(id);
-        if (!entry.should_show(login)) continue;
+        if (!filter_entry(entry)) continue;
         const auto timestamp = get_timestamp(entry);
         const auto denominator = rank_denominator(timestamp < now ? now - timestamp : 0);
         entry.rank = rank_numerator(entry.stats().karma()) / denominator;
@@ -104,6 +105,32 @@ namespace Ludwig {
       };
     } else return { sorted_entries, {} };
   }
+  template <typename T> static inline auto new_comments_page(
+    DBIter iter_by_new,
+    function<T (uint64_t)> get_entry,
+    function<bool (const T&)> filter_entry,
+    optional<uint64_t> from = {},
+    size_t page_size = ITEMS_PER_PAGE
+  ) -> RankedPage<T> {
+    std::set<T, decltype(latest_comment_cmp<T>)*> page(latest_comment_cmp);
+    bool has_more;
+    for (uint64_t id : iter_by_new) {
+      const auto entry = get_entry(id);
+      if (from && entry.stats().latest_comment() > from) continue;
+      const bool full = has_more = page.size() >= page_size;
+      if (full) {
+        const auto last = prev(page.end())->stats().latest_comment();
+        if (entry.stats().latest_comment() + ACTIVE_COMMENT_MAX_AGE < last) break;
+      }
+      if (!filter_entry(entry)) continue;
+      page.insert(std::move(entry));
+      if (full) page.erase(prev(page.end()));
+    }
+    if (has_more) {
+      auto last = prev(page.end());
+      return { page, PageCursor(last->stats().latest_comment(), last->id) };
+    } else return { page, {} };
+  }
 
   static auto comment_tree(
     ReadTxnBase& txn,
@@ -131,12 +158,12 @@ namespace Ludwig {
           txn,
           txn.list_comments_of_post_new(parent),
           txn.list_comments_of_post_top(parent),
-          login,
           [&](uint64_t id) {
             return CommentDetail::get(
               txn, id, login, {}, false, thread, is_thread_hidden, board, is_board_hidden
             );
           },
+          [&](auto& e) { return e.should_show(login); },
           [&](auto& e) { return e.comment().created_at(); },
           {},
           from ? optional(from.k) : nullopt,
@@ -215,7 +242,15 @@ namespace Ludwig {
     optional<shared_ptr<SearchEngine>> search_engine
   ) : db(db), http_client(http_client), rich_text(rich_text), event_bus(event_bus), search_engine(search_engine) {
     auto txn = db->open_read_txn();
-    cached_site_detail = SiteDetail::get(txn);
+    auto detail = new SiteDetail;
+    *detail = SiteDetail::get(txn);
+    cached_site_detail = detail;
+  }
+
+  InstanceController::~InstanceController() {
+    const SiteDetail* null = nullptr;
+    auto ptr = cached_site_detail.exchange(null);
+    if (ptr) delete ptr;
   }
 
   auto InstanceController::hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void {
@@ -469,70 +504,36 @@ namespace Ludwig {
     if (!board) throw ApiError("Board does not exist", 404);
     optional<DBIter> iter;
     switch (sort) {
-      case SortType::Active: {
+      case SortType::Active:
+      case SortType::Hot: {
+        const bool is_active = sort == SortType::Active;
         const auto now = now_s();
         auto ranked = ranked_page<ThreadDetail>(
           txn,
           txn.list_threads_of_board_new(board_id),
           txn.list_threads_of_board_top(board_id),
-          login,
           [&](uint64_t id) { return ThreadDetail::get(txn, id, login, {}, false, board, false); },
-          [](auto& e) { return e.stats().latest_comment(); },
-          [now](auto& e) { return std::min(now, e.thread().created_at() + ACTIVE_COMMENT_MAX_AGE); },
+          [&](auto& e) { return e.should_show(login); },
+          [is_active](auto& e) { return is_active ? e.stats().latest_comment() : e.thread().created_at(); },
+          is_active
+            ? optional([now](auto& e) { return min(now, e.thread().created_at() + ACTIVE_COMMENT_MAX_AGE); })
+            : nullopt,
           from ? optional(from.k) : nullopt
         );
-        for (auto entry : ranked.page) {
-          if (entry.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, entry.id);
-          out.entries.push_back(std::move(entry));
-          if (out.entries.size() >= ITEMS_PER_PAGE) break;
-        }
+        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
         out.next = ranked.next;
-        return out;
-      }
-      case SortType::Hot: {
-        auto ranked = ranked_page<ThreadDetail>(
-          txn,
-          txn.list_threads_of_board_new(board_id),
-          txn.list_threads_of_board_top(board_id),
-          login,
-          [&](uint64_t id) { return ThreadDetail::get(txn, id, login, {}, false, board, false); },
-          [](auto& e) { return e.thread().created_at(); },
-          {},
-          from ? optional(from.k) : nullopt
-        );
-        for (auto entry : ranked.page) {
-          if (entry.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, entry.id);
-          out.entries.push_back(std::move(entry));
-          if (out.entries.size() >= ITEMS_PER_PAGE) break;
-        }
-        out.next = ranked.next;
-        return out;
+        goto done;
       }
       case SortType::NewComments: {
-        std::set<ThreadDetail, decltype(latest_comment_cmp<ThreadDetail>)*> page(latest_comment_cmp);
-        bool has_more;
-        for (uint64_t thread_id : txn.list_threads_of_board_new(board_id, from.next_cursor_desc(board_id))) {
-          const auto entry = ThreadDetail::get(txn, thread_id, login, {}, false, board, false);
-          if (from && entry.stats().latest_comment() > from) continue;
-          const bool full = has_more = page.size() >= ITEMS_PER_PAGE;
-          if (full) {
-            const auto last = prev(page.end())->stats().latest_comment();
-            if (entry.stats().latest_comment() + ACTIVE_COMMENT_MAX_AGE < last) break;
-          }
-          if (!entry.should_show(login)) continue;
-          page.emplace(entry);
-          if (full) page.erase(prev(page.end()));
-        }
-        for (auto entry : page) {
-          if (entry.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, entry.id);
-          out.entries.push_back(std::move(entry));
-          if (out.entries.size() >= ITEMS_PER_PAGE) break;
-        }
-        if (has_more) {
-          auto last = prev(page.end());
-          out.next = PageCursor(last->stats().latest_comment(), last->id);
-        }
-        return out;
+        const auto ranked = new_comments_page<ThreadDetail>(
+          txn.list_threads_of_board_new(board_id, from.next_cursor_desc(board_id)),
+          [&](uint64_t id) { return ThreadDetail::get(txn, id, login, {}, false, board, false); },
+          [&](auto& e) { return e.should_show(login); },
+          from ? optional(from.k) : nullopt
+        );
+        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
+        out.next = ranked.next;
+        goto done;
       }
       case SortType::New:
         iter.emplace(txn.list_threads_of_board_new(board_id, from.next_cursor_desc(board_id)));
@@ -556,17 +557,24 @@ namespace Ludwig {
         iter.emplace(txn.list_threads_of_board_top(board_id, from.next_cursor_desc(board_id)));
         break;
     }
-    assert(!!iter);
-    const auto earliest = earliest_time(sort);
-    for (uint64_t thread_id : *iter) {
-      const auto entry = ThreadDetail::get(txn, thread_id, login, {}, false, board, false);
-      if (entry.thread().created_at() < earliest || !entry.should_show(login)) continue;
-      out.entries.push_back(std::move(entry));
-      if (out.entries.size() >= ITEMS_PER_PAGE) break;
+    {
+      assert(!!iter);
+      const auto earliest = earliest_time(sort);
+      for (uint64_t thread_id : *iter) {
+        try {
+          const auto entry = ThreadDetail::get(txn, thread_id, login, {}, false, board, false);
+          if (entry.thread().created_at() < earliest || !entry.should_show(login)) continue;
+          out.entries.push_back(std::move(entry));
+        } catch (const ApiError& e) {
+          spdlog::warn("Thread {:x} error: {}", thread_id, e.what());
+        }
+        if (out.entries.full()) break;
+      }
+      if (!iter->is_done()) {
+        out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
+      }
     }
-    if (!iter->is_done()) {
-      out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
-    }
+  done:
     for (const auto& thread : out.entries) {
       if (thread.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, thread.id);
     }
@@ -584,72 +592,35 @@ namespace Ludwig {
     if (!board) throw ApiError("Board does not exist", 404);
     optional<DBIter> iter;
     switch (sort) {
-      case SortType::Active: {
-        const auto now = now_s();
-        auto ranked = ranked_page<CommentDetail>(
-          txn,
-          txn.list_comments_of_board_new(board_id),
-          txn.list_comments_of_board_top(board_id),
-          login,
-          [&](uint64_t id) {
-            return CommentDetail::get(txn, id, login, {}, false, {}, false, board, false);
-          },
-          [](auto& e) { return e.stats().latest_comment(); },
-          [now](auto& e) {
-            return std::min(now, e.comment().created_at() + ACTIVE_COMMENT_MAX_AGE);
-          },
-          from ? optional(from.k) : nullopt
-        );
-        for (auto entry : ranked.page) {
-          out.entries.push_back(std::move(entry));
-          if (out.entries.size() >= ITEMS_PER_PAGE) break;
-        }
-        out.next = ranked.next;
-        return out;
-      }
+      case SortType::Active:
       case SortType::Hot: {
-        auto ranked = ranked_page<CommentDetail>(
+        const bool is_active = sort == SortType::Active;
+        const auto now = now_s();
+        const auto ranked = ranked_page<CommentDetail>(
           txn,
           txn.list_comments_of_board_new(board_id),
           txn.list_comments_of_board_top(board_id),
-          login,
-          [&](uint64_t id) {
-            return CommentDetail::get(txn, id, login, {}, false, {}, false, board, false);
-          },
-          [&](auto& e) { return e.comment().created_at(); },
-          {},
+          [&](uint64_t id) { return CommentDetail::get(txn, id, login, {}, false, {}, false, board, false); },
+          [&](auto& e) { return e.should_show(login); },
+          [is_active](auto& e) { return is_active ? e.stats().latest_comment() : e.comment().created_at(); },
+          is_active ? optional([now](auto& e) {
+            return min(now, e.comment().created_at() + ACTIVE_COMMENT_MAX_AGE);
+          }) : nullopt,
           from ? optional(from.k) : nullopt
         );
-        for (auto entry : ranked.page) {
-          out.entries.push_back(std::move(entry));
-          if (out.entries.size() >= ITEMS_PER_PAGE) break;
-        }
+        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
         out.next = ranked.next;
         return out;
       }
       case SortType::NewComments: {
-        std::set<CommentDetail, decltype(latest_comment_cmp<CommentDetail>)*> page(latest_comment_cmp);
-        bool has_more;
-        for (uint64_t comment_id : txn.list_comments_of_board_new(board_id, from.next_cursor_desc(board_id))) {
-          const auto entry = CommentDetail::get(txn, comment_id, login, {}, false, {}, false, board, false);
-          if (from && entry.stats().latest_comment() > from) continue;
-          const bool full = has_more = page.size() >= ITEMS_PER_PAGE;
-          if (full) {
-            const auto last = prev(page.end())->stats().latest_comment();
-            if (entry.stats().latest_comment() + ACTIVE_COMMENT_MAX_AGE < last) break;
-          }
-          if (!entry.should_show(login)) continue;
-          page.emplace(entry);
-          if (full) page.erase(prev(page.end()));
-        }
-        for (auto entry : page) {
-          out.entries.push_back(std::move(entry));
-          if (out.entries.size() >= ITEMS_PER_PAGE) break;
-        }
-        if (has_more) {
-          auto last = prev(page.end());
-          out.next = PageCursor(last->stats().latest_comment(), last->id);
-        }
+        const auto ranked = new_comments_page<CommentDetail>(
+          txn.list_comments_of_board_new(board_id, from.next_cursor_desc(board_id)),
+          [&](uint64_t id) { return CommentDetail::get(txn, id, login, {}, false, {}, false, board, false); },
+          [&](auto& e) { return e.should_show(login); },
+          from ? optional(from.k) : nullopt
+        );
+        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
+        out.next = ranked.next;
         return out;
       }
       case SortType::New:
@@ -684,7 +655,213 @@ namespace Ludwig {
       } catch (const ApiError& e) {
         spdlog::warn("Comment {:x} error: {}", comment_id, e.what());
       }
-      if (out.entries.size() >= ITEMS_PER_PAGE) break;
+      if (out.entries.full()) break;
+    }
+    if (!iter->is_done()) {
+      out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
+    }
+    return out;
+  }
+  auto InstanceController::list_feed_threads(
+    ReadTxnBase& txn,
+    uint64_t feed_id,
+    SortType sort,
+    Login login,
+    PageCursor from
+  ) -> PageOf<ThreadDetail> {
+    PageOf<ThreadDetail> out { {}, !from, {} };
+    function<bool (const ThreadDetail&)> filter_thread;
+    switch (feed_id) {
+      case FEED_ALL:
+        filter_thread = [&](auto& e) { return e.should_show(login); };
+        break;
+      case FEED_LOCAL:
+        filter_thread = [&](auto& e) { return !e.board().instance() && e.should_show(login); };
+        break;
+      case FEED_HOME: {
+        if (!login) throw ApiError("Must be logged in to view Home feed", 403);
+        std::set<uint64_t> subs;
+        for (const auto id : txn.list_subscribed_boards(login->id)) subs.insert(id);
+        filter_thread = [subs = std::move(subs), &login](auto& e) {
+          return subs.contains(e.thread().board()) && e.should_show(login);
+        };
+        break;
+      }
+      default:
+        throw ApiError(fmt::format("No feed with ID {:x}", feed_id), 404);
+    }
+    optional<DBIter> iter;
+    switch (sort) {
+      case SortType::Active:
+      case SortType::Hot: {
+        const bool is_active = sort == SortType::Active;
+        const auto now = now_s();
+        auto ranked = ranked_page<ThreadDetail>(
+          txn,
+          txn.list_threads_new(),
+          txn.list_threads_top(),
+          [&](uint64_t id) { return ThreadDetail::get(txn, id, login); },
+          filter_thread,
+          [is_active](auto& e) { return is_active ? e.stats().latest_comment() : e.thread().created_at(); },
+          is_active
+            ? optional([now](auto& e) { return min(now, e.thread().created_at() + ACTIVE_COMMENT_MAX_AGE); })
+            : nullopt,
+          from ? optional(from.k) : nullopt
+        );
+        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
+        out.next = ranked.next;
+        goto done;
+      }
+      case SortType::NewComments: {
+        const auto ranked = new_comments_page<ThreadDetail>(
+          txn.list_threads_new(from.next_cursor_desc()),
+          [&](uint64_t id) { return ThreadDetail::get(txn, id, login); },
+          filter_thread,
+          from ? optional(from.k) : nullopt
+        );
+        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
+        out.next = ranked.next;
+        goto done;
+      }
+      case SortType::New:
+        iter.emplace(txn.list_threads_new(from.next_cursor_desc()));
+        break;
+      case SortType::Old:
+        iter.emplace(txn.list_threads_old(from.next_cursor_asc()));
+        break;
+      case SortType::MostComments:
+        iter.emplace(txn.list_threads_most_comments(from.next_cursor_desc()));
+        break;
+      case SortType::TopAll:
+      case SortType::TopYear:
+      case SortType::TopSixMonths:
+      case SortType::TopThreeMonths:
+      case SortType::TopMonth:
+      case SortType::TopWeek:
+      case SortType::TopDay:
+      case SortType::TopTwelveHour:
+      case SortType::TopSixHour:
+      case SortType::TopHour:
+        iter.emplace(txn.list_threads_top(from.next_cursor_desc()));
+        break;
+    }
+    {
+      assert(!!iter);
+      const auto earliest = earliest_time(sort);
+      for (uint64_t thread_id : *iter) {
+        try {
+          const auto entry = ThreadDetail::get(txn, thread_id, login);
+          if (entry.thread().created_at() < earliest || !filter_thread(entry)) continue;
+          out.entries.push_back(std::move(entry));
+        } catch (const ApiError& e) {
+          spdlog::warn("Thread {:x} error: {}", thread_id, e.what());
+        }
+        if (out.entries.full()) break;
+      }
+      if (!iter->is_done()) {
+        out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
+      }
+    }
+  done:
+    for (const auto& thread : out.entries) {
+      if (thread.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, thread.id);
+    }
+    return out;
+  }
+  auto InstanceController::list_feed_comments(
+    ReadTxnBase& txn,
+    uint64_t feed_id,
+    SortType sort,
+    Login login,
+    PageCursor from
+  ) -> PageOf<CommentDetail> {
+    PageOf<CommentDetail> out { {}, !from, {} };
+    function<bool (const CommentDetail&)> filter_comment;
+    switch (feed_id) {
+      case FEED_ALL:
+        filter_comment = [&](auto& e) { return e.should_show(login); };
+        break;
+      case FEED_LOCAL:
+        filter_comment = [&](auto& e) { return !e.board().instance() && e.should_show(login); };
+        break;
+      case FEED_HOME: {
+        if (!login) throw ApiError("Must be logged in to view Home feed", 403);
+        std::set<uint64_t> subs;
+        for (const auto id : txn.list_subscribed_boards(login->id)) subs.insert(id);
+        filter_comment = [subs = std::move(subs), &login](auto& e) {
+          return subs.contains(e.thread().board()) && e.should_show(login);
+        };
+        break;
+      }
+      default:
+        throw ApiError(fmt::format("No feed with ID {:x}", feed_id), 404);
+    }
+    optional<DBIter> iter;
+    switch (sort) {
+      case SortType::Active:
+      case SortType::Hot: {
+        const bool is_active = sort == SortType::Active;
+        const auto now = now_s();
+        const auto ranked = ranked_page<CommentDetail>(
+          txn,
+          txn.list_comments_new(),
+          txn.list_comments_top(),
+          [&](uint64_t id) { return CommentDetail::get(txn, id, login); },
+          filter_comment,
+          [is_active](auto& e) { return is_active ? e.stats().latest_comment() : e.comment().created_at(); },
+          is_active ? optional([now](auto& e) {
+            return min(now, e.comment().created_at() + ACTIVE_COMMENT_MAX_AGE);
+          }) : nullopt,
+          from ? optional(from.k) : nullopt
+        );
+        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
+        out.next = ranked.next;
+        return out;
+      }
+      case SortType::NewComments: {
+        const auto ranked = new_comments_page<CommentDetail>(
+          txn.list_comments_new(from.next_cursor_desc()),
+          [&](uint64_t id) { return CommentDetail::get(txn, id, login); },
+          filter_comment,
+          from ? optional(from.k) : nullopt
+        );
+        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
+        out.next = ranked.next;
+        return out;
+      }
+      case SortType::New:
+        iter.emplace(txn.list_comments_new(from.next_cursor_desc()));
+        break;
+      case SortType::Old:
+        iter.emplace(txn.list_comments_old(from.next_cursor_asc()));
+        break;
+      case SortType::MostComments:
+        iter.emplace(txn.list_comments_most_comments(from.next_cursor_desc()));
+        break;
+      case SortType::TopAll:
+      case SortType::TopYear:
+      case SortType::TopSixMonths:
+      case SortType::TopThreeMonths:
+      case SortType::TopMonth:
+      case SortType::TopWeek:
+      case SortType::TopDay:
+      case SortType::TopTwelveHour:
+      case SortType::TopSixHour:
+      case SortType::TopHour:
+        iter.emplace(txn.list_comments_top(from.next_cursor_desc()));
+        break;
+    }
+    assert(!!iter);
+    const auto earliest = earliest_time(sort);
+    for (uint64_t comment_id : *iter) {
+      try {
+        const auto entry = CommentDetail::get(txn, comment_id, login);
+        if (entry.comment().created_at() < earliest || !filter_comment(entry)) continue;
+        out.entries.push_back(std::move(entry));
+      } catch (const ApiError& e) {
+        spdlog::warn("Comment {:x} error: {}", comment_id, e.what());
+      }
+      if (out.entries.full()) break;
     }
     if (!iter->is_done()) {
       out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
@@ -770,80 +947,76 @@ namespace Ludwig {
     }
     return out;
   }
-  class InstanceController::SearchFunctor : public std::enable_shared_from_this<InstanceController::SearchFunctor> {
-    vector<SearchResultDetail> entries;
-    shared_ptr<InstanceController> controller;
-    SearchQuery query;
-    Login login;
-    SearchCallback callback;
-    uint64_t limit;
-  public:
-    SearchFunctor(
-      shared_ptr<InstanceController> controller,
-      SearchQuery&& query,
-      Login login,
-      SearchCallback&& callback
-    ) : controller(controller), query(std::move(query)), login(login),
-        callback(std::move(callback)), limit(query.limit ? query.limit : ITEMS_PER_PAGE) {
-      entries.reserve(limit);
-      query.limit = limit + limit / 2;
-    }
-    SearchFunctor(const SearchFunctor&) = delete;
-    auto operator=(const SearchFunctor&) = delete;
-
-    inline auto search() -> void {
-      (*controller->search_engine)->search(query, [self = shared_from_this()](auto page){self->call(page);});
-    }
-
-  private:
-    inline auto call(vector<SearchResult> page) -> void {
-      auto txn = controller->open_read_txn();
-      for (const auto& result : page) {
-        if (entries.size() >= limit) break;
-        const auto id = result.id;
-        try {
-          switch (result.type) {
-          case SearchResultType::User: {
-            const auto entry = UserDetail::get(txn, id, login);
-            if (entry.should_show(login)) entries.emplace_back(entry);
-            break;
-          }
-          case SearchResultType::Board: {
-            const auto entry = BoardDetail::get(txn, id, login);
-            if (entry.should_show(login)) entries.emplace_back(entry);
-            break;
-          }
-          case SearchResultType::Thread: {
-            const auto entry = ThreadDetail::get(txn, id, login);
-            if (entry.should_show(login)) entries.emplace_back(entry);
-            break;
-          }
-          case SearchResultType::Comment: {
-            const auto entry = CommentDetail::get(txn, id, login);
-            if (entry.should_show(login)) entries.emplace_back(entry);
-            break;
-          }
-          }
-        } catch (const ApiError& e) {
-          spdlog::warn("Search result {:x} error: {}", id, e.what());
-        }
-      }
-      if (entries.size() >= limit || page.size() < query.limit) {
-        callback(txn, entries);
-      } else {
-        query.offset += query.limit;
-        search();
-      }
-    }
-  };
-  auto InstanceController::search(
-    SearchQuery query,
-    Login login,
-    SearchCallback callback
-  ) -> void {
+  auto InstanceController::search_step_1(SearchQuery query, SearchEngine::Callback&& callback) -> void {
     if (!search_engine) throw ApiError("Search is not enabled on this server", 403);
-    auto sf = std::make_shared<SearchFunctor>(this->shared_from_this(), std::move(query), login, std::move(callback));
-    sf->search();
+    query.limit = (query.limit ? query.limit : ITEMS_PER_PAGE) * 2;
+    (*search_engine)->search(query, std::forward<SearchEngine::Callback>(callback));
+  }
+  auto InstanceController::search_step_2(
+    ReadTxnBase& txn,
+    const vector<SearchResult>& results,
+    size_t max_len,
+    Login login
+  ) -> vector<SearchResultDetail> {
+    vector<SearchResultDetail> out;
+    out.reserve(min(results.size(), max_len));
+    for (const auto& result : results) {
+      const auto id = result.id;
+      try {
+        switch (result.type) {
+        case SearchResultType::User: {
+          const auto entry = UserDetail::get(txn, id, login);
+          if (entry.should_show(login)) out.emplace_back(entry);
+          break;
+        }
+        case SearchResultType::Board: {
+          const auto entry = BoardDetail::get(txn, id, login);
+          if (entry.should_show(login)) out.emplace_back(entry);
+          break;
+        }
+        case SearchResultType::Thread: {
+          const auto entry = ThreadDetail::get(txn, id, login);
+          if (entry.should_show(login)) out.emplace_back(entry);
+          break;
+        }
+        case SearchResultType::Comment: {
+          const auto entry = CommentDetail::get(txn, id, login);
+          if (entry.should_show(login)) out.emplace_back(entry);
+          break;
+        }
+        }
+      } catch (const ApiError& e) {
+        spdlog::warn("Search result {:x} error: {}", id, e.what());
+      }
+      if (out.size() >= max_len) break;
+    }
+    return out;
+  }
+
+  auto InstanceController::update_site(const SiteUpdate& update) -> void {
+    {
+      auto txn = db->open_write_txn();
+      if (const auto v = update.name) txn.set_setting(SettingsKey::name, *v);
+      if (const auto v = update.description) txn.set_setting(SettingsKey::description, *v);
+      if (const auto v = update.icon_url) txn.set_setting(SettingsKey::icon_url, v->value_or(""));
+      if (const auto v = update.banner_url) txn.set_setting(SettingsKey::banner_url, v->value_or(""));
+      if (const auto v = update.max_post_length) txn.set_setting(SettingsKey::post_max_length, *v);
+      if (const auto v = update.javascript_enabled) txn.set_setting(SettingsKey::javascript_enabled, *v);
+      if (const auto v = update.board_creation_admin_only) txn.set_setting(SettingsKey::board_creation_admin_only, *v);
+      if (const auto v = update.registration_enabled) txn.set_setting(SettingsKey::registration_enabled, *v);
+      if (const auto v = update.registration_application_required) txn.set_setting(SettingsKey::registration_application_required, *v);
+      if (const auto v = update.registration_invite_required) txn.set_setting(SettingsKey::registration_invite_required, *v);
+      if (const auto v = update.invite_admin_only) txn.set_setting(SettingsKey::invite_admin_only, *v);
+      txn.commit();
+    }
+    {
+      auto txn = db->open_read_txn();
+      auto new_detail = new SiteDetail;
+      *new_detail = SiteDetail::get(txn);
+      auto old_detail = cached_site_detail.exchange(new_detail);
+      if (old_detail) delete old_detail;
+    }
+    event_bus->dispatch(Event::SiteUpdate);
   }
 
   auto InstanceController::create_local_user_internal(
@@ -851,6 +1024,7 @@ namespace Ludwig {
     string_view username,
     optional<string_view> email,
     SecretString&& password,
+    bool is_approved,
     bool is_bot,
     optional<uint64_t> invite
   ) -> uint64_t {
@@ -873,7 +1047,7 @@ namespace Ludwig {
     duthomhas::csprng rng;
     rng(salt);
     hash_password(std::move(password), salt, hash);
-    flatbuffers::FlatBufferBuilder fbb;
+    FlatBufferBuilder fbb;
     {
       const auto name_s = fbb.CreateString(username);
       UserBuilder b(fbb);
@@ -895,6 +1069,7 @@ namespace Ludwig {
       if (email_s) b.add_email(*email_s);
       b.add_password_hash(&hash_struct);
       b.add_password_salt(&salt_struct);
+      b.add_approved(is_approved);
       if (invite) b.add_invite(*invite);
       fbb.Finish(b.Finish());
     }
@@ -923,8 +1098,9 @@ namespace Ludwig {
       }
     }
     auto txn = db->open_write_txn();
+    const bool approved = !site->registration_application_required;
     const auto user_id = create_local_user_internal(
-      txn, username, email, std::move(password), false, invite_id
+      txn, username, email, std::move(password), approved, false, invite_id
     );
     if (invite_id) {
       const auto invite_opt = txn.get_invite(*invite_id);
@@ -965,7 +1141,7 @@ namespace Ludwig {
       txn.create_application(user_id, fbb.GetBufferSpan());
     }
     txn.commit();
-    return { user_id, site->registration_application_required };
+    return { user_id, approved };
   }
   auto InstanceController::create_local_user(
     string_view username,
@@ -976,10 +1152,120 @@ namespace Ludwig {
   ) -> uint64_t {
     auto txn = db->open_write_txn();
     auto user_id = create_local_user_internal(
-      txn, username, email, std::move(password), is_bot, invite
+      txn, username, email, std::move(password), true, is_bot, invite
     );
     txn.commit();
     return user_id;
+  }
+  auto InstanceController::update_local_user(uint64_t id, const LocalUserUpdate& update) -> void {
+    auto txn = db->open_write_txn();
+    const auto detail = LocalUserDetail::get(txn, id);
+    if (update.email && !regex_match(*update.email, email_regex)) {
+      throw ApiError("Invalid email address", 400);
+    }
+    if (update.email && txn.get_user_id_by_email(string(*update.email))) {
+      throw ApiError("A user with this email address already exists on this instance", 409);
+    }
+    if (update.display_name && *update.display_name && (*update.display_name)->length() > 1024) {
+      throw ApiError("Display name cannot be longer than 1024 bytes", 400);
+    }
+    if (update.email || update.approved || update.accepted_application ||
+        update.email_verified || update.open_links_in_new_tab ||
+        update.show_avatars || update.show_bot_accounts ||
+        update.hide_cw_posts || update.expand_cw_posts ||
+        update.expand_cw_images || update.show_karma ||
+        update.javascript_enabled) {
+      const auto& lu = detail.local_user();
+      FlatBufferBuilder fbb;
+      fbb.Finish(CreateLocalUserDirect(fbb,
+        update.email.value_or(lu.email()->c_str()),
+        lu.password_hash(),
+        lu.password_salt(),
+        lu.admin(),
+        update.approved.value_or(lu.approved()),
+        update.accepted_application.value_or(lu.accepted_application()),
+        update.email_verified.value_or(lu.email_verified()),
+        lu.invite(),
+        update.open_links_in_new_tab.value_or(lu.open_links_in_new_tab()),
+        lu.send_notifications_to_email(),
+        update.show_avatars.value_or(lu.show_avatars()),
+        lu.show_images_threads(),
+        lu.show_images_comments(),
+        update.show_bot_accounts.value_or(lu.show_bot_accounts()),
+        lu.show_new_post_notifs(),
+        update.hide_cw_posts.value_or(lu.hide_cw_posts()),
+        update.expand_cw_posts.value_or(lu.expand_cw_posts()),
+        update.expand_cw_images.value_or(lu.expand_cw_images()),
+        lu.show_read_posts(),
+        update.show_karma.value_or(lu.show_karma()),
+        update.javascript_enabled.value_or(lu.javascript_enabled()),
+        lu.infinite_scroll_enabled(),
+        lu.interface_language() ? lu.interface_language()->c_str() : nullptr,
+        lu.theme() ? lu.theme()->c_str() : nullptr,
+        lu.default_sort_type(),
+        lu.default_comment_sort_type()
+      ));
+      txn.set_local_user(id, fbb.GetBufferSpan());
+    }
+    if (update.display_name || update.bio || update.avatar_url || update.banner_url) {
+      const auto& u = detail.user();
+      FlatBufferBuilder fbb;
+      const auto [display_name_type, display_name] =
+        update.display_name
+          .transform([](optional<string_view> sv) { return sv.transform(λx(string(x))); })
+          .value_or(u.display_name_type()->size()
+            ? optional(rich_text->plain_text_with_emojis_to_text_content(u.display_name_type(), u.display_name()))
+            : nullopt)
+          .transform([&](string s) { return rich_text->parse_plain_text_with_emojis(fbb, s); })
+          .value_or(pair(0, 0));
+      const auto [bio_raw, bio_type, bio] =
+        update.bio
+          .value_or(u.bio_raw() ? optional(u.bio_raw()->string_view()) : nullopt)
+          .transform([&](string_view s) {
+            const auto [bio_type, bio] = rich_text->parse_markdown(fbb, s);
+            return tuple(fbb.CreateString(s), bio_type, bio);
+          })
+          .value_or(tuple(0, 0, 0));
+      fbb.Finish(CreateUser(fbb,
+        fbb.CreateString(u.name()),
+        display_name_type, display_name,
+        bio_raw, bio_type, bio,
+        0, 0, {},
+        u.created_at(), now_s(), u.deleted_at(),
+        update.avatar_url.value_or(u.avatar_url() ? optional(u.avatar_url()->string_view()) : nullopt)
+          .transform([&](auto s) { return fbb.CreateString(s); }).value_or(0),
+        update.banner_url.value_or(u.banner_url() ? optional(u.banner_url()->string_view()) : nullopt)
+          .transform([&](auto s) { return fbb.CreateString(s); }).value_or(0),
+        u.bot(),
+        u.mod_state(), fbb.CreateString(u.mod_reason())
+      ));
+      txn.set_user(id, fbb.GetBufferSpan());
+    }
+    txn.commit();
+  }
+  auto InstanceController::approve_local_user_application(uint64_t user_id) -> void {
+    LocalUserUpdate update;
+    {
+      auto txn = db->open_read_txn();
+      const auto old_opt = txn.get_local_user(user_id);
+      if (!old_opt) throw ApiError("User does not exist", 404);
+      const auto& old = old_opt->get();
+      if (old.accepted_application()) throw ApiError("User's application has already been accepted", 409);
+      if (!txn.get_application(user_id)) throw ApiError("User does not have an application to approve", 404);
+      update.accepted_application = true;
+      update.approved = old.approved() || site_detail()->registration_application_required;
+    }
+    update_local_user(user_id, update);
+  }
+  auto InstanceController::create_site_invite(uint64_t inviter_user_id) -> uint64_t {
+    auto txn = db->open_write_txn();
+    const auto user = LocalUserDetail::get(txn, inviter_user_id);
+    if (site_detail()->invite_admin_only && !user.local_user().admin()) {
+      throw ApiError("Only admins can create invite codes", 403);
+    }
+    const auto id = txn.create_invite(inviter_user_id, 86400 * 7);
+    txn.commit();
+    return id;
   }
   auto InstanceController::create_local_board(
     uint64_t owner,
@@ -1000,11 +1286,10 @@ namespace Ludwig {
     if (txn.get_board_id_by_name(name)) {
       throw ApiError("A board with this name already exists on this instance", 409);
     }
-    if (!txn.get_local_user(owner)) {
-      throw ApiError("Board owner is not a user on this instance", 400);
+    if (!can_create_board(LocalUserDetail::get(txn, owner))) {
+      throw ApiError("User does not have permission to create boards", 403);
     }
-    // TODO: Check if user is allowed to create boards
-    flatbuffers::FlatBufferBuilder fbb;
+    FlatBufferBuilder fbb;
     {
       Offset<Vector<PlainTextWithEmojis>> display_name_types;
       Offset<Vector<Offset<void>>> display_name_values;
@@ -1084,7 +1369,7 @@ namespace Ludwig {
       if (!BoardDetail::get(txn, board, user).can_create_thread(user)) {
         throw ApiError("User cannot create a thread in this board", 403);
       }
-      flatbuffers::FlatBufferBuilder fbb;
+      FlatBufferBuilder fbb;
       const auto title_s = fbb.CreateString(title),
         submission_s = submission_url ? fbb.CreateString(*submission_url) : 0,
         content_raw_s = text_content_markdown ? fbb.CreateString(*text_content_markdown) : 0,
@@ -1140,7 +1425,7 @@ namespace Ludwig {
     if (parent_comment ? !parent_comment->can_reply_to(login) : !parent_thread->can_reply_to(login)) {
       throw ApiError("User cannot reply to this post", 403);
     }
-    flatbuffers::FlatBufferBuilder fbb;
+    FlatBufferBuilder fbb;
     const auto content_raw_s = fbb.CreateString(text_content_markdown),
       content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
     const auto content_blocks = rich_text->parse_markdown(fbb, text_content_markdown);
