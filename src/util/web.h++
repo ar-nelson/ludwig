@@ -329,13 +329,7 @@ namespace Ludwig {
 }
 
 namespace fmt {
-  template <> struct formatter<Ludwig::Escape> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
-      auto it = ctx.begin();
-      if (it != ctx.end()) detail::throw_format_error("invalid format");
-      return it;
-    }
-
+  template <> struct formatter<Ludwig::Escape> : public Ludwig::CustomFormatter {
     auto format(Ludwig::Escape e, format_context& ctx) const {
       size_t start = 0;
       for (

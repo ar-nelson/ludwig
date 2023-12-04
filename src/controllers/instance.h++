@@ -43,8 +43,9 @@ namespace Ludwig {
     PageCursor() : exists(false) {}
     explicit PageCursor(uint64_t k) : exists(true), k(k) {}
     PageCursor(uint64_t k, uint64_t v) : exists(true), k(k), v(v) {}
+    PageCursor(double k, uint64_t v) : exists(true), k(*reinterpret_cast<uint64_t*>(&k)), v(v) {}
     PageCursor(std::string_view str) {
-      static const std::regex re(R"(^([0-9a-f]+)(?:_([0-9a-f]+))$)", std::regex::icase);
+      static const std::regex re(R"(^([0-9a-f]+)(?:_([0-9a-f]+))?$)", std::regex::icase);
       if (str.empty()) return;
       std::match_results<std::string_view::const_iterator> match;
       if (std::regex_match(str.begin(), str.end(), match, re)) {
@@ -65,6 +66,9 @@ namespace Ludwig {
 
     using OptKV = std::optional<std::pair<Cursor, uint64_t>>;
 
+    inline auto rank_k() -> double {
+      return exists ? *reinterpret_cast<double*>(&k) : INFINITY;
+    }
     inline auto next_cursor_desc() -> OptKV {
       if (!exists) return {};
       return {{Cursor(k), v ? v - 1 : v}};

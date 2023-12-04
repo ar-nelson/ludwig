@@ -12,7 +12,7 @@ namespace Ludwig {
     return (uint64_t)std::numeric_limits<int64_t>::max() + (uint64_t)karma;
   }
 
-  static constexpr uint64_t ACTIVE_COMMENT_MAX_AGE = 86400 * 2; // 2 days
+  static constexpr auto ACTIVE_COMMENT_MAX_AGE = std::chrono::hours(48);
 
   class StringVal {
   private:

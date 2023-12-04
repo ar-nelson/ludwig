@@ -11,12 +11,61 @@
 
 using std::bind, std::match_results, std::nullopt, std::optional, std::regex,
     std::regex_search, std::shared_ptr, std::stoull, std::string,
-    std::string_view, std::to_string, std::variant, std::visit;
+    std::string_view, std::variant, std::visit;
 
 using namespace std::placeholders;
 namespace chrono = std::chrono;
 
 #define COOKIE_NAME "ludwig_session"
+
+namespace Ludwig {
+  struct Suffixed { int64_t n; };
+  struct RelativeTime { chrono::system_clock::time_point t; };
+}
+
+namespace fmt {
+  template <> struct formatter<Ludwig::Suffixed> : public Ludwig::CustomFormatter {
+    // Adapted from https://programming.guide/java/formatting-byte-size-to-human-readable-format.html
+    auto format(Ludwig::Suffixed x, format_context& ctx) const {
+      static constexpr auto SUFFIXES = "KMBTqQ";
+      auto n = x.n;
+      if (-1000 < n && n < 1000) return format_to(ctx.out(), "{:d}", n);
+      uint8_t i = 0;
+      while (n <= -999'950 || n >= 999'950) {
+        n /= 1000;
+        i++;
+      }
+      return format_to(ctx.out(), "{:.3g}{:c}", (double)n / 1000.0, SUFFIXES[i]);
+      // SUFFIXES[i] can never overflow, max 64-bit int is ~18 quintillion (Q)
+    }
+  };
+
+  template <> struct formatter<Ludwig::RelativeTime> : public Ludwig::CustomFormatter {
+    static auto write(format_context& ctx, const char s[]) {
+      return std::copy(s, s + std::char_traits<char>::length(s), ctx.out());
+    }
+
+    auto format(Ludwig::RelativeTime x, format_context& ctx) const {
+      using namespace chrono;
+      const auto now = system_clock::now();
+      if (x.t > now) return write(ctx, "in the future");
+      const auto diff = now - x.t;
+      if (diff < 1min) return write(ctx, "just now");
+      if (diff < 2min) return write(ctx, "1 minute ago");
+      if (diff < 1h) return format_to(ctx.out(), "{:d} minutes ago", duration_cast<minutes>(diff).count());
+      if (diff < 2h) return write(ctx, "1 hour ago");
+      if (diff < days{1}) return format_to(ctx.out(), "{:d} hours ago", duration_cast<hours>(diff).count());
+      if (diff < days{2}) return write(ctx, "1 day ago");
+      if (diff < weeks{1}) return format_to(ctx.out(), "{:d} days ago", duration_cast<days>(diff).count());
+      if (diff < weeks{2}) return write(ctx, "1 week ago");
+      if (diff < months{1}) return format_to(ctx.out(), "{:d} weeks ago", duration_cast<weeks>(diff).count());
+      if (diff < months{2}) return write(ctx, "1 month ago");
+      if (diff < years{1}) return format_to(ctx.out(), "{:d} months ago", duration_cast<months>(diff).count());
+      if (diff < years{2}) return write(ctx, "1 year ago");
+      return format_to(ctx.out(), "{:d} years ago", duration_cast<years>(diff).count());
+    }
+  };
+}
 
 namespace Ludwig {
   static const regex cookie_regex(
@@ -62,19 +111,6 @@ namespace Ludwig {
 
   static inline auto mod_state(const CommentDetail& comment) -> ModState {
     return comment.comment().mod_state();
-  }
-
-  // Adapted from https://programming.guide/java/formatting-byte-size-to-human-readable-format.html
-  static auto suffixed_short_number(int64_t n) -> string {
-    static constexpr auto SUFFIXES = "KMBTqQ";
-    if (-1000 < n && n < 1000) return to_string(n);
-    uint8_t i = 0;
-    while (n <= -999'950 || n >= 999'950) {
-      n /= 1000;
-      i++;
-    }
-    return fmt::format("{:.3g}{:c}", (double)n / 1000.0, SUFFIXES[i]);
-    // SUFFIXES[i] can never overflow, max 64-bit int is ~18 quintillion (Q)
   }
 
   static constexpr auto describe_mod_state(ModState s) -> string_view {
@@ -502,9 +538,9 @@ namespace Ludwig {
         return write("</section></aside>");
       }
 
-      auto write_datetime(uint64_t timestamp) noexcept -> ResponseWriter& {
+      auto write_datetime(chrono::system_clock::time_point timestamp) noexcept -> ResponseWriter& {
         return write_fmt(R"(<time datetime="{:%FT%TZ}" title="{:%D %r %Z}">{}</time>)",
-          fmt::gmtime((time_t)timestamp), fmt::localtime((time_t)timestamp), relative_time(timestamp));
+          fmt::gmtime(timestamp), fmt::localtime(timestamp), RelativeTime{timestamp});
       }
 
       auto write_user_link(OptRef<User> user_opt, Login login) noexcept -> ResponseWriter& {
@@ -765,7 +801,7 @@ namespace Ludwig {
             R"(<label class="upvote"><button type="submit" name="vote" {3}{5}><span class="a11y">Upvote</span></button></label>)"
             R"(<label class="downvote"><button type="submit" name="vote" {4}{6}><span class="a11y">Downvote</span></button></label>)"
             "</form>",
-            entry.id, post_word<T>(), suffixed_short_number(entry.stats().karma()),
+            entry.id, post_word<T>(), Suffixed{entry.stats().karma()},
             can_upvote ? "" : "disabled ", can_downvote ? "" : "disabled ",
             entry.your_vote == Vote::Upvote ? R"(class="voted" value="0")" : R"(value="1")",
             entry.your_vote == Vote::Downvote ? R"(class="voted" value="0")" : R"(value="-1")"
@@ -775,7 +811,7 @@ namespace Ludwig {
             R"(<div class="vote-buttons" id="votes-{0:x}"><output class="karma" id="karma-{0:x}">{1}</output>)"
             R"(<div class="upvote"><button type="button" disabled><span class="a11y">Upvote</span></button></div>)"
             R"(<div class="downvote"><button type="button" disabled><span class="a11y">Downvote</span></button></div></div>)",
-            entry.id, suffixed_short_number(entry.stats().karma())
+            entry.id, Suffixed{entry.stats().karma()}
           );
         }
         return *this;
@@ -986,7 +1022,7 @@ namespace Ludwig {
           write(R"(</div>)");
         }
         write(R"(<div class="thread-info"><span>submitted )");
-        write_datetime(thread.thread().created_at());
+        write_datetime(chrono::system_clock::time_point(chrono::seconds(thread.thread().created_at())));
         if (show_user) {
           write("</span><span>by ");
           write_user_link(thread._author, login);
@@ -1046,7 +1082,7 @@ namespace Ludwig {
           write("</span><span>");
         }
         write("commented ");
-        write_datetime(comment.comment().created_at());
+        write_datetime(chrono::system_clock::time_point(chrono::seconds(comment.comment().created_at())));
         if (show_thread) {
           write_fmt(R"(</span><span>on <a href="/thread/{:x}">{}</a>)",
             comment.comment().thread(), Escape(comment.thread().title()));
@@ -1599,33 +1635,6 @@ namespace Ludwig {
           .finish();
       }
     }
-
-    static auto relative_time(uint64_t timestamp) noexcept -> string {
-      const uint64_t now = now_s();
-      if (timestamp > now) return "in the future";
-      const uint64_t diff = now - timestamp;
-      static constexpr uint64_t
-        MINUTE = 60,
-        HOUR = MINUTE * 60,
-        DAY = HOUR * 24,
-        WEEK = DAY * 7,
-        MONTH = DAY * 30,
-        YEAR = DAY * 365;
-      if (diff < MINUTE) return "just now";
-      if (diff < MINUTE * 2) return "1 minute ago";
-      if (diff < HOUR) return to_string(diff / MINUTE) + " minutes ago";
-      if (diff < HOUR * 2) return "1 hour ago";
-      if (diff < DAY) return to_string(diff / HOUR) + " hours ago";
-      if (diff < DAY * 2) return "1 day ago";
-      if (diff < WEEK) return to_string(diff / DAY) + " days ago";
-      if (diff < WEEK * 2) return "1 week ago";
-      if (diff < MONTH) return to_string(diff / WEEK) + " weeks ago";
-      if (diff < MONTH * 2) return "1 month ago";
-      if (diff < YEAR) return to_string(diff / MONTH) + " months ago";
-      if (diff < YEAR * 2) return "1 year ago";
-      return to_string(diff / YEAR) + " years ago";
-    }
-
 
     static inline auto write_redirect_to(Response rsp, const Meta& m, string_view location) noexcept -> void {
       if (m.is_htmx) {

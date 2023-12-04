@@ -1497,12 +1497,14 @@ namespace Ludwig {
     return id;
   }
   auto WriteTxn::set_comment(uint64_t id, span<uint8_t> span) -> void {
+    using namespace std::chrono;
     const auto& comment = get_fb<Comment>(span);
     const auto stats_opt = get_post_stats(id);
     const auto thread_opt = get_thread(comment.thread());
     assert_fmt(!!thread_opt, "set_comment: comment {:x} top-level ancestor thread {:x} does not exist", id, comment.thread());
     const auto& thread = thread_opt->get();
     const auto author_id = comment.author(), board_id = thread.board(), created_at = comment.created_at();
+    const system_clock::time_point created_at_t{seconds(created_at)};
     if (const auto old_comment_opt = get_comment(id)) {
       spdlog::debug("Updating comment {:x} (parent {:x}, author {:x})", id, comment.parent(), comment.author());
       assert(!!stats_opt);
@@ -1532,13 +1534,15 @@ namespace Ludwig {
       for (OptRef<Comment> comment_opt = {comment}; comment_opt; comment_opt = get_comment(comment_opt->get().parent())) {
         const auto parent = comment_opt->get().parent();
         if (const auto parent_stats_opt = get_post_stats(parent)) {
-          uint64_t parent_created_at;
-          if (const auto parent_opt = get_comment(parent)) parent_created_at = parent_opt->get().created_at();
-          else if (parent == comment.thread()) parent_created_at = thread.created_at();
-          else continue;
+          system_clock::time_point parent_created_at;
+          if (const auto parent_opt = get_comment(parent)) {
+            parent_created_at = system_clock::time_point(seconds(parent_opt->get().created_at()));
+          } else if (parent == comment.thread()) {
+            parent_created_at = system_clock::time_point(seconds(thread.created_at()));
+          } else continue;
           const auto& s = parent_stats_opt->get();
-          const bool is_active = created_at >= parent_created_at &&
-              created_at - parent_created_at <= ACTIVE_COMMENT_MAX_AGE,
+          const bool is_active = created_at_t >= parent_created_at &&
+              created_at_t - parent_created_at <= ACTIVE_COMMENT_MAX_AGE,
             is_newer = is_active && created_at > s.latest_comment();
           const auto last_descendant_count = s.descendant_count();
           fbb.Clear();

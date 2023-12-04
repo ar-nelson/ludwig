@@ -82,4 +82,13 @@ namespace Ludwig {
       );
     }
   };
+
+  // Common base class for custom formatters
+  struct CustomFormatter {
+    constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator {
+      auto it = ctx.begin();
+      if (it != ctx.end()) fmt::detail::throw_format_error("invalid format");
+      return it;
+    }
+  };
 }

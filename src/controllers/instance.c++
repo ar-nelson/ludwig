@@ -1,15 +1,17 @@
 #include "instance.h++"
 #include <mutex>
 #include <regex>
+#include <queue>
 #include <duthomhas/csprng.hpp>
 #include <openssl/evp.h>
 #include "util/web.h++"
 #include "util/lambda_macros.h++"
 
-using std::back_inserter, std::function, std::min, std::nullopt, std::optional,
-    std::pair, std::prev, std::regex, std::regex_match, std::shared_ptr,
-    std::string, std::string_view, std::tuple, std::vector, flatbuffers::Offset,
+using std::function, std::min, std::nullopt, std::optional, std::pair,
+    std::prev, std::regex, std::regex_match, std::shared_ptr, std::string,
+    std::string_view, std::tuple, std::vector, flatbuffers::Offset,
     flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot, flatbuffers::Vector;
+namespace chrono = std::chrono;
 
 namespace Ludwig {
   // PBKDF2-HMAC-SHA256 iteration count, as suggested by
@@ -33,103 +35,172 @@ namespace Ludwig {
   static inline auto rank_numerator(int64_t karma) -> double {
     return std::log(std::max<int64_t>(1, 3 + karma));
   }
-  static inline auto rank_denominator(uint64_t time_diff) -> double {
-    const uint64_t age_in_hours = time_diff / 3600;
-    return std::pow(age_in_hours + 2, RANK_GRAVITY);
-  }
-  template <typename T> static auto rank_cmp(const T& a, const T& b) -> bool {
-    return a.rank > b.rank || (a.rank == b.rank && a.id > b.id);
+  static inline auto rank_denominator(chrono::duration<double> time_diff) -> double {
+    return std::pow(std::max(0L, chrono::duration_cast<chrono::hours>(time_diff).count()) + 2L, RANK_GRAVITY);
   }
   template <typename T> static auto latest_comment_cmp(const T& a, const T& b) -> bool {
     return a.stats().latest_comment() > b.stats().latest_comment();
   }
+  using RankedId = pair<uint64_t, double>;
+  static auto ranked_id_cmp(const RankedId& a, const RankedId& b) -> bool {
+    return a.second < b.second;
+  }
 
-  template <typename T> struct RankedPage {
-    std::set<T, decltype(rank_cmp<T>)*> page;
-    PageCursor next;
-  };
-  template <typename T> static inline auto ranked_page(
+  using RankedQueue = std::priority_queue<RankedId, vector<RankedId>, decltype(ranked_id_cmp)*>;
+
+  template <class T, size_t PageSize>
+  static inline auto finish_ranked_queue(
+    stlpb::static_vector<T, PageSize>& entries,
+    RankedQueue& queue,
+    function<optional<T> (uint64_t)>& get_entry
+  ) -> PageCursor {
+    while (!queue.empty()) {
+      const auto [id, rank] = queue.top();
+      queue.pop();
+      if (auto entry = get_entry(id)) {
+        if (entries.full()) {
+          return PageCursor(prev(entries.end())->rank, id);
+        } else {
+          entry->rank = rank;
+          entries.push_back(*entry);
+        }
+      }
+    }
+    return {};
+  }
+
+  template <class T> static inline auto get_created_at(ReadTxnBase& txn, uint64_t id) -> chrono::system_clock::time_point;
+  template <> inline auto get_created_at<ThreadDetail>(ReadTxnBase& txn, uint64_t id) -> chrono::system_clock::time_point {
+    const auto thread = txn.get_thread(id);
+    if (!thread) return chrono::system_clock::time_point::min();
+    return chrono::system_clock::time_point(chrono::seconds(thread->get().created_at()));
+  }
+  template <> inline auto get_created_at<CommentDetail>(ReadTxnBase& txn, uint64_t id) -> chrono::system_clock::time_point {
+    const auto comment = txn.get_comment(id);
+    if (!comment) return chrono::system_clock::time_point::min();
+    return chrono::system_clock::time_point(chrono::seconds(comment->get().created_at()));
+  }
+
+  template <class T, size_t PageSize = ITEMS_PER_PAGE>
+  static inline auto ranked_active(
+    stlpb::static_vector<T, PageSize>& entries,
     ReadTxnBase& txn,
     DBIter iter_by_new,
     DBIter iter_by_top,
-    function<T (uint64_t)> get_entry,
-    function<bool (const T&)> filter_entry,
-    function<uint64_t (const T&)> get_timestamp,
-    optional<function<uint64_t (const T&)>> get_latest_possible_timestamp = {},
-    optional<uint64_t> from = {},
-    size_t page_size = ITEMS_PER_PAGE
-  ) -> RankedPage<T> {
+    function<optional<T> (uint64_t)> get_entry,
+    double max_rank = INFINITY
+  ) -> PageCursor {
+    using namespace chrono;
     int64_t max_possible_karma;
     if (iter_by_top.is_done() || iter_by_new.is_done()) return {};
-    {
-      auto top_stats = txn.get_post_stats(*iter_by_top);
-      if (!top_stats) return {};
+    if (auto top_stats = txn.get_post_stats(*iter_by_top)) {
       max_possible_karma = top_stats->get().karma();
-    }
-    const double max_rank = from ? reinterpret_cast<double&>(*from) : INFINITY;
+    } else return {};
     const auto max_possible_numerator = rank_numerator(max_possible_karma);
-    const auto now = now_s();
-    bool skipped_any = false;
-    std::set<T, decltype(rank_cmp<T>)*> sorted_entries(rank_cmp<T>);
+    const auto now = system_clock::now();
+    RankedQueue queue(ranked_id_cmp);
     for (auto id : iter_by_new) {
-      try {
-        auto entry = get_entry(id);
-        if (!filter_entry(entry)) continue;
-        const auto timestamp = get_timestamp(entry);
-        const auto denominator = rank_denominator(timestamp < now ? now - timestamp : 0);
-        entry.rank = rank_numerator(entry.stats().karma()) / denominator;
-        if (entry.rank >= max_rank) continue;
-        if (sorted_entries.size() >= page_size) {
-          double max_possible_rank;
-          if (get_latest_possible_timestamp) {
-            const auto latest_possible_timestamp = (*get_latest_possible_timestamp)(entry);
-            const double min_possible_denominator =
-              rank_denominator(latest_possible_timestamp < now ? now - latest_possible_timestamp : 0);
-            max_possible_rank = max_possible_numerator / min_possible_denominator;
-          } else max_possible_rank = max_possible_numerator / denominator;
-          auto last = prev(sorted_entries.end());
-          if (max_possible_rank <= last->rank) break;
-          skipped_any = true;
-          sorted_entries.erase(last);
-        }
-        sorted_entries.insert(entry);
-      } catch (ApiError e) {
-        continue;
+      const auto stats = txn.get_post_stats(id);
+      if (!stats) continue;
+      const system_clock::time_point timestamp(seconds(stats->get().latest_comment()));
+      const auto denominator = rank_denominator(now - timestamp);
+      const auto rank = rank_numerator(stats->get().karma()) / denominator;
+      if (rank >= max_rank) continue;
+      queue.emplace(id, rank);
+      const auto latest_possible_timestamp = std::min(now, get_created_at<T>(txn, id) + ACTIVE_COMMENT_MAX_AGE);
+      const auto [top_id, top_rank] = queue.top();
+      const double
+        min_possible_denominator =
+          rank_denominator(latest_possible_timestamp < now ? now - latest_possible_timestamp : seconds::zero()),
+        max_possible_rank = max_possible_numerator / min_possible_denominator;
+      if (max_possible_rank > top_rank) continue;
+      queue.pop();
+      if (auto entry = get_entry(top_id)) {
+        entry->rank = top_rank;
+        entries.push_back(*entry);
+        if (entries.full()) break;
       }
     }
-    if (skipped_any) {
-      const auto last = prev(sorted_entries.end());
-      return {
-        sorted_entries,
-        PageCursor(reinterpret_cast<const uint64_t&>(last->rank), last->id)
-      };
-    } else return { sorted_entries, {} };
+    return finish_ranked_queue(entries, queue, get_entry);
   }
-  template <typename T> static inline auto new_comments_page(
+
+  template <class T, size_t PageSize = ITEMS_PER_PAGE>
+  static inline auto ranked_hot(
+    stlpb::static_vector<T, PageSize>& entries,
+    ReadTxnBase& txn,
     DBIter iter_by_new,
-    function<T (uint64_t)> get_entry,
-    function<bool (const T&)> filter_entry,
-    optional<uint64_t> from = {},
-    size_t page_size = ITEMS_PER_PAGE
-  ) -> RankedPage<T> {
-    std::set<T, decltype(latest_comment_cmp<T>)*> page(latest_comment_cmp);
-    bool has_more;
-    for (uint64_t id : iter_by_new) {
-      const auto entry = get_entry(id);
-      if (from && entry.stats().latest_comment() > from) continue;
-      const bool full = has_more = page.size() >= page_size;
-      if (full) {
-        const auto last = prev(page.end())->stats().latest_comment();
-        if (entry.stats().latest_comment() + ACTIVE_COMMENT_MAX_AGE < last) break;
+    DBIter iter_by_top,
+    function<optional<T> (uint64_t)> get_entry,
+    double max_rank = INFINITY
+  ) -> PageCursor {
+    using namespace chrono;
+    int64_t max_possible_karma;
+    if (iter_by_top.is_done() || iter_by_new.is_done()) return {};
+    if (auto top_stats = txn.get_post_stats(*iter_by_top)) {
+      max_possible_karma = top_stats->get().karma();
+    } else return {};
+    const auto max_possible_numerator = rank_numerator(max_possible_karma);
+    const auto now = system_clock::now();
+    RankedQueue queue(ranked_id_cmp);
+    for (auto id : iter_by_new) {
+      const auto timestamp = get_created_at<T>(txn, id);
+      const auto stats = txn.get_post_stats(id);
+      if (!stats) continue;
+      const auto denominator = rank_denominator(now - timestamp);
+      const auto rank = rank_numerator(stats->get().karma()) / denominator;
+      if (rank >= max_rank) continue;
+      queue.emplace(id, rank);
+      const auto [top_id, top_rank] = queue.top();
+      const double max_possible_rank = max_possible_numerator / denominator;
+      if (max_possible_rank > top_rank) continue;
+      queue.pop();
+      if (auto entry = get_entry(top_id)) {
+        entry->rank = top_rank;
+        entries.push_back(*entry);
+        if (entries.full()) break;
       }
-      if (!filter_entry(entry)) continue;
-      page.insert(std::move(entry));
-      if (full) page.erase(prev(page.end()));
     }
-    if (has_more) {
-      auto last = prev(page.end());
-      return { page, PageCursor(last->stats().latest_comment(), last->id) };
-    } else return { page, {} };
+    return finish_ranked_queue(entries, queue, get_entry);
+  }
+
+  template <class T, size_t PageSize = ITEMS_PER_PAGE>
+  static inline auto ranked_new_comments(
+    stlpb::static_vector<T, PageSize>& entries,
+    ReadTxnBase& txn,
+    DBIter iter_by_new,
+    function<optional<T> (uint64_t)> get_entry,
+    optional<chrono::system_clock::time_point> from = {}
+  ) -> PageCursor {
+    using namespace chrono;
+    using IdTime = pair<uint64_t, system_clock::time_point>;
+    static constexpr auto id_time_cmp = [](const IdTime& a, const IdTime& b) -> bool { return a.second < b.second; };
+    const auto now = system_clock::now();
+    const auto max_time = from.value_or(now);
+    std::priority_queue<IdTime, vector<IdTime>, decltype(id_time_cmp)> queue;
+    for (uint64_t id : iter_by_new) {
+      const auto stats = txn.get_post_stats(id);
+      if (!stats) continue;
+      const system_clock::time_point timestamp(seconds(stats->get().latest_comment()));
+      if (timestamp >= max_time) continue;
+      queue.emplace(id, timestamp);
+      const auto [top_id, top_time] = queue.top();
+      const auto max_possible_time = std::min(now, get_created_at<T>(txn, id) + ACTIVE_COMMENT_MAX_AGE);
+      if (max_possible_time > top_time) continue;
+      queue.pop();
+      if (auto entry = get_entry(top_id)) {
+        entries.push_back(*entry);
+        if (entries.full()) break;
+      }
+    }
+    while (!queue.empty()) {
+      const auto [id, timestamp] = queue.top();
+      queue.pop();
+      if (auto entry = get_entry(id)) {
+        if (entries.full()) return PageCursor(prev(entries.end())->stats().latest_comment());
+        else entries.push_back(*entry);
+      }
+    }
+    return {};
   }
 
   static auto comment_tree(
@@ -154,27 +225,25 @@ namespace Ludwig {
     optional<DBIter> iter;
     switch (sort) {
       case CommentSortType::Hot: {
-        auto ranked = ranked_page<CommentDetail>(
+        // TODO: Truncate when running out of total comments
+        stlpb::static_vector<CommentDetail, ITEMS_PER_PAGE> entries;
+        auto page_cursor = ranked_hot<CommentDetail, ITEMS_PER_PAGE>(
+          entries,
           txn,
           txn.list_comments_of_post_new(parent),
           txn.list_comments_of_post_top(parent),
-          [&](uint64_t id) {
-            return CommentDetail::get(
+          [&](uint64_t id) -> optional<CommentDetail> {
+            if (from && id == from.v) return {};
+            const auto e = CommentDetail::get(
               txn, id, login, {}, false, thread, is_thread_hidden, board, is_board_hidden
             );
+            return e.should_show(login) ? optional(e) : nullopt;
           },
-          [&](auto& e) { return e.should_show(login); },
-          [&](auto& e) { return e.comment().created_at(); },
-          {},
-          from ? optional(from.k) : nullopt,
-          max_comments - tree.size()
+          from.rank_k()
         );
-        for (auto entry : ranked.page) {
+        for (auto entry : entries) {
           if (tree.size() >= max_comments) {
-            tree.mark_continued(parent, PageCursor(
-              reinterpret_cast<const uint64_t&>(entry.rank),
-              entry.id
-            ));
+            tree.mark_continued(parent, PageCursor(entry.rank, entry.id));
             return;
           }
           const auto id = entry.id, children = entry.stats().child_count();
@@ -187,7 +256,7 @@ namespace Ludwig {
             );
           }
         }
-        if (ranked.next) tree.mark_continued(parent, ranked.next);
+        if (page_cursor) tree.mark_continued(parent, page_cursor);
         return;
       }
       case CommentSortType::New:
@@ -278,11 +347,12 @@ namespace Ludwig {
     string_view ip,
     string_view user_agent
   ) -> optional<LoginResponse> {
+    using namespace chrono;
     const auto session_opt = txn.get_session(session_id);
     if (!session_opt) return {};
     const auto& session = session_opt->get();
     const auto user = session.user();
-    if (session.remember() &&  now_s() - session.created_at() >= 86400) {
+    if (session.remember() && system_clock::now() - system_clock::time_point(seconds(session.created_at())) >= hours(24)) {
       auto txn = db->open_write_txn();
       auto new_session = txn.create_session(
         user,
@@ -478,19 +548,29 @@ namespace Ludwig {
     }
     return out;
   }
-  static inline auto earliest_time(SortType sort) -> uint64_t {
+  static inline auto earliest_time(SortType sort) -> chrono::time_point<chrono::system_clock> {
+    using namespace chrono;
+    const auto now = system_clock::now();
     switch (sort) {
-      case SortType::TopYear: return now_s() - 86400 * 365;
-      case SortType::TopSixMonths: return now_s() - 86400 * 30 * 6;
-      case SortType::TopThreeMonths: return now_s() - 86400 * 30 * 3;
-      case SortType::TopMonth: return now_s() - 86400 * 30;
-      case SortType::TopWeek: return now_s() - 86400 * 7;
-      case SortType::TopDay: return now_s() - 86400;
-      case SortType::TopTwelveHour: return now_s() - 3600 * 12;
-      case SortType::TopSixHour: return now_s() - 3600 * 6;
-      case SortType::TopHour: return now_s() - 3600;
-      default: return 0;
+      case SortType::TopYear: return now - 24h * 365;
+      case SortType::TopSixMonths: return now - 24h * 30 * 6;
+      case SortType::TopThreeMonths: return now - 24h * 30 * 3;
+      case SortType::TopMonth: return now - 24h * 30;
+      case SortType::TopWeek: return now - 24h * 7;
+      case SortType::TopDay: return now - 24h;
+      case SortType::TopTwelveHour: return now - 12h;
+      case SortType::TopSixHour: return now - 6h;
+      case SortType::TopHour: return now - 1h;
+      default: return time_point<system_clock>::min();
     }
+  }
+  static inline auto new_comments_cursor(PageCursor& from, optional<uint64_t> first_k = {}) -> optional<pair<Cursor, uint64_t>> {
+    using namespace chrono;
+    if (!from) return {};
+    const auto time = (uint64_t)duration_cast<seconds>(
+      (system_clock::time_point(seconds(from.k)) - ACTIVE_COMMENT_MAX_AGE).time_since_epoch()
+    ).count();
+    return pair(first_k ? Cursor(*first_k, time) : Cursor(time), from.v);
   }
   auto InstanceController::list_board_threads(
     ReadTxnBase& txn,
@@ -499,42 +579,46 @@ namespace Ludwig {
     Login login,
     PageCursor from
   ) -> PageOf<ThreadDetail> {
+    using namespace chrono;
     PageOf<ThreadDetail> out { {}, !from, {} };
     const auto board = txn.get_board(board_id);
     if (!board) throw ApiError("Board does not exist", 404);
+    const auto get_entry = [&](uint64_t id) -> optional<ThreadDetail> {
+      if (from && id == from.v) return {};
+      const auto e = optional(ThreadDetail::get(txn, id, login, {}, false, board, false));
+      return e->should_show(login) ? e : nullopt;
+    };
     optional<DBIter> iter;
     switch (sort) {
       case SortType::Active:
-      case SortType::Hot: {
-        const bool is_active = sort == SortType::Active;
-        const auto now = now_s();
-        auto ranked = ranked_page<ThreadDetail>(
+        out.next = ranked_active<ThreadDetail, ITEMS_PER_PAGE>(
+          out.entries,
           txn,
           txn.list_threads_of_board_new(board_id),
           txn.list_threads_of_board_top(board_id),
-          [&](uint64_t id) { return ThreadDetail::get(txn, id, login, {}, false, board, false); },
-          [&](auto& e) { return e.should_show(login); },
-          [is_active](auto& e) { return is_active ? e.stats().latest_comment() : e.thread().created_at(); },
-          is_active
-            ? optional([now](auto& e) { return min(now, e.thread().created_at() + ACTIVE_COMMENT_MAX_AGE); })
-            : nullopt,
-          from ? optional(from.k) : nullopt
+          get_entry,
+          from.rank_k()
         );
-        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
-        out.next = ranked.next;
         goto done;
-      }
-      case SortType::NewComments: {
-        const auto ranked = new_comments_page<ThreadDetail>(
-          txn.list_threads_of_board_new(board_id, from.next_cursor_desc(board_id)),
-          [&](uint64_t id) { return ThreadDetail::get(txn, id, login, {}, false, board, false); },
-          [&](auto& e) { return e.should_show(login); },
-          from ? optional(from.k) : nullopt
+      case SortType::Hot:
+        out.next = ranked_hot<ThreadDetail, ITEMS_PER_PAGE>(
+          out.entries,
+          txn,
+          txn.list_threads_of_board_new(board_id),
+          txn.list_threads_of_board_top(board_id),
+          get_entry,
+          from.rank_k()
         );
-        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
-        out.next = ranked.next;
         goto done;
-      }
+      case SortType::NewComments:
+        out.next = ranked_new_comments<ThreadDetail, ITEMS_PER_PAGE>(
+          out.entries,
+          txn,
+          txn.list_threads_of_board_new(board_id, new_comments_cursor(from, board_id)),
+          get_entry,
+          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt
+        );
+        goto done;
       case SortType::New:
         iter.emplace(txn.list_threads_of_board_new(board_id, from.next_cursor_desc(board_id)));
         break;
@@ -563,8 +647,9 @@ namespace Ludwig {
       for (uint64_t thread_id : *iter) {
         try {
           const auto entry = ThreadDetail::get(txn, thread_id, login, {}, false, board, false);
-          if (entry.thread().created_at() < earliest || !entry.should_show(login)) continue;
-          out.entries.push_back(std::move(entry));
+          const system_clock::time_point time(seconds(entry.thread().created_at()));
+          if (time < earliest || !entry.should_show(login)) continue;
+          out.entries.push_back(entry);
         } catch (const ApiError& e) {
           spdlog::warn("Thread {:x} error: {}", thread_id, e.what());
         }
@@ -587,42 +672,46 @@ namespace Ludwig {
     Login login,
     PageCursor from
   ) -> PageOf<CommentDetail> {
+    using namespace chrono;
     PageOf<CommentDetail> out { {}, !from, {} };
     const auto board = txn.get_board(board_id);
     if (!board) throw ApiError("Board does not exist", 404);
+    const auto get_entry = [&](uint64_t id) -> optional<CommentDetail> {
+      if (from && id == from.v) return {};
+      const auto e = optional(CommentDetail::get(txn, id, login, {}, false, {}, false, board, false));
+      return e->should_show(login) ? e : nullopt;
+    };
     optional<DBIter> iter;
     switch (sort) {
       case SortType::Active:
-      case SortType::Hot: {
-        const bool is_active = sort == SortType::Active;
-        const auto now = now_s();
-        const auto ranked = ranked_page<CommentDetail>(
+        out.next = ranked_active<CommentDetail, ITEMS_PER_PAGE>(
+          out.entries,
           txn,
           txn.list_comments_of_board_new(board_id),
           txn.list_comments_of_board_top(board_id),
-          [&](uint64_t id) { return CommentDetail::get(txn, id, login, {}, false, {}, false, board, false); },
-          [&](auto& e) { return e.should_show(login); },
-          [is_active](auto& e) { return is_active ? e.stats().latest_comment() : e.comment().created_at(); },
-          is_active ? optional([now](auto& e) {
-            return min(now, e.comment().created_at() + ACTIVE_COMMENT_MAX_AGE);
-          }) : nullopt,
-          from ? optional(from.k) : nullopt
+          get_entry,
+          from.rank_k()
         );
-        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
-        out.next = ranked.next;
         return out;
-      }
-      case SortType::NewComments: {
-        const auto ranked = new_comments_page<CommentDetail>(
-          txn.list_comments_of_board_new(board_id, from.next_cursor_desc(board_id)),
-          [&](uint64_t id) { return CommentDetail::get(txn, id, login, {}, false, {}, false, board, false); },
-          [&](auto& e) { return e.should_show(login); },
-          from ? optional(from.k) : nullopt
+      case SortType::Hot:
+        out.next = ranked_hot<CommentDetail, ITEMS_PER_PAGE>(
+          out.entries,
+          txn,
+          txn.list_comments_of_board_new(board_id),
+          txn.list_comments_of_board_top(board_id),
+          get_entry,
+          from.rank_k()
         );
-        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
-        out.next = ranked.next;
         return out;
-      }
+      case SortType::NewComments:
+        out.next = ranked_new_comments<CommentDetail, ITEMS_PER_PAGE>(
+          out.entries,
+          txn,
+          txn.list_comments_of_board_new(board_id, new_comments_cursor(from, board_id)),
+          get_entry,
+          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt
+        );
+        return out;
       case SortType::New:
         iter.emplace(txn.list_comments_of_board_new(board_id, from.next_cursor_desc(board_id)));
         break;
@@ -650,8 +739,9 @@ namespace Ludwig {
     for (uint64_t comment_id : *iter) {
       try {
         const auto entry = CommentDetail::get(txn, comment_id, login, {}, false, {}, false, board, false);
-        if (entry.comment().created_at() < earliest || !entry.should_show(login)) continue;
-        out.entries.push_back(std::move(entry));
+        const system_clock::time_point time(seconds(entry.comment().created_at()));
+        if (time < earliest || !entry.should_show(login)) continue;
+        out.entries.push_back(entry);
       } catch (const ApiError& e) {
         spdlog::warn("Comment {:x} error: {}", comment_id, e.what());
       }
@@ -669,6 +759,7 @@ namespace Ludwig {
     Login login,
     PageCursor from
   ) -> PageOf<ThreadDetail> {
+    using namespace chrono;
     PageOf<ThreadDetail> out { {}, !from, {} };
     function<bool (const ThreadDetail&)> filter_thread;
     switch (feed_id) {
@@ -690,39 +781,42 @@ namespace Ludwig {
       default:
         throw ApiError(fmt::format("No feed with ID {:x}", feed_id), 404);
     }
+    const auto get_entry = [&](uint64_t id) -> optional<ThreadDetail> {
+      if (from && id == from.v) return {};
+      const auto e = optional(ThreadDetail::get(txn, id, login));
+      return filter_thread(*e) ? e : nullopt;
+    };
     optional<DBIter> iter;
     switch (sort) {
       case SortType::Active:
-      case SortType::Hot: {
-        const bool is_active = sort == SortType::Active;
-        const auto now = now_s();
-        auto ranked = ranked_page<ThreadDetail>(
+        out.next = ranked_active<ThreadDetail, ITEMS_PER_PAGE>(
+          out.entries,
           txn,
           txn.list_threads_new(),
           txn.list_threads_top(),
-          [&](uint64_t id) { return ThreadDetail::get(txn, id, login); },
-          filter_thread,
-          [is_active](auto& e) { return is_active ? e.stats().latest_comment() : e.thread().created_at(); },
-          is_active
-            ? optional([now](auto& e) { return min(now, e.thread().created_at() + ACTIVE_COMMENT_MAX_AGE); })
-            : nullopt,
-          from ? optional(from.k) : nullopt
+          get_entry,
+          from.rank_k()
         );
-        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
-        out.next = ranked.next;
         goto done;
-      }
-      case SortType::NewComments: {
-        const auto ranked = new_comments_page<ThreadDetail>(
-          txn.list_threads_new(from.next_cursor_desc()),
-          [&](uint64_t id) { return ThreadDetail::get(txn, id, login); },
-          filter_thread,
-          from ? optional(from.k) : nullopt
+      case SortType::Hot:
+        out.next = ranked_hot<ThreadDetail, ITEMS_PER_PAGE>(
+          out.entries,
+          txn,
+          txn.list_threads_new(),
+          txn.list_threads_top(),
+          get_entry,
+          from.rank_k()
         );
-        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
-        out.next = ranked.next;
         goto done;
-      }
+      case SortType::NewComments:
+        out.next = ranked_new_comments<ThreadDetail, ITEMS_PER_PAGE>(
+          out.entries,
+          txn,
+          txn.list_threads_new(new_comments_cursor(from)),
+          get_entry,
+          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt
+        );
+        goto done;
       case SortType::New:
         iter.emplace(txn.list_threads_new(from.next_cursor_desc()));
         break;
@@ -751,15 +845,16 @@ namespace Ludwig {
       for (uint64_t thread_id : *iter) {
         try {
           const auto entry = ThreadDetail::get(txn, thread_id, login);
-          if (entry.thread().created_at() < earliest || !filter_thread(entry)) continue;
-          out.entries.push_back(std::move(entry));
+          const system_clock::time_point time(seconds(entry.thread().created_at()));
+          if (time < earliest || !entry.should_show(login)) continue;
+          out.entries.push_back(entry);
         } catch (const ApiError& e) {
           spdlog::warn("Thread {:x} error: {}", thread_id, e.what());
         }
         if (out.entries.full()) break;
       }
       if (!iter->is_done()) {
-        out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
+        out.next = PageCursor(iter->get_cursor()->int_field_0(), **iter);
       }
     }
   done:
@@ -775,6 +870,7 @@ namespace Ludwig {
     Login login,
     PageCursor from
   ) -> PageOf<CommentDetail> {
+    using namespace chrono;
     PageOf<CommentDetail> out { {}, !from, {} };
     function<bool (const CommentDetail&)> filter_comment;
     switch (feed_id) {
@@ -796,39 +892,42 @@ namespace Ludwig {
       default:
         throw ApiError(fmt::format("No feed with ID {:x}", feed_id), 404);
     }
+    const auto get_entry = [&](uint64_t id) -> optional<CommentDetail> {
+      if (from && id == from.v) return {};
+      const auto e = optional(CommentDetail::get(txn, id, login));
+      return filter_comment(*e) ? e : nullopt;
+    };
     optional<DBIter> iter;
     switch (sort) {
       case SortType::Active:
-      case SortType::Hot: {
-        const bool is_active = sort == SortType::Active;
-        const auto now = now_s();
-        const auto ranked = ranked_page<CommentDetail>(
+        out.next = ranked_active<CommentDetail, ITEMS_PER_PAGE>(
+          out.entries,
           txn,
           txn.list_comments_new(),
           txn.list_comments_top(),
-          [&](uint64_t id) { return CommentDetail::get(txn, id, login); },
-          filter_comment,
-          [is_active](auto& e) { return is_active ? e.stats().latest_comment() : e.comment().created_at(); },
-          is_active ? optional([now](auto& e) {
-            return min(now, e.comment().created_at() + ACTIVE_COMMENT_MAX_AGE);
-          }) : nullopt,
-          from ? optional(from.k) : nullopt
+          get_entry,
+          from.rank_k()
         );
-        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
-        out.next = ranked.next;
         return out;
-      }
-      case SortType::NewComments: {
-        const auto ranked = new_comments_page<CommentDetail>(
-          txn.list_comments_new(from.next_cursor_desc()),
-          [&](uint64_t id) { return CommentDetail::get(txn, id, login); },
-          filter_comment,
-          from ? optional(from.k) : nullopt
+      case SortType::Hot:
+        out.next = ranked_hot<CommentDetail, ITEMS_PER_PAGE>(
+          out.entries,
+          txn,
+          txn.list_comments_new(),
+          txn.list_comments_top(),
+          get_entry,
+          from.rank_k()
         );
-        std::copy_n(ranked.page.cbegin(), min(ranked.page.size(), ITEMS_PER_PAGE), back_inserter(out.entries));
-        out.next = ranked.next;
         return out;
-      }
+      case SortType::NewComments:
+        out.next = ranked_new_comments<CommentDetail, ITEMS_PER_PAGE>(
+          out.entries,
+          txn,
+          txn.list_comments_new(new_comments_cursor(from)),
+          get_entry,
+          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt
+        );
+        return out;
       case SortType::New:
         iter.emplace(txn.list_comments_new(from.next_cursor_desc()));
         break;
@@ -856,15 +955,16 @@ namespace Ludwig {
     for (uint64_t comment_id : *iter) {
       try {
         const auto entry = CommentDetail::get(txn, comment_id, login);
-        if (entry.comment().created_at() < earliest || !filter_comment(entry)) continue;
-        out.entries.push_back(std::move(entry));
+        const system_clock::time_point time(seconds(entry.comment().created_at()));
+        if (time < earliest || !entry.should_show(login)) continue;
+        out.entries.push_back(entry);
       } catch (const ApiError& e) {
         spdlog::warn("Comment {:x} error: {}", comment_id, e.what());
       }
       if (out.entries.full()) break;
     }
     if (!iter->is_done()) {
-      out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
+      out.next = PageCursor(iter->get_cursor()->int_field_0(), **iter);
     }
     return out;
   }
