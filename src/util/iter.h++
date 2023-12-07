@@ -1,7 +1,6 @@
 #pragma once
 #include "util/common.h++"
 #include <lmdb.h>
-#include <sstream>
 #include <assert.h>
 #include <byteswap.h>
 

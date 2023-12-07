@@ -6,4 +6,4 @@ build.*/
 *.mdb
 *.mdb-lock
 *.dbdump
-*.dbdump.gz
+*.dbdump.zst

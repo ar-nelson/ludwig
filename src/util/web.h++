@@ -2,7 +2,6 @@
 #include "util/common.h++"
 #include "models/db.h++"
 #include <regex>
-#include <sstream>
 #include <variant>
 #include <uWebSockets/App.h>
 #include <flatbuffers/string.h>
@@ -127,11 +126,45 @@ namespace Ludwig {
     return id;
   }
 
+  template <bool SSL> class ResponseStream : public std::stringbuf {
+    uWS::Loop* loop;
+    uWS::HttpResponse<SSL>* rsp;
+    std::atomic<bool> canceled = false;
+  public:
+    ResponseStream(uWS::Loop* loop, uWS::HttpResponse<SSL>* rsp) : loop(loop), rsp(rsp) {}
+    virtual int sync() override {
+      if (canceled) return -1;
+      loop->defer([this, chunk = this->str()] {
+        if (!canceled) {
+          spdlog::debug("Writing chunk of {} bytes", chunk.size());
+          rsp->cork([&] { rsp->write(chunk); });
+        }
+      });
+      this->str().clear();
+      return 0;
+    }
+    void cancel() {
+      canceled = true;
+    }
+    void close() {
+      if (!canceled) loop->defer([this] { if (!canceled) rsp->end(); });
+    }
+  };
+
   template <bool SSL, typename M = std::monostate, typename E = std::monostate> class Router {
   public:
     using Middleware = std::function<M (uWS::HttpResponse<SSL>*, uWS::HttpRequest*)>;
     using ErrorMiddleware = std::function<E (const uWS::HttpResponse<SSL>*, uWS::HttpRequest*)>;
     using ErrorHandler = std::function<void (uWS::HttpResponse<SSL>*, const ApiError&, const E&)>;
+
+    using GetAsyncHandler = uWS::MoveOnlyFunction<void (
+      uWS::HttpResponse<SSL>*,
+      uWS::HttpRequest*,
+      std::unique_ptr<M>,
+      uWS::MoveOnlyFunction<void (uWS::MoveOnlyFunction<void ()>&&)>
+    )>;
+    template <typename T> using PostBodyHandler = uWS::MoveOnlyFunction<void (T, uWS::MoveOnlyFunction<void (uWS::MoveOnlyFunction<void (uWS::HttpResponse<SSL>*)>)>&&)>;
+    template <typename T> using PostHandler = uWS::MoveOnlyFunction<PostBodyHandler<T> (uWS::HttpRequest*, std::unique_ptr<M>)>;
   private:
     uWS::TemplatedApp<SSL>& app;
 
@@ -229,94 +262,118 @@ namespace Ludwig {
       return std::move(*this);
     }
 
-    Router &&get_async(
-      std::string pattern,
-      uWS::MoveOnlyFunction<void (
-        uWS::HttpResponse<SSL>*,
-        uWS::HttpRequest*,
-        std::unique_ptr<M>,
-        uWS::MoveOnlyFunction<void (uWS::MoveOnlyFunction<void ()>&&)>
-      )> &&handler
-    ) {
+    Router &&get_async(std::string pattern, GetAsyncHandler&& handler) {
+      using std::current_exception, std::make_shared, std::string;
       app.get(pattern, [impl = impl, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
-        auto abort_flag = std::make_shared<bool>(false);
-        const auto url = std::string(req->getUrl());
+        auto abort_flag = make_shared<std::atomic<bool>>(false);
+        const string url(req->getUrl());
         rsp->onAborted([abort_flag, url]{
           *abort_flag = true;
           spdlog::debug("[GET {}] - HTTP session aborted", url);
         });
-        auto error_meta = std::make_shared<E>(impl->error_middleware(rsp, req));
+        auto error_meta = make_shared<E>(impl->error_middleware(rsp, req));
         try {
           auto meta = std::make_unique<M>(impl->middleware(rsp, req));
-          handler(rsp, req, std::move(meta), [impl = impl, loop = uWS::Loop::get(), rsp, url, error_meta, abort_flag](uWS::MoveOnlyFunction<void()>&& body) mutable {
+          handler(rsp, req, std::move(meta), [
+            impl = impl, loop = uWS::Loop::get(), rsp, url, error_meta, abort_flag
+          ](uWS::MoveOnlyFunction<void()>&& body) mutable {
             if (*abort_flag) return;
-            loop->defer([impl = impl, body = std::forward<uWS::MoveOnlyFunction<void()>>(body), rsp, url, error_meta] mutable {
+            loop->defer([impl = impl, body = std::move(body), rsp, url, error_meta, abort_flag] mutable {
+              if (*abort_flag) return;
               rsp->cork([&]{
                 try { body(); }
-                catch (...) { impl->handle_error(std::current_exception(), rsp, *error_meta, "GET", url); }
+                catch (...) {
+                  if (*abort_flag) return;
+                  impl->handle_error(current_exception(), rsp, *error_meta, "GET", url);
+                }
               });
             });
           });
           spdlog::debug("[GET {}] - {} {}", url, rsp->getRemoteAddressAsText(), req->getHeader("user-agent"));
         } catch (...) {
-          impl->handle_error(std::current_exception(), rsp, *error_meta, "GET", url);
+          impl->handle_error(current_exception(), rsp, *error_meta, "GET", url);
         }
       });
       return std::move(*this);
     }
 
-    Router &&post_form(
-      std::string pattern,
-      uWS::MoveOnlyFunction<uWS::MoveOnlyFunction<void (QueryString)> (
-        uWS::HttpResponse<SSL>*,
-        uWS::HttpRequest*,
-        std::unique_ptr<M>
-      )> &&handler,
-      size_t max_size = 10 * 1024 * 1024 // 10MiB
+    template <typename T> auto post_handler(
+      PostHandler<T>&& handler,
+      size_t max_size,
+      std::optional<std::string_view> expected_content_type,
+      std::string body_prefix,
+      uWS::MoveOnlyFunction<T (std::string&&)>&& parse_body
     ) {
-      app.post(pattern, [impl = impl, max_size, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
-        const auto url = std::string(req->getUrl());
-        auto error_meta = std::make_shared<E>(impl->error_middleware(rsp, req));
-        rsp->onAborted([url]{
+      using std::current_exception, std::make_shared, std::string;
+      return [
+        impl = impl, max_size, expected_content_type, body_prefix,
+        handler = std::move(handler),
+        parse_body = std::move(parse_body)
+      ](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
+        auto abort_flag = make_shared<std::atomic<bool>>(false);
+        const string url(req->getUrl());
+        const auto error_meta = make_shared<E>(impl->error_middleware(rsp, req));
+        rsp->onAborted([abort_flag, url]{
+          *abort_flag = true;
           spdlog::debug("[POST {}] - HTTP session aborted", url);
         });
-        const auto user_agent = std::string(req->getHeader("user-agent"));
-        std::string buffer = "?";
+        const string user_agent(req->getHeader("user-agent"));
         try {
-          const auto content_type = req->getHeader("content-type");
-          if (content_type.data() && !content_type.starts_with(TYPE_FORM)) {
-            throw ApiError("Wrong POST request Content-Type (expected application/x-www-form-urlencoded)", 415);
+          if (expected_content_type) {
+            const auto content_type = req->getHeader("content-type");
+            if (content_type.data() && !content_type.starts_with(*expected_content_type)) {
+              throw ApiError(fmt::format("Wrong POST request Content-Type (expected {})", *expected_content_type), 415);
+            }
           }
-          auto meta = std::make_unique<M>(impl->middleware(rsp, req));
-          auto body_handler = handler(rsp, req, std::move(meta));
-          rsp->onData([
-            impl = impl, rsp, max_size, url, user_agent,
-            error_meta = error_meta,
-            body_handler = std::move(body_handler),
-            buffer = std::move(buffer)
-          ](std::string_view data, bool last) mutable {
-            buffer.append(data);
+          rsp->onData([=,
+            loop = uWS::Loop::get(),
+            &parse_body,
+            body_handler = handler(req, std::make_unique<M>(impl->middleware(rsp, req))),
+            in_buffer = body_prefix
+          ](auto data, bool last) mutable {
+            in_buffer.append(data);
             try {
-              if (buffer.length() > max_size) throw ApiError("POST body is too large", 413);
+              if (in_buffer.length() > max_size) throw ApiError("POST body is too large", 413);
               if (!last) return;
-              if (!simdjson::validate_utf8(buffer)) throw ApiError("POST body is not valid UTF-8", 415);
               rsp->cork([&]{
                 try {
-                  body_handler(QueryString{buffer});
+                  body_handler(
+                    parse_body(std::move(in_buffer)),
+                    [abort_flag, loop, rsp](uWS::MoveOnlyFunction<void (uWS::HttpResponse<SSL>*)>&& f) {
+                      if (*abort_flag) throw std::runtime_error("HTTP session aborted");
+                      loop->defer([abort_flag, rsp, f = std::move(f)] mutable {
+                        if (*abort_flag) return;
+                        rsp->cork([rsp, f = std::move(f)] mutable { f(rsp); });
+                      });
+                    }
+                  );
                   spdlog::debug("[POST {}] - {} {}", url, rsp->getRemoteAddressAsText(), user_agent);
                 } catch (...) {
-                  impl->handle_error(std::current_exception(), rsp, *error_meta, "POST", url);
+                  *abort_flag = true;
+                  impl->handle_error(current_exception(), rsp, *error_meta, "POST", url);
                 }
               });
             } catch (...) {
-              rsp->cork([&]{ impl->handle_error(std::current_exception(), rsp, *error_meta, "POST", url); });
+              rsp->cork([&]{ impl->handle_error(current_exception(), rsp, *error_meta, "POST", url); });
             }
           });
         } catch (...) {
-          impl->handle_error(std::current_exception(), rsp, *error_meta, "POST", url);
+          impl->handle_error(current_exception(), rsp, *error_meta, "POST", url);
           return;
         }
-      });
+      };
+    }
+
+    Router &&post(std::string pattern, PostHandler<std::string>&& handler, size_t max_size = 10 * 1024 * 1024) {
+      app.post(pattern, post_handler<std::string>(std::move(handler), max_size, {}, "", [](auto&& s){return s;}));
+      return std::move(*this);
+    }
+
+    Router &&post_form(std::string pattern, PostHandler<QueryString>&& handler, size_t max_size = 10 * 1024 * 1024) {
+      app.post(pattern, post_handler<QueryString>(std::move(handler), max_size, TYPE_FORM, "?", [](auto&& s){
+        if (!simdjson::validate_utf8(s)) throw ApiError("POST body is not valid UTF-8", 415);
+        return QueryString{s};
+      }));
       return std::move(*this);
     }
   };

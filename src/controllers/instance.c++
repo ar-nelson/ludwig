@@ -7,10 +7,11 @@
 #include "util/web.h++"
 #include "util/lambda_macros.h++"
 
-using std::function, std::min, std::nullopt, std::optional, std::pair,
-    std::prev, std::regex, std::regex_match, std::shared_ptr, std::string,
-    std::string_view, std::tuple, std::vector, flatbuffers::Offset,
-    flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot, flatbuffers::Vector;
+using std::function, std::max, std::min, std::nullopt, std::optional, std::pair,
+    std::prev, std::priority_queue, std::regex, std::regex_match,
+    std::shared_ptr, std::string, std::string_view, std::tuple, std::vector,
+    flatbuffers::Offset, flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot,
+    flatbuffers::Vector;
 namespace chrono = std::chrono;
 
 namespace Ludwig {
@@ -33,10 +34,10 @@ namespace Ludwig {
   );
 
   static inline auto rank_numerator(int64_t karma) -> double {
-    return std::log(std::max<int64_t>(1, 3 + karma));
+    return std::log(max<int64_t>(1, 3 + karma));
   }
   static inline auto rank_denominator(chrono::duration<double> time_diff) -> double {
-    return std::pow(std::max(0L, chrono::duration_cast<chrono::hours>(time_diff).count()) + 2L, RANK_GRAVITY);
+    return std::pow(max(0L, chrono::duration_cast<chrono::hours>(time_diff).count()) + 2L, RANK_GRAVITY);
   }
   template <typename T> static auto latest_comment_cmp(const T& a, const T& b) -> bool {
     return a.stats().latest_comment() > b.stats().latest_comment();
@@ -46,7 +47,7 @@ namespace Ludwig {
     return a.second < b.second;
   }
 
-  using RankedQueue = std::priority_queue<RankedId, vector<RankedId>, decltype(ranked_id_cmp)*>;
+  using RankedQueue = priority_queue<RankedId, vector<RankedId>, decltype(ranked_id_cmp)*>;
 
   template <class T, size_t PageSize>
   static inline auto finish_ranked_queue(
@@ -67,18 +68,6 @@ namespace Ludwig {
       }
     }
     return {};
-  }
-
-  template <class T> static inline auto get_created_at(ReadTxnBase& txn, uint64_t id) -> chrono::system_clock::time_point;
-  template <> inline auto get_created_at<ThreadDetail>(ReadTxnBase& txn, uint64_t id) -> chrono::system_clock::time_point {
-    const auto thread = txn.get_thread(id);
-    if (!thread) return chrono::system_clock::time_point::min();
-    return chrono::system_clock::time_point(chrono::seconds(thread->get().created_at()));
-  }
-  template <> inline auto get_created_at<CommentDetail>(ReadTxnBase& txn, uint64_t id) -> chrono::system_clock::time_point {
-    const auto comment = txn.get_comment(id);
-    if (!comment) return chrono::system_clock::time_point::min();
-    return chrono::system_clock::time_point(chrono::seconds(comment->get().created_at()));
   }
 
   template <class T, size_t PageSize = ITEMS_PER_PAGE>
@@ -107,7 +96,7 @@ namespace Ludwig {
       const auto rank = rank_numerator(stats->get().karma()) / denominator;
       if (rank >= max_rank) continue;
       queue.emplace(id, rank);
-      const auto latest_possible_timestamp = std::min(now, get_created_at<T>(txn, id) + ACTIVE_COMMENT_MAX_AGE);
+      const auto latest_possible_timestamp = min(now, T::get_created_at(txn, id) + ACTIVE_COMMENT_MAX_AGE);
       const auto [top_id, top_rank] = queue.top();
       const double
         min_possible_denominator =
@@ -143,7 +132,7 @@ namespace Ludwig {
     const auto now = system_clock::now();
     RankedQueue queue(ranked_id_cmp);
     for (auto id : iter_by_new) {
-      const auto timestamp = get_created_at<T>(txn, id);
+      const auto timestamp = T::get_created_at(txn, id);
       const auto stats = txn.get_post_stats(id);
       if (!stats) continue;
       const auto denominator = rank_denominator(now - timestamp);
@@ -176,7 +165,7 @@ namespace Ludwig {
     static constexpr auto id_time_cmp = [](const IdTime& a, const IdTime& b) -> bool { return a.second < b.second; };
     const auto now = system_clock::now();
     const auto max_time = from.value_or(now);
-    std::priority_queue<IdTime, vector<IdTime>, decltype(id_time_cmp)> queue;
+    priority_queue<IdTime, vector<IdTime>, decltype(id_time_cmp)> queue;
     for (uint64_t id : iter_by_new) {
       const auto stats = txn.get_post_stats(id);
       if (!stats) continue;
@@ -184,7 +173,7 @@ namespace Ludwig {
       if (timestamp >= max_time) continue;
       queue.emplace(id, timestamp);
       const auto [top_id, top_time] = queue.top();
-      const auto max_possible_time = std::min(now, get_created_at<T>(txn, id) + ACTIVE_COMMENT_MAX_AGE);
+      const auto max_possible_time = min(now, T::get_created_at(txn, id) + ACTIVE_COMMENT_MAX_AGE);
       if (max_possible_time > top_time) continue;
       queue.pop();
       if (auto entry = get_entry(top_id)) {
@@ -227,7 +216,7 @@ namespace Ludwig {
       case CommentSortType::Hot: {
         // TODO: Truncate when running out of total comments
         stlpb::static_vector<CommentDetail, ITEMS_PER_PAGE> entries;
-        auto page_cursor = ranked_hot<CommentDetail, ITEMS_PER_PAGE>(
+        auto page_cursor = ranked_hot<CommentDetail>(
           entries,
           txn,
           txn.list_comments_of_post_new(parent),
@@ -324,7 +313,7 @@ namespace Ludwig {
 
   auto InstanceController::hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void {
     if (!PKCS5_PBKDF2_HMAC(
-      password.str.data(), password.str.length(),
+      password.data.data(), password.data.length(),
       salt, 16,
       PASSWORD_HASH_ITERATIONS, EVP_sha256(),
       32, hash
@@ -354,7 +343,7 @@ namespace Ludwig {
     const auto user = session.user();
     if (session.remember() && system_clock::now() - system_clock::time_point(seconds(session.created_at())) >= hours(24)) {
       auto txn = db->open_write_txn();
-      auto new_session = txn.create_session(
+      const auto [id, expiration] = txn.create_session(
         user,
         ip,
         user_agent,
@@ -363,9 +352,9 @@ namespace Ludwig {
       );
       txn.delete_session(session_id);
       txn.commit();
-      return { { .user_id = user, .session_id = new_session.first, .expiration = new_session.second } };
+      return { { .user_id = user, .session_id = id, .expiration = system_clock::time_point(seconds(expiration))} };
     }
-    return { { .user_id = user, .session_id = session_id, .expiration = session.expires_at() } };
+    return { { .user_id = user, .session_id = session_id, .expiration = system_clock::time_point(seconds(session.expires_at())) } };
   }
   auto InstanceController::login(
     string_view username_or_email,
@@ -374,6 +363,7 @@ namespace Ludwig {
     string_view user_agent,
     bool remember
   ) -> LoginResponse {
+    using namespace chrono;
     uint8_t hash[32];
     auto txn = db->open_write_txn();
     const auto user_id_opt = username_or_email.find('@') == string_view::npos
@@ -397,16 +387,16 @@ namespace Ludwig {
       spdlog::debug("Tried to login with wrong password for user {}", username_or_email);
       throw ApiError("Invalid username or password", 400);
     }
-    const auto session = txn.create_session(
+    const auto [session_id, expiration] = txn.create_session(
       user_id,
       ip,
       user_agent,
       remember,
-      // "Remember me" lasts for a month, temporary sessions last for a day.
-      remember ? 60 * 60 * 25 * 30 : 60 * 60 * 24
+      remember ? duration_cast<seconds>(months{1}).count()
+        : duration_cast<seconds>(days{1}).count()
     );
     txn.commit();
-    return { .user_id = user_id, .session_id = session.first, .expiration = session.second };
+    return { .user_id = user_id, .session_id = session_id, .expiration = system_clock::time_point(seconds(expiration)) };
   }
   auto InstanceController::thread_detail(
     ReadTxnBase& txn,
@@ -591,7 +581,7 @@ namespace Ludwig {
     optional<DBIter> iter;
     switch (sort) {
       case SortType::Active:
-        out.next = ranked_active<ThreadDetail, ITEMS_PER_PAGE>(
+        out.next = ranked_active<ThreadDetail>(
           out.entries,
           txn,
           txn.list_threads_of_board_new(board_id),
@@ -601,7 +591,7 @@ namespace Ludwig {
         );
         goto done;
       case SortType::Hot:
-        out.next = ranked_hot<ThreadDetail, ITEMS_PER_PAGE>(
+        out.next = ranked_hot<ThreadDetail>(
           out.entries,
           txn,
           txn.list_threads_of_board_new(board_id),
@@ -611,7 +601,7 @@ namespace Ludwig {
         );
         goto done;
       case SortType::NewComments:
-        out.next = ranked_new_comments<ThreadDetail, ITEMS_PER_PAGE>(
+        out.next = ranked_new_comments<ThreadDetail>(
           out.entries,
           txn,
           txn.list_threads_of_board_new(board_id, new_comments_cursor(from, board_id)),
@@ -684,7 +674,7 @@ namespace Ludwig {
     optional<DBIter> iter;
     switch (sort) {
       case SortType::Active:
-        out.next = ranked_active<CommentDetail, ITEMS_PER_PAGE>(
+        out.next = ranked_active<CommentDetail>(
           out.entries,
           txn,
           txn.list_comments_of_board_new(board_id),
@@ -694,7 +684,7 @@ namespace Ludwig {
         );
         return out;
       case SortType::Hot:
-        out.next = ranked_hot<CommentDetail, ITEMS_PER_PAGE>(
+        out.next = ranked_hot<CommentDetail>(
           out.entries,
           txn,
           txn.list_comments_of_board_new(board_id),
@@ -704,7 +694,7 @@ namespace Ludwig {
         );
         return out;
       case SortType::NewComments:
-        out.next = ranked_new_comments<CommentDetail, ITEMS_PER_PAGE>(
+        out.next = ranked_new_comments<CommentDetail>(
           out.entries,
           txn,
           txn.list_comments_of_board_new(board_id, new_comments_cursor(from, board_id)),
@@ -789,7 +779,7 @@ namespace Ludwig {
     optional<DBIter> iter;
     switch (sort) {
       case SortType::Active:
-        out.next = ranked_active<ThreadDetail, ITEMS_PER_PAGE>(
+        out.next = ranked_active<ThreadDetail>(
           out.entries,
           txn,
           txn.list_threads_new(),
@@ -799,7 +789,7 @@ namespace Ludwig {
         );
         goto done;
       case SortType::Hot:
-        out.next = ranked_hot<ThreadDetail, ITEMS_PER_PAGE>(
+        out.next = ranked_hot<ThreadDetail>(
           out.entries,
           txn,
           txn.list_threads_new(),
@@ -809,7 +799,7 @@ namespace Ludwig {
         );
         goto done;
       case SortType::NewComments:
-        out.next = ranked_new_comments<ThreadDetail, ITEMS_PER_PAGE>(
+        out.next = ranked_new_comments<ThreadDetail>(
           out.entries,
           txn,
           txn.list_threads_new(new_comments_cursor(from)),
@@ -900,7 +890,7 @@ namespace Ludwig {
     optional<DBIter> iter;
     switch (sort) {
       case SortType::Active:
-        out.next = ranked_active<CommentDetail, ITEMS_PER_PAGE>(
+        out.next = ranked_active<CommentDetail>(
           out.entries,
           txn,
           txn.list_comments_new(),
@@ -910,7 +900,7 @@ namespace Ludwig {
         );
         return out;
       case SortType::Hot:
-        out.next = ranked_hot<CommentDetail, ITEMS_PER_PAGE>(
+        out.next = ranked_hot<CommentDetail>(
           out.entries,
           txn,
           txn.list_comments_new(),
@@ -920,7 +910,7 @@ namespace Ludwig {
         );
         return out;
       case SortType::NewComments:
-        out.next = ranked_new_comments<CommentDetail, ITEMS_PER_PAGE>(
+        out.next = ranked_new_comments<CommentDetail>(
           out.entries,
           txn,
           txn.list_comments_new(new_comments_cursor(from)),
@@ -1134,7 +1124,7 @@ namespace Ludwig {
     if (email && !regex_match(email->begin(), email->end(), email_regex)) {
       throw ApiError("Invalid email address", 400);
     }
-    if (password.str.length() < 8) {
+    if (password.data.length() < 8) {
       throw ApiError("Password must be at least 8 characters", 400);
     }
     if (txn.get_user_id_by_name(username)) {

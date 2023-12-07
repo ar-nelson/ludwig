@@ -1,6 +1,6 @@
 #pragma once
-#include <iostream>
 #include <algorithm>
+#include <string>
 #include <cstring>
 
 // constexpr base64 conversion, using a FixedString wrapper type.

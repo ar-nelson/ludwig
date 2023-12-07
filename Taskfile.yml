@@ -90,9 +90,9 @@ tasks:
       - gen-typescript-flatbuffers
       - build-debug
     cmds:
-      - rm -f ludwig.mdb ludwig.mdb-lock search.mdb search.mdb-lock random.dbdump.gz
-      - deno run extras/generate-mock-data.ts > random.dbdump.gz
-      - ./build.debug/ludwig --import random.dbdump.gz
+      - rm -f ludwig.mdb ludwig.mdb-lock search.mdb search.mdb-lock random.dbdump.zst
+      - deno run extras/generate-mock-data.ts | zstd > random.dbdump.zst
+      - ./build.debug/ludwig --import random.dbdump.zst
   html-sample:
     sources:
       - extras/static-sample-server.ts

@@ -327,13 +327,12 @@ table SettingRecord {
   value_str: string;
 }
 
-table VoteRecord {
-  post: uint64;
-  vote: Vote;
+table VoteBatch {
+  posts: [uint64];
 }
 
-table SubscriptionRecord {
-  board: uint64;
+table SubscriptionBatch {
+  boards: [uint64];
 }
 
 enum DumpType : ubyte {
@@ -346,8 +345,9 @@ enum DumpType : ubyte {
   Application,
   Invite,
   SettingRecord,
-  VoteRecord,
-  SubscriptionRecord
+  UpvoteBatch,
+  DownvoteBatch,
+  SubscriptionBatch
 }
 
 table Dump {

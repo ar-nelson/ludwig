@@ -20,13 +20,8 @@ add_library(asio STATIC
   asio/asio.cpp
   asio/asio_ssl.cpp
 )
-#if (LINUX)
-#  target_compile_definitions(asio PUBLIC ASIO_SEPARATE_COMPILATION ASIO_HAS_IO_URING ASIO_DISABLE_EPOLL ASIO_HAS_IO_URING_AS_DEFAULT)
-#  target_link_libraries(asio PUBLIC ssl crypto uring)
-#else()
-  target_compile_definitions(asio PUBLIC ASIO_SEPARATE_COMPILATION)
-  target_link_libraries(asio PUBLIC ssl crypto)
-#endif()
+target_compile_definitions(asio PUBLIC ASIO_SEPARATE_COMPILATION)
+target_link_libraries(asio PUBLIC ssl crypto)
 target_include_directories(asio PUBLIC asio/)
 
 add_library(uWS STATIC
@@ -148,6 +143,13 @@ set(GIF_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/giflib/)
 add_subdirectory(libwebp libwebp)
 add_dependencies(webp png_static jpeg giflib)
 target_include_directories(imagedec SYSTEM INTERFACE libwebp/imageio/)
+
+set(ZSTD_BUILD_STATIC ON)
+set(ZSTD_BUILD_SHARED OFF)
+set(ZSTD_BUILD_TESTS OFF)
+set(ZSTD_BUILD_PROGRAMS OFF)
+set(ZSTD_LEGACY_SUPPORT OFF)
+add_subdirectory(zstd/build/cmake zstd/build/cmake)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   add_subdirectory(catch2 catch2)

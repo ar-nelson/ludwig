@@ -124,6 +124,7 @@ set (ludwig_common_src
   src/util/rate_limiter.c++
   src/util/rich_text.c++
   src/util/thumbnailer.c++
+  src/util/zstd_db_dump.c++
   src/services/asio_event_bus.c++
   src/services/asio_http_client.c++
   src/services/db.c++
@@ -145,6 +146,7 @@ set (ludwig_libs
   imagedec
   jpeg
   LibXml2
+  libzstd_static
   png_static
   sentencepiece-static
   simdjson_static

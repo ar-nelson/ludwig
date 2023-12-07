@@ -13,3 +13,4 @@ vendor/simdjson
 vendor/spdlog
 vendor/uWS
 vendor/zlib
+vendor/zstd

@@ -15,24 +15,18 @@ import {
   Salt,
   SettingRecord,
   SortType,
-  SubscriptionRecord,
+  SubscriptionBatch,
   TextBlock,
   TextSpan,
   TextSpans,
   Thread,
   User,
-  Vote,
-  VoteRecord,
+  VoteBatch,
 } from "./flatbuffers/ludwig.ts";
+import { writeAllSync } from "https://deno.land/std@0.208.0/streams/mod.ts";
 import { faker } from "npm:@faker-js/faker";
-import {
-  Foras,
-  GzEncoder,
-} from "https://deno.land/x/denoflate@v2.1.4/src/deno/mod.ts";
 import { pbkdf2Sync } from "node:crypto";
 import * as flatbuffers from "npm:flatbuffers";
-
-await Foras.initBundledOnce();
 
 const PASSWORD_SALT = new TextEncoder().encode("0123456789abcdef");
 
@@ -418,7 +412,7 @@ function genComment(
   return { id, data: fbb.asUint8Array() };
 }
 
-async function genAll(scale = SCALE) {
+function genAll(scale = SCALE) {
   const instances = faker.helpers.multiple(genInstance, {
       count: Math.ceil(2 + Math.log10(scale)),
     }),
@@ -443,13 +437,12 @@ async function genAll(scale = SCALE) {
       to: Date(),
       count: scale * 100,
     }),
-    fbb = new flatbuffers.Builder(),
-    gz = new GzEncoder(),
     write = (id: bigint, type: DumpType, data: Uint8Array) => {
+      const fbb = new flatbuffers.Builder();
       fbb.finishSizePrefixed(
         Dump.createDump(fbb, id, type, Dump.createDataVector(fbb, data)),
       );
-      gz.write(new Foras.Memory(fbb.asUint8Array()));
+      writeAllSync(Deno.stdout, fbb.asUint8Array());
       fbb.clear();
     },
     writeSettingInt = (key: string, val: bigint) => {
@@ -567,40 +560,59 @@ async function genAll(scale = SCALE) {
   );
 
   writeSettingInt("next_id", BigInt(nextId));
+  const BATCH_SIZE = 1024;
 
-  for (const [post] of posts) {
-    const totalVotes = faker.number.int({ min: 0, max: users.length }),
-      voters = faker.helpers.arrayElements(users, totalVotes),
-      fbb = new flatbuffers.Builder();
-    for (const { id: user } of voters) {
+  for (const { id: user } of users) {
+    const fbb = new flatbuffers.Builder(),
+      totalVotes = faker.number.int({
+        min: Math.floor(posts.length * 0.3),
+        max: Math.ceil(posts.length * 0.9),
+      }),
+      votedPosts = faker.helpers.arrayElements(posts, totalVotes).map((x) =>
+        x[0]
+      ),
+      splitAt = Math.floor(votedPosts.length * 0.8),
+      upvoted = votedPosts.slice(0, splitAt),
+      downvoted = votedPosts.slice(splitAt);
+    for (let i = 0; i < upvoted.length; i += BATCH_SIZE) {
       fbb.clear();
-      fbb.finish(VoteRecord.createVoteRecord(
-        fbb,
-        post,
-        faker.helpers.arrayElement([
-          Vote.Upvote,
-          Vote.Upvote,
-          Vote.Upvote,
-          Vote.Upvote,
-          Vote.Downvote,
-        ]),
-      ));
-      write(user, DumpType.VoteRecord, fbb.asUint8Array());
+      fbb.finish(
+        VoteBatch.createVoteBatch(
+          fbb,
+          VoteBatch.createPostsVector(
+            fbb,
+            upvoted.slice(i, Math.min(i + BATCH_SIZE, upvoted.length)),
+          ),
+        ),
+      );
+      write(user, DumpType.UpvoteBatch, fbb.asUint8Array());
+    }
+    for (let i = 0; i < downvoted.length; i += BATCH_SIZE) {
+      fbb.clear();
+      fbb.finish(
+        VoteBatch.createVoteBatch(
+          fbb,
+          VoteBatch.createPostsVector(
+            fbb,
+            downvoted.slice(i, Math.min(i + BATCH_SIZE, downvoted.length)),
+          ),
+        ),
+      );
+      write(user, DumpType.DownvoteBatch, fbb.asUint8Array());
     }
   }
   for (const user of localUsers) {
     const fbb = new flatbuffers.Builder(),
       subCount = faker.number.int({ min: 2, max: boards.length * 0.75 }),
       subs = faker.helpers.arrayElements(boards, subCount);
-    for (const board of subs) {
-      fbb.clear();
-      fbb.finish(SubscriptionRecord.createSubscriptionRecord(fbb, board));
-      write(user, DumpType.SubscriptionRecord, fbb.asUint8Array());
-    }
+    fbb.finish(
+      SubscriptionBatch.createSubscriptionBatch(
+        fbb,
+        SubscriptionBatch.createBoardsVector(fbb, subs),
+      ),
+    );
+    write(user, DumpType.SubscriptionBatch, fbb.asUint8Array());
   }
-
-  gz.flush();
-  await Deno.stdout.write(gz.finish().copyAndDispose());
 }
 
-await genAll();
+genAll();

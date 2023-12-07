@@ -12,6 +12,7 @@ export enum DumpType {
   Application = 6,
   Invite = 7,
   SettingRecord = 8,
-  VoteRecord = 9,
-  SubscriptionRecord = 10
+  UpvoteBatch = 9,
+  DownvoteBatch = 10,
+  SubscriptionBatch = 11
 }

@@ -74,7 +74,12 @@ namespace Ludwig {
   public:
     uint8_t jwt_secret[JWT_SECRET_SIZE];
     DB(const char* filename, size_t map_size_mb = 1024);
-    DB(const char* filename, std::istream& dump_stream, std::optional<std::shared_ptr<SearchEngine>> search = {}, size_t map_size_mb = 1024);
+    DB(
+      const char* filename,
+      std::function<size_t (uint8_t*, size_t)> read,
+      std::optional<std::shared_ptr<SearchEngine>> search = {},
+      size_t map_size_mb = 1024
+    );
     DB(const DB&) = delete;
     auto operator=(const DB&) = delete;
     DB(DB&&);
@@ -189,6 +194,8 @@ namespace Ludwig {
     auto list_threads_of_domain(std::string_view domain, OptKV cursor = {}) -> DBIter;
 
     // TODO: DMs, Blocks, Admins/Mods, Mod Actions
+
+    auto dump(uWS::MoveOnlyFunction<void (const flatbuffers::span<uint8_t>&, bool)> on_data) -> void;
 
     friend class ReadTxnImpl;
   };

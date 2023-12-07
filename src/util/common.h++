@@ -13,6 +13,7 @@
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
 #include <uWebSockets/MoveOnlyFunction.h>
+#include <openssl/crypto.h>
 
 namespace Ludwig {
   constexpr uint64_t ID_MAX = std::numeric_limits<uint64_t>::max();
@@ -33,6 +34,24 @@ namespace Ludwig {
       duration_cast<seconds>(system_clock::now().time_since_epoch()).count()
     );
   }
+
+  struct SecretString {
+    std::string data;
+    SecretString(std::string&& from) { std::swap(data, from); }
+    SecretString(std::string_view from) : data(from) {
+      OPENSSL_cleanse((char*)from.data(), from.length());
+    };
+    // Special case: don't OPENSSL_cleanse string literals
+    SecretString(const char string_literal[]) : data(string_literal) {};
+
+    SecretString(const SecretString&) = delete;
+    SecretString& operator=(const SecretString&) = delete;
+    SecretString(SecretString&& from) { std::swap(data, from.data); }
+    SecretString& operator=(SecretString&& from) { std::swap(data, from.data); return *this; }
+    ~SecretString() { if (data.length()) OPENSSL_cleanse(data.data(), data.capacity()); }
+
+    operator std::string_view() { return data; }
+  };
 
   // Based on https://stackoverflow.com/a/53526139/548027
   struct Url {

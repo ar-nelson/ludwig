@@ -489,7 +489,7 @@ TEST_CASE_METHOD(Instance, "register and login", "[instance]") {
     }
 
     CHECK(login.user_id == id);
-    CHECK(login.expiration > now_s());
+    CHECK(login.expiration > std::chrono::system_clock::now());
 
     auto txn = controller->open_read_txn();
     CHECK(controller->validate_session(txn, login.session_id) == optional(id));

@@ -34,3 +34,6 @@
 [submodule "vendor/libxml2"]
 	path = vendor/libxml2
 	url = https://gitlab.gnome.org/GNOME/libxml2.git
+[submodule "vendor/zstd"]
+	path = vendor/zstd
+	url = https://github.com/facebook/zstd.git

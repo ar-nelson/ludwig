@@ -9,7 +9,7 @@ let
 
   rest = builtins.removeAttrs attrs ["pkgs" "buildInputs" "shellHook"];
 
-  extraBuildInputs = with pkgs; [cmake go-task nasm deno liburing];
+  extraBuildInputs = with pkgs; [cmake go-task nasm deno zstd];
   localBuildInputs = [libcxx libcxxabi clang-python llvmPackage.lldb];
   extraShellHook = shellHook;
 

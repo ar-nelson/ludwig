@@ -17,23 +17,9 @@
 namespace Ludwig {
   constexpr size_t ITEMS_PER_PAGE = 20;
 
-  struct SecretString {
-    std::string_view str;
-    bool can_cleanse;
-    SecretString(std::string_view str) : str(str), can_cleanse(true) {};
-
-    // Special case: don't OPENSSL_cleanse string literals
-    SecretString(const char string_literal[]) : str(string_literal), can_cleanse(false) {};
-
-    SecretString(const SecretString&) = delete;
-    SecretString& operator=(const SecretString&) = delete;
-    ~SecretString() {
-      if (can_cleanse) OPENSSL_cleanse((char*)str.data(), str.length());
-    }
-  };
-
   struct LoginResponse {
-    uint64_t user_id, session_id, expiration;
+    uint64_t user_id, session_id;
+    std::chrono::system_clock::time_point expiration;
   };
 
   struct PageCursor {

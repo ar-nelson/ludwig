@@ -1,5 +1,6 @@
 #include "util/common.h++"
 #include "util/rich_text.h++"
+#include "util/zstd_db_dump.h++"
 #include "services/db.h++"
 #include "services/asio_http_client.h++"
 #include "services/asio_event_bus.h++"
@@ -10,21 +11,21 @@
 #include "views/media.h++"
 #include <uWebSockets/App.h>
 #include <asio.hpp>
-#include <gzstream.h>
 #include <optparse.h>
-#include <fstream>
 #include <csignal>
 
 using namespace Ludwig;
-using std::lock_guard, std::make_shared, std::mutex, std::optional, std::shared_ptr, std::vector;
+using std::lock_guard, std::make_shared, std::mutex, std::optional,
+    std::runtime_error, std::shared_ptr, std::stoull, std::thread,
+    std::unique_ptr, std::vector;
 
-static vector<us_listen_socket_t*> global_sockets;
-static mutex global_sockets_mutex;
+static vector<std::function<void()>> on_close;
+static mutex on_close_mutex;
 
 void signal_handler(int) {
   spdlog::warn("Caught signal, shutting down.");
-  lock_guard<mutex> lock(global_sockets_mutex);
-  for (auto* socket : global_sockets) us_listen_socket_close(0, socket);
+  lock_guard<mutex> lock(on_close_mutex);
+  for (auto& f : on_close) f();
 }
 
 int main(int argc, char** argv) {
@@ -53,7 +54,10 @@ int main(int argc, char** argv) {
     .set_default("lmdb:search.mdb");
   parser.add_option("--import")
     .dest("import")
-    .help("database dump file to import; if present, database file (--db) must not exist yet");
+    .help("database dump file to import; if present, database file (--db) must not exist yet; exits after importing");
+  parser.add_option("--export")
+    .dest("export")
+    .help("database dump file to export to; exits after exporting");
   parser.add_option("--log-level")
     .dest("log_level")
     .help("log level (debug, info, warn, error, critical)")
@@ -72,14 +76,14 @@ int main(int argc, char** argv) {
 
   const optparse::Values options = parser.parse_args(argc, argv);
   const auto dbfile = options["db"].c_str();
-  const auto map_size = std::stoull(options["map_size"]);
-  const auto rate_limit = (double)std::stoull(options["rate_limit"]);
-  auto threads = std::stoull(options["threads"]);
+  const auto map_size = stoull(options["map_size"]);
+  const auto rate_limit = (double)stoull(options["rate_limit"]);
+  auto threads = stoull(options["threads"]);
   if (!threads) {
 #   ifdef LUDWIG_DEBUG
     threads = 1;
 #   else
-    threads = std::thread::hardware_concurrency();
+    threads = thread::hardware_concurrency();
 #   endif
   }
   const auto log_level = options["log_level"];
@@ -90,29 +94,65 @@ int main(int argc, char** argv) {
     const auto filename = options["search"].substr(5);
     search_engine = make_shared<LmdbSearchEngine>(filename, map_size);
   } else if (options["search"] != "none") {
-    spdlog::critical(R"(Invalid --search option: {} (must be "none" or "lmdb:filename.mdb")", options["search"]);
+    spdlog::critical(R"(Invalid --search option: {} (must be "none" or "lmdb:filename.mdb"))", options["search"]);
+    return EXIT_FAILURE;
   }
 
   if (options.is_set_by_user("import")) {
+    if (options.is_set_by_user("export")) {
+      spdlog::critical("Cannot --import and --export at the same time!");
+      return EXIT_FAILURE;
+    }
     const auto importfile = options["import"];
-    igzstream in(importfile.c_str(), std::ios_base::in);
-    spdlog::info("Importing database dump from {}", importfile);
-    DB db(dbfile, in, search_engine, map_size);
-    spdlog::info("Import complete. You can now start Ludwig without --import.");
-    return EXIT_SUCCESS;
+    uint64_t file_size = std::filesystem::file_size(importfile.c_str());
+    unique_ptr<FILE, int(*)(FILE*)> f(fopen(importfile.c_str(), "rb"), &fclose);
+    if (f == nullptr) {
+      spdlog::critical("Could not open {}: {}", importfile, strerror(errno));
+      return EXIT_FAILURE;
+    }
+    try {
+      spdlog::info("Importing database dump from {}", importfile);
+      zstd_db_dump_import(dbfile, f.get(), file_size, search_engine, map_size);
+      spdlog::info("Import complete. You can now start Ludwig without --import.");
+      return EXIT_SUCCESS;
+    } catch (const runtime_error& e) {
+      spdlog::critical("Import failed: {}", e.what());
+      return EXIT_FAILURE;
+    }
+  }
+
+  auto db = make_shared<DB>(dbfile, map_size);
+  if (options.is_set_by_user("export")) {
+    const auto exportfile = options["export"];
+    unique_ptr<FILE, int(*)(FILE*)> f(fopen(exportfile.c_str(), "wb"), &fclose);
+    if (f == nullptr) {
+      spdlog::critical("Could not open {}: {}", exportfile, strerror(errno));
+      return EXIT_FAILURE;
+    }
+    try {
+      spdlog::info("Exporting database dump to {}", exportfile);
+      auto txn = db->open_read_txn();
+      zstd_db_dump_export(txn, [&](auto&& buf, auto sz) {
+        fwrite(buf.get(), 1, sz, f.get());
+      });
+      spdlog::info("Export complete.");
+      return EXIT_SUCCESS;
+    } catch (const runtime_error& e) {
+      spdlog::critical("Export failed: {}", e.what());
+      return EXIT_FAILURE;
+    }
   }
 
   const auto port = std::stoi(options["port"]);
   if (port < 1 || port > 65535) {
     spdlog::critical("Invalid port: {}", options["port"]);
-    return 1;
+    return EXIT_FAILURE;
   }
 
   AsioThreadPool pool(threads);
   auto rate_limiter = make_shared<KeyedRateLimiter>(rate_limit / 300.0, rate_limit);
   auto http_client = make_shared<AsioHttpClient>(pool.io);
   auto event_bus = make_shared<AsioEventBus>(pool.io);
-  auto db = make_shared<DB>(dbfile, map_size);
   auto xml_ctx = make_shared<LibXmlContext>();
   auto rich_text = make_shared<RichTextParser>(xml_ctx);
   auto instance_c = make_shared<InstanceController>(db, http_client, rich_text, event_bus, search_engine);
@@ -130,15 +170,15 @@ int main(int argc, char** argv) {
   sigaction(SIGINT, &sigint_handler, nullptr);
   sigaction(SIGTERM, &sigterm_handler, nullptr);
 
-  vector<std::thread> running_threads(threads - 1);
+  vector<thread> running_threads(threads - 1);
   auto run = [&] {
     uWS::App app;
     media_routes(app, remote_media_c);
     webapp_routes(app, instance_c, rich_text, rate_limiter);
-    app.listen(port, [port](auto *listen_socket) {
+    app.listen(port, [port, app = &app](auto *listen_socket) {
       if (listen_socket) {
-        lock_guard<mutex> lock(global_sockets_mutex);
-        global_sockets.push_back(listen_socket);
+        lock_guard<mutex> lock(on_close_mutex);
+        on_close.push_back([app] { app->close(); });
         spdlog::info("Thread listening on port {}", port);
       }
     }).run();
@@ -148,7 +188,7 @@ int main(int argc, char** argv) {
   pool.stop();
   for (auto& th : running_threads) if (th.joinable()) th.join();
 
-  if (!global_sockets.empty()) {
+  if (!on_close.empty()) {
     spdlog::info("Shut down cleanly");
     return EXIT_SUCCESS;
   } else {

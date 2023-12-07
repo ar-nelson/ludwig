@@ -4,13 +4,13 @@
 
 using flatbuffers::FlatBufferBuilder, flatbuffers::Offset, std::nullopt, std::optional, std::string,
     std::string_view, std::vector;
+namespace chrono = std::chrono;
+using namespace std::literals;
 
 namespace Ludwig {
 
   static constexpr uint8_t FETCH_MAX_TRIES = 6;
-  static constexpr uint64_t FETCH_BACKOFF_DELAYS_S[FETCH_MAX_TRIES] = {
-    0, 60, 60 * 5, 3600, 86400, 86400 * 7
-  };
+  static constexpr chrono::seconds FETCH_BACKOFF_DELAYS[FETCH_MAX_TRIES] = { 0s, 1min, 5min, 1h, 24h, 24h * 7 };
 
   static inline auto make_null_board() -> FlatBufferBuilder {
     FlatBufferBuilder fbb;
@@ -199,13 +199,14 @@ namespace Ludwig {
     return maybe_local_board() && login && (login->local_user().admin() || login->id == maybe_local_board()->get().owner());
   }
   auto ThreadDetail::should_fetch_card() const noexcept -> bool {
+    using namespace chrono;
     if (!thread().content_url()) return false;
     const auto url = Url::parse(thread().content_url()->str());
     if (!url || !url->is_http_s()) return false;
     const auto& card = link_card();
     return !card.fetch_complete() &&
       card.fetch_tries() < FETCH_MAX_TRIES &&
-      now_s() > card.last_fetch_at().value_or(0) + FETCH_BACKOFF_DELAYS_S[card.fetch_tries()];
+      system_clock::now() > system_clock::time_point(seconds(card.last_fetch_at().value_or(0))) + FETCH_BACKOFF_DELAYS[card.fetch_tries()];
   }
 
   static inline auto opt_str(string_view s) -> optional<string> {

@@ -333,8 +333,12 @@ namespace Ludwig {
     }
   };
 
-  DB::DB(const char* filename, std::istream& dump_stream, optional<shared_ptr<SearchEngine>> search, size_t map_size_mb) :
-    map_size(map_size_mb * MiB - (map_size_mb * MiB) % (size_t)sysconf(_SC_PAGESIZE)) {
+  DB::DB(
+    const char* filename,
+    function<size_t (uint8_t*, size_t)> read,
+    optional<shared_ptr<SearchEngine>> search,
+    size_t map_size_mb
+  ) : map_size(map_size_mb * MiB - (map_size_mb * MiB) % (size_t)sysconf(_SC_PAGESIZE)) {
     {
       struct stat stat_buf;
       if (stat(filename, &stat_buf) == 0) {
@@ -355,23 +359,23 @@ namespace Ludwig {
     DeferDelete on_error{ env, filename };
     auto txn = open_write_txn();
     auto buf = std::make_unique<uint8_t[]>(DUMP_ENTRY_MAX_SIZE);
-    while (dump_stream) {
-      dump_stream.read((char*)buf.get(), 4);
-      const auto got_bytes = dump_stream ? 4 : dump_stream.gcount();
-      if (got_bytes < 4) break;
+    while (read(buf.get(), 4) == 4) {
       const auto len = flatbuffers::GetSizePrefixedBufferLength(buf.get());
       if (len > DUMP_ENTRY_MAX_SIZE) {
         throw runtime_error(fmt::format("DB dump entry is larger than max of {}MiB", DUMP_ENTRY_MAX_SIZE / MiB));
       } else if (len < 4) {
         throw runtime_error("DB dump entry is less than 4 bytes; this shouldn't be possible");
       } else if (len > 4) {
-        dump_stream.read((char*)buf.get() + 4, len - 4);
-        const auto got_bytes = dump_stream ? len - 4 : dump_stream.gcount();
-        if (got_bytes != len - 4) {
+        const auto bytes = read(buf.get() + 4, len - 4);
+        if (bytes != len - 4) {
           throw runtime_error("Did not read the expected number of bytes (truncated DB dump entry?)");
         }
       }
       const auto entry = flatbuffers::GetSizePrefixedRoot<Dump>(buf.get());
+      Verifier verifier(buf.get(), len);
+      if (!entry->Verify(verifier)) {
+        throw runtime_error("FlatBuffer verification failed on read");
+      }
       const span<uint8_t> span((uint8_t*)entry->data()->data(), entry->data()->size());
       switch (entry->type()) {
         case DumpType::User:
@@ -405,14 +409,25 @@ namespace Ludwig {
           }
           break;
         }
-        case DumpType::VoteRecord: {
-          const auto rec = GetRoot<VoteRecord>(span.data());
-          txn.set_vote(entry->id(), rec->post(), rec->vote());
+        case DumpType::UpvoteBatch: {
+          const auto batch = GetRoot<VoteBatch>(span.data());
+          for (const auto post : *batch->posts()) {
+            txn.set_vote(entry->id(), post, Vote::Upvote);
+          }
           break;
         }
-        case DumpType::SubscriptionRecord: {
-          const auto rec = GetRoot<SubscriptionRecord>(span.data());
-          txn.set_subscription(entry->id(), rec->board(), true);
+        case DumpType::DownvoteBatch: {
+          const auto batch = GetRoot<VoteBatch>(span.data());
+          for (const auto post : *batch->posts()) {
+            txn.set_vote(entry->id(), post, Vote::Downvote);
+          }
+          break;
+        }
+        case DumpType::SubscriptionBatch: {
+          const auto batch = GetRoot<SubscriptionBatch>(span.data());
+          for (const auto board : *batch->boards()) {
+            txn.set_subscription(entry->id(), board, true);
+          }
           break;
         }
         default:
@@ -939,6 +954,129 @@ namespace Ludwig {
       fn(k, v);
       err = mdb_cursor_del(cur, 0) || mdb_cursor_get(cur, &k, &v, MDB_NEXT);
     }
+  }
+
+  auto ReadTxnBase::dump(uWS::MoveOnlyFunction<void (const flatbuffers::span<uint8_t>&, bool)> on_data) -> void {
+    FlatBufferBuilder fbb, fbb2;
+    MDB_val k, v, v2;
+    MDB_cursor* cur;
+    // Settings
+    int err = mdb_cursor_open(txn, db.dbis[Settings], &cur);
+    bool first = true;
+    for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) {
+      if (first) first = false;
+      else {
+        on_data(fbb.GetBufferSpan(), false);
+        fbb.Clear();
+      }
+      fbb2.Finish(CreateSettingRecord(fbb2, fbb2.CreateString((const char*)k.mv_data, k.mv_size), 0, fbb2.CreateString((const char*)v.mv_data, v.mv_size)));
+      fbb.FinishSizePrefixed(CreateDump(fbb, 0, DumpType::SettingRecord, fbb.CreateVector(fbb2.GetBufferPointer(), fbb2.GetSize())));
+      fbb2.Clear();
+    }
+    if (err != MDB_NOTFOUND) throw DBError("Export failed (step: settings)", err);
+    mdb_cursor_close(cur);
+    // Users
+    err = mdb_cursor_open(txn, db.dbis[User_User], &cur);
+    for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) {
+      on_data(fbb.GetBufferSpan(), false);
+      fbb.Clear();
+      fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::User, fbb.CreateVector((uint8_t*)v.mv_data, v.mv_size)));
+      err = mdb_get(txn, db.dbis[LocalUser_User], &k, &v2);
+      if (!err) {
+        on_data(fbb.GetBufferSpan(), false);
+        fbb.Clear();
+        fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::LocalUser, fbb.CreateVector((uint8_t*)v2.mv_data, v2.mv_size)));
+      } else if (err == MDB_NOTFOUND) err = 0;
+    }
+    if (err != MDB_NOTFOUND) throw DBError("Export failed (step: users)", err);
+    mdb_cursor_close(cur);
+    // Boards
+    err = mdb_cursor_open(txn, db.dbis[Board_Board], &cur);
+    for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) {
+      on_data(fbb.GetBufferSpan(), false);
+      fbb.Clear();
+      fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::Board, fbb.CreateVector((uint8_t*)v.mv_data, v.mv_size)));
+      err = mdb_get(txn, db.dbis[LocalBoard_Board], &k, &v2);
+      if (!err) {
+        on_data(fbb.GetBufferSpan(), false);
+        fbb.Clear();
+        fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::LocalBoard, fbb.CreateVector((uint8_t*)v2.mv_data, v2.mv_size)));
+      } else if (err == MDB_NOTFOUND) err = 0;
+    }
+    if (err != MDB_NOTFOUND) throw DBError("Export failed (step: boards)", err);
+    mdb_cursor_close(cur);
+    // Threads
+    err = mdb_cursor_open(txn, db.dbis[Thread_Thread], &cur);
+    for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) {
+      on_data(fbb.GetBufferSpan(), false);
+      fbb.Clear();
+      fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::Thread, fbb.CreateVector((uint8_t*)v.mv_data, v.mv_size)));
+    }
+    if (err != MDB_NOTFOUND) throw DBError("Export failed (step: threads)", err);
+    mdb_cursor_close(cur);
+    // Comments
+    err = mdb_cursor_open(txn, db.dbis[Comment_Comment], &cur);
+    for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) {
+      on_data(fbb.GetBufferSpan(), false);
+      fbb.Clear();
+      fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::Comment, fbb.CreateVector((uint8_t*)v.mv_data, v.mv_size)));
+    }
+    if (err != MDB_NOTFOUND) throw DBError("Export failed (step: comments)", err);
+    mdb_cursor_close(cur);
+    // Votes
+    spdlog::info("in votes step");
+    err = mdb_cursor_open(txn, db.dbis[UpvotePost_User], &cur);
+    for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT_NODUP)) {
+      for (err = mdb_cursor_get(cur, &k, &v, MDB_GET_MULTIPLE); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT_MULTIPLE)) {
+        on_data(fbb.GetBufferSpan(), false);
+        spdlog::info("upvote batch of {}", v.mv_size / sizeof(uint64_t));
+        fbb.Clear();
+        fbb2.Finish(CreateVoteBatch(fbb2, fbb2.CreateVector((uint64_t*)v.mv_data, v.mv_size / sizeof(uint64_t))));
+        fbb.FinishSizePrefixed(
+          CreateDump(fbb, val_as<uint64_t>(k), DumpType::UpvoteBatch, fbb.CreateVector(fbb2.GetBufferPointer(), fbb2.GetSize()))
+        );
+        fbb2.Clear();
+      }
+      if (err != MDB_NOTFOUND) throw DBError("Export failed (step: upvotes)", err);
+      err = 0;
+    }
+    if (err != MDB_NOTFOUND) throw DBError("Export failed (step: upvotes)", err);
+    mdb_cursor_close(cur);
+    err = mdb_cursor_open(txn, db.dbis[DownvotePost_User], &cur);
+    for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT_NODUP)) {
+      for (err = mdb_cursor_get(cur, &k, &v, MDB_GET_MULTIPLE); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT_MULTIPLE)) {
+        on_data(fbb.GetBufferSpan(), false);
+        spdlog::info("downvote batch of {}", v.mv_size / sizeof(uint64_t));
+        fbb.Clear();
+        fbb2.Finish(CreateVoteBatch(fbb2, fbb2.CreateVector((uint64_t*)v.mv_data, v.mv_size / sizeof(uint64_t))));
+        fbb.FinishSizePrefixed(
+          CreateDump(fbb, val_as<uint64_t>(k), DumpType::DownvoteBatch, fbb.CreateVector(fbb2.GetBufferPointer(), fbb2.GetSize()))
+        );
+        fbb2.Clear();
+      }
+      if (err != MDB_NOTFOUND) throw DBError("Export failed (step: downvotes)", err);
+      err = 0;
+    }
+    if (err != MDB_NOTFOUND) throw DBError("Export failed (step: downvotes)", err);
+    mdb_cursor_close(cur);
+    // Subscriptions
+    err = mdb_cursor_open(txn, db.dbis[BoardsSubscribed_User], &cur);
+    for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT_NODUP)) {
+      for (err = mdb_cursor_get(cur, &k, &v, MDB_GET_MULTIPLE); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT_MULTIPLE)) {
+        on_data(fbb.GetBufferSpan(), false);
+        fbb.Clear();
+        fbb2.Finish(CreateSubscriptionBatch(fbb2, fbb2.CreateVector((uint64_t*)v.mv_data, v.mv_size / sizeof(uint64_t))));
+        fbb.FinishSizePrefixed(
+          CreateDump(fbb, val_as<uint64_t>(k), DumpType::SubscriptionBatch, fbb.CreateVector(fbb2.GetBufferPointer(), fbb2.GetSize()))
+        );
+        fbb2.Clear();
+      }
+      if (err != MDB_NOTFOUND) throw DBError("Export failed (step: subscriptions)", err);
+      err = 0;
+    }
+    if (err != MDB_NOTFOUND) throw DBError("Export failed (step: subscriptions)", err);
+    mdb_cursor_close(cur);
+    on_data(fbb.GetBufferSpan(), true);
   }
 
   auto WriteTxn::next_id() -> uint64_t {
@@ -1691,7 +1829,9 @@ namespace Ludwig {
     if (!diff) return;
     const auto thread_opt = get_thread(post_id);
     const auto comment_opt = thread_opt ? nullopt : get_comment(post_id);
-    assert(thread_opt || comment_opt);
+    if (!thread_opt && !comment_opt) {
+      throw DBError(fmt::format("Cannot set vote on post {:x}", post_id), MDB_NOTFOUND);
+    }
     const auto op_id = thread_opt ? thread_opt->get().author() : comment_opt->get().author();
     spdlog::debug("Setting vote from user {:x} on post {:x} to {}", user_id, post_id, (int8_t)vote);
     switch (vote) {
