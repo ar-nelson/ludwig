@@ -65,12 +65,13 @@ namespace Ludwig {
     return fbb;
   }
 
-  const FlatBufferBuilder ThreadDetail::null_board = make_null_board();
-  const FlatBufferBuilder ThreadDetail::null_user = make_null_user();
-  const FlatBufferBuilder ThreadDetail::null_link_card = make_null_link_card();
-  const FlatBufferBuilder CommentDetail::null_board = make_null_board();
-  const FlatBufferBuilder CommentDetail::null_user = make_null_user();
-  const FlatBufferBuilder CommentDetail::null_thread = make_null_thread();
+  const FlatBufferBuilder
+    ThreadDetail::null_board = make_null_board(),
+    ThreadDetail::null_user = make_null_user(),
+    ThreadDetail::null_link_card = make_null_link_card(),
+    CommentDetail::null_board = make_null_board(),
+    CommentDetail::null_user = make_null_user(),
+    CommentDetail::null_thread = make_null_thread();
 
   auto ThreadDetail::can_view(Login login) const noexcept -> bool {
     if (
@@ -217,12 +218,24 @@ namespace Ludwig {
   auto SiteDetail::get(ReadTxnBase& txn) -> SiteDetail {
     return {
       .name = string(txn.get_setting_str(SettingsKey::name)),
-      .domain = string(txn.get_setting_str(SettingsKey::domain)),
+      .base_url = string(txn.get_setting_str(SettingsKey::base_url)),
       .description = string(txn.get_setting_str(SettingsKey::description)),
+      .public_key_pem = string(txn.get_setting_str(SettingsKey::public_key)),
       .icon_url = opt_str(txn.get_setting_str(SettingsKey::icon_url)),
       .banner_url = opt_str(txn.get_setting_str(SettingsKey::banner_url)),
+      .application_question = opt_str(txn.get_setting_str(SettingsKey::application_question)),
+      .home_page_type = static_cast<HomePageType>(txn.get_setting_int(SettingsKey::home_page_type)),
+      .default_board_id = txn.get_setting_int(SettingsKey::default_board_id),
+      .post_max_length = txn.get_setting_int(SettingsKey::post_max_length),
+      .created_at = txn.get_setting_int(SettingsKey::created_at),
+      .updated_at = txn.get_setting_int(SettingsKey::updated_at),
+      .setup_done = !!txn.get_setting_int(SettingsKey::setup_done),
       .javascript_enabled = !!txn.get_setting_int(SettingsKey::javascript_enabled),
       .infinite_scroll_enabled = !!txn.get_setting_int(SettingsKey::infinite_scroll_enabled),
+      .votes_enabled = !!txn.get_setting_int(SettingsKey::votes_enabled),
+      .downvotes_enabled = !!txn.get_setting_int(SettingsKey::downvotes_enabled),
+      .cws_enabled = !!txn.get_setting_int(SettingsKey::cws_enabled),
+      .require_login_to_view = !!txn.get_setting_int(SettingsKey::require_login_to_view),
       .board_creation_admin_only = !!txn.get_setting_int(SettingsKey::board_creation_admin_only),
       .registration_enabled = !!txn.get_setting_int(SettingsKey::registration_enabled),
       .registration_application_required = !!txn.get_setting_int(SettingsKey::registration_application_required),

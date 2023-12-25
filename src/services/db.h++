@@ -5,6 +5,7 @@
 #include "services/search_engine.h++"
 #include "models/db.h++"
 #include <atomic>
+#include <openssl/evp.h>
 
 namespace Ludwig {
   static inline auto karma_uint(int64_t karma) -> uint64_t {
@@ -25,14 +26,19 @@ namespace Ludwig {
     }
   };
 
-  class SettingsKey {
-  public:
+  namespace SettingsKey {
     inline static constexpr std::string_view
+      // Not exported
+      site_stats {"site_stats"},
+      admins {"admins"},
+
+      // Exported
       next_id {"next_id"},
+      setup_done {"setup_done"},
       jwt_secret {"jwt_secret"},
       private_key {"private_key"},
       public_key {"public_key"},
-      domain {"domain"},
+      base_url {"base_url"},
       created_at {"created_at"},
       updated_at {"updated_at"},
       name {"name"},
@@ -40,6 +46,7 @@ namespace Ludwig {
       icon_url {"icon_url"},
       banner_url {"banner_url"},
       post_max_length {"post_max_length"},
+      home_page_type {"home_page_type"},
       media_upload_enabled {"media_upload_enabled"},
       image_max_bytes {"image_max_bytes"},
       video_max_bytes {"video_max_bytes"},
@@ -51,7 +58,17 @@ namespace Ludwig {
       registration_invite_required {"registration_invite_required"},
       invite_admin_only {"invite_admin_only"},
       federation_enabled {"federation_enabled"},
-      federate_cw_content {"federate_cw_content"};
+      federate_cw_content {"federate_cw_content"},
+      application_question {"application_question"},
+      votes_enabled {"votes_enabled"},
+      downvotes_enabled {"downvotes_enabled"},
+      cws_enabled {"cws_enabled"},
+      require_login_to_view {"require_login_to_view"},
+      default_board_id {"default_board_id"};
+
+    static inline auto is_exported(std::string_view key) -> bool {
+      return key != site_stats && key != admins;
+    }
   };
 
   class ReadTxnBase;
@@ -72,7 +89,6 @@ namespace Ludwig {
     std::atomic<uint8_t> session_counter;
     auto init_env(const char* filename, MDB_txn** txn) -> int;
   public:
-    uint8_t jwt_secret[JWT_SECRET_SIZE];
     DB(const char* filename, size_t map_size_mb = 1024);
     DB(
       const char* filename,
@@ -94,8 +110,6 @@ namespace Ludwig {
     friend class WriteTxn;
   };
 
-  template <typename T> using OptRef = std::optional<std::reference_wrapper<const T>>;
-
   class ReadTxnBase {
   protected:
     DB& db;
@@ -113,14 +127,18 @@ namespace Ludwig {
 
     auto get_setting_str(std::string_view key) -> std::string_view;
     auto get_setting_int(std::string_view key) -> uint64_t;
-
-    auto get_session(uint64_t session_id) -> OptRef<Session>;
+    auto get_jwt_secret() -> JwtSecret;
+    auto get_public_key() -> std::unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)>;
+    auto get_private_key() -> std::unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)>;
+    auto get_site_stats() -> const SiteStats&;
+    auto get_admin_list() -> std::span<uint64_t>;
+    auto get_session(uint64_t session_id) -> OptRef<const Session>;
 
     auto get_user_id_by_name(std::string_view name) -> std::optional<uint64_t>;
     auto get_user_id_by_email(std::string_view email) -> std::optional<uint64_t>;
-    auto get_user(uint64_t id) -> OptRef<User>;
-    auto get_user_stats(uint64_t id) -> OptRef<UserStats>;
-    auto get_local_user(uint64_t id) -> OptRef<LocalUser>;
+    auto get_user(uint64_t id) -> OptRef<const User>;
+    auto get_user_stats(uint64_t id) -> OptRef<const UserStats>;
+    auto get_local_user(uint64_t id) -> OptRef<const LocalUser>;
     auto count_local_users() -> uint64_t;
     auto list_users_alphabetical(std::optional<std::string_view> cursor = {}) -> DBIter;
     auto list_users_new(OptKV cursor = {}) -> DBIter;
@@ -131,9 +149,9 @@ namespace Ludwig {
     auto is_user_subscribed_to_board(uint64_t user_id, uint64_t board_id) -> bool;
 
     auto get_board_id_by_name(std::string_view name) -> std::optional<uint64_t>;
-    auto get_board(uint64_t id) -> OptRef<Board>;
-    auto get_board_stats(uint64_t id) -> OptRef<BoardStats>;
-    auto get_local_board(uint64_t name) -> OptRef<LocalBoard>;
+    auto get_board(uint64_t id) -> OptRef<const Board>;
+    auto get_board_stats(uint64_t id) -> OptRef<const BoardStats>;
+    auto get_local_board(uint64_t name) -> OptRef<const LocalBoard>;
     auto count_local_boards() -> uint64_t;
     auto list_boards_alphabetical(std::optional<std::string_view> cursor = {}) -> DBIter;
     auto list_boards_new(OptKV cursor = {}) -> DBIter;
@@ -144,8 +162,8 @@ namespace Ludwig {
     auto list_subscribed_boards(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
     auto list_created_boards(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
 
-    auto get_thread(uint64_t id) -> OptRef<Thread>;
-    auto get_post_stats(uint64_t id) -> OptRef<PostStats>;
+    auto get_thread(uint64_t id) -> OptRef<const Thread>;
+    auto get_post_stats(uint64_t id) -> OptRef<const PostStats>;
     auto list_threads_new(OptKV cursor = {}) -> DBIter;
     auto list_threads_old(OptKV cursor = {}) -> DBIter;
     auto list_threads_top(OptKV cursor = {}) -> DBIter;
@@ -184,13 +202,13 @@ namespace Ludwig {
     auto has_user_hidden_user(uint64_t user_id, uint64_t hidden_user_id) -> bool;
     auto has_user_hidden_board(uint64_t user_id, uint64_t board_id) -> bool;
 
-    auto get_application(uint64_t user_id) -> OptRef<Application>;
+    auto get_application(uint64_t user_id) -> OptRef<const Application>;
     auto list_applications(OptCursor cursor = {}) -> DBIter;
 
-    auto get_invite(uint64_t invite_id) -> OptRef<Invite>;
+    auto get_invite(uint64_t invite_id) -> OptRef<const Invite>;
     auto list_invites_from_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
 
-    auto get_link_card(std::string_view url) -> OptRef<LinkCard>;
+    auto get_link_card(std::string_view url) -> OptRef<const LinkCard>;
     auto list_threads_of_domain(std::string_view domain, OptKV cursor = {}) -> DBIter;
 
     // TODO: DMs, Blocks, Admins/Mods, Mod Actions

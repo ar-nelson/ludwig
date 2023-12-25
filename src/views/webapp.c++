@@ -338,7 +338,7 @@ namespace Ludwig {
             R"(<link rel="canonical" href="{0}{1}">)"
             R"(<meta property="og:url" content="{0}{1}">)"
             R"(<meta property="twitter:url" content="{0}{1}">)",
-            Escape{m.site->domain}, Escape{*opt.canonical_path}
+            Escape{m.site->base_url}, Escape{*opt.canonical_path}
           );
         }
         if (opt.page_title) {
@@ -347,7 +347,7 @@ namespace Ludwig {
             R"(<meta property="og:title" content="{0} - {1}">)"
             R"(<meta property="twitter:title" content="{0} - {1}">)"
             R"(<meta property="og:type" content="website">)",
-            Escape{m.site->domain}, Escape{*opt.page_title}
+            Escape{m.site->base_url}, Escape{*opt.page_title}
           );
         }
         if (opt.card_image) {
@@ -601,34 +601,15 @@ namespace Ludwig {
         return *this;
       }
 
-      auto write_board_list(
-        const PageOf<BoardDetail>& list,
-        string_view base_url,
-        bool include_ol = true
-      ) noexcept -> ResponseWriter& {
-        if (include_ol) write(R"(<ol class="board-list" id="top-level-list">)");
-        for (auto& entry : list.entries) {
-          write(R"(<li class="board-list-entry"><h2 class="board-title">)");
-          write_board_link(entry.board());
-          write("</h2></li>");
-        }
-        if (include_ol) write("</ol>");
-        return write_pagination(base_url, list.is_first, list.next);
+      auto write_board_list_entry(const BoardDetail& entry) {
+        write(R"(<li class="board-list-entry"><h2 class="board-title">)");
+        write_board_link(entry.board());
+        write("</h2></li>");
       }
 
-      auto write_user_list(
-        const PageOf<UserDetail>& list,
-        string_view base_url,
-        Login login = {},
-        bool include_ol = true
-      ) noexcept -> ResponseWriter& {
-        if (include_ol) write(R"(<ol class="user-list" id="top-level-list">)");
-        for (auto& entry : list.entries) {
-          write(R"(<li class="user-list-entry">)");
-          write_user_link(entry.user(), login);
-        }
-        if (include_ol) write("</ol>");
-        return write_pagination(base_url, list.is_first, list.next);
+      auto write_user_list_entry(const UserDetail& entry, Login login = {}) {
+        write(R"(<li class="user-list-entry">)");
+        write_user_link(entry.user(), login);
       }
 
       template <class T> auto write_sort_select(string_view, T) noexcept -> ResponseWriter&;
@@ -1052,23 +1033,6 @@ namespace Ludwig {
         return write(is_list_item ? "</div></article>" : "</div></div>");
       }
 
-      auto write_thread_list(
-        const PageOf<ThreadDetail>& list,
-        string_view base_url,
-        Login login,
-        bool include_ol,
-        bool show_user,
-        bool show_board,
-        bool show_images
-      ) noexcept -> ResponseWriter& {
-        if (include_ol) write(R"(<ol class="thread-list" id="top-level-list">)");
-        for (const auto& thread : list.entries) {
-          write_thread_entry(thread, login, true, show_user, show_board, show_images);
-        }
-        if (include_ol) write("</ol>");
-        return write_pagination(base_url, list.is_first, list.next);
-      }
-
       auto write_comment_entry(
         const CommentDetail& comment,
         Login login,
@@ -1131,27 +1095,6 @@ namespace Ludwig {
         return write(is_list_item ? "</div></article>" : "</div></div>");
       }
 
-      auto write_comment_list(
-        const PageOf<CommentDetail>& list,
-        string_view base_url,
-        Login login,
-        bool include_ol,
-        bool show_user,
-        bool show_thread,
-        bool show_images
-      ) noexcept -> ResponseWriter& {
-        if (include_ol) write(R"(<ol class="comment-list" id="top-level-list">)");
-        for (const auto& comment : list.entries) {
-          write_comment_entry(
-            comment, login,
-            true, false,
-            show_user, show_thread, show_images
-          );
-        }
-        if (include_ol) write("</ol>");
-        return write_pagination(base_url, list.is_first, list.next);
-      }
-
       auto write_search_result_list(
         std::vector<InstanceController::SearchResultDetail> list,
         Login login,
@@ -1159,7 +1102,7 @@ namespace Ludwig {
       ) noexcept -> ResponseWriter& {
         if (include_ol) write(R"(<ol class="search-list" id="top-level-list">)");
         for (const auto& entry : list) {
-          std::visit(overload{
+          visit(overload{
             [&](const UserDetail& user) {
               write("<li>");
               write_user_link(user.user(), login);
@@ -1472,7 +1415,7 @@ namespace Ludwig {
           error_banner(error),
           Escape{site->name}, Escape{site->description},
           Escape{site->icon_url.value_or("")}, Escape{site->banner_url.value_or("")},
-          site->max_post_length,
+          site->post_max_length,
           site->javascript_enabled ? " checked" : "", site->board_creation_admin_only ? " checked" : "",
           site->registration_enabled ? " checked" : "", site->registration_application_required ? " checked" : "",
           site->registration_invite_required ? " checked" : "", site->invite_admin_only ? " checked" : ""
@@ -1771,8 +1714,6 @@ namespace Ludwig {
       return {};
     }
 
-    using PostList = std::variant<PageOf<ThreadDetail>, PageOf<CommentDetail>>;
-
     auto feed_route(uint64_t feed_id, Response rsp, Request req, Meta& m) -> void {
       auto txn = controller->open_read_txn();
       m.populate(this->shared_from_this(), txn);
@@ -1785,10 +1726,6 @@ namespace Ludwig {
         EnumNameSortType(sort),
         show_images ? 1 : 0
       );
-      const auto list = show_threads
-        ? PostList(controller->list_feed_threads(txn, feed_id, sort, m.login, req->getQuery("from")))
-        : PostList(controller->list_feed_comments(txn, feed_id, sort, m.login, req->getQuery("from")));
-      // ---
       auto r = writer(rsp);
       if (m.is_htmx) {
         rsp->writeHeader("Content-Type", TYPE_HTML);
@@ -1805,10 +1742,18 @@ namespace Ludwig {
           .write_sort_options(req->getUrl(), sort, show_threads, show_images)
           .write(R"(</section><main>)");
       }
-      std::visit(overload{
-        [&](const PageOf<ThreadDetail>& l){r.write_thread_list(l, base_url, m.login, !m.is_htmx, true, true, show_images);},
-        [&](const PageOf<CommentDetail>& l){r.write_comment_list(l, base_url, m.login, !m.is_htmx, true, true, show_images);}
-      }, list);
+      r.write_fmt(R"(<ol class="{}-list" id="top-level-list">)", show_threads ? "thread" : "comment");
+      const auto from = req->getQuery("from");
+      const auto next = show_threads ?
+        controller->list_feed_threads(
+          [&](auto& e){r.write_thread_entry(e, m.login, true, true, true, show_images);},
+          txn, feed_id, sort, m.login, from
+        ) :
+        controller->list_feed_comments(
+          [&](auto& e){r.write_comment_entry(e, m.login, true, false, true, true, show_images);},
+          txn, feed_id, sort, m.login, from
+        );
+      r.write("</ol>").write_pagination(base_url, from.empty(), next);
       if (!m.is_htmx) r.write("</main></div>").write_html_footer(m);
       r.finish();
     }
@@ -1846,13 +1791,11 @@ namespace Ludwig {
         const auto local = req->getQuery("local") == "1";
         const auto sort = parse_board_sort_type(req->getQuery("sort"));
         const auto sub = req->getQuery("sub") == "1";
-        const auto boards = self->controller->list_boards(txn, sort, local, sub, m.login, req->getQuery("from"));
         const auto base_url = fmt::format("/boards?local={}&sort={}&sub={}",
           local ? "1" : "0",
           EnumNameBoardSortType(sort),
           sub ? "1" : "0"
         );
-        // ---
         auto r = self->writer(rsp);
         if (m.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
@@ -1868,7 +1811,12 @@ namespace Ludwig {
             .write_sort_options("/boards", sort, local, sub)
             .write(R"(</section><main>)");
         }
-        r.write_board_list(boards, base_url);
+        r.write(R"(<ol class="board-list" id="top-level-list">)");
+        const auto next = self->controller->list_boards(
+          bind(&ResponseWriter::write_board_list_entry, r, _1),
+          txn, sort, local, sub, m.login, req->getQuery("from")
+        );
+        r.write("</ol>").write_pagination(base_url, req->getQuery("from").empty(), next);
         if (!m.is_htmx) r.write("</main></div>").write_html_footer(m);
         r.finish();
       })
@@ -1877,7 +1825,6 @@ namespace Ludwig {
         m.populate(self, txn);
         const auto local = req->getQuery("local") == "1";
         const auto sort = parse_user_sort_type(req->getQuery("sort"));
-        const auto users = self->controller->list_users(txn, sort, local, m.login, req->getQuery("from"));
         const auto base_url = fmt::format("/users?local={}&sort={}",
           local ? "1" : "0",
           EnumNameUserSortType(sort)
@@ -1898,7 +1845,12 @@ namespace Ludwig {
             .write_sort_options("/users", sort, local, false)
             .write(R"(</section><main>)");
         }
-        r.write_user_list(users, base_url, m.login, !m.is_htmx);
+        r.write(R"(<ol class="user-list" id="top-level-list">)");
+        const auto next = self->controller->list_users(
+          [&](auto& e){r.write_user_list_entry(e, m.login);},
+          txn, sort, local,m.login, req->getQuery("from")
+        );
+        r.write("</ol>").write_pagination(base_url, req->getQuery("from").empty(), next);
         if (!m.is_htmx) r.write("</main></div>").write_html_footer(m);
         r.finish();
       })
@@ -1916,10 +1868,6 @@ namespace Ludwig {
           EnumNameSortType(sort),
           show_images ? 1 : 0
         );
-        const auto list = show_threads
-          ? PostList(self->controller->list_board_threads(txn, board_id, sort, m.login, req->getQuery("from")))
-          : PostList(self->controller->list_board_comments(txn, board_id, sort, m.login, req->getQuery("from")));
-        // ---
         auto r = self->writer(rsp);
         if (m.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
@@ -1938,10 +1886,18 @@ namespace Ludwig {
             .write_sort_options(req->getUrl(), sort, show_threads, show_images)
             .write(R"(</section><main>)");
         }
-        std::visit(overload{
-          [&](const PageOf<ThreadDetail>& l){r.write_thread_list(l, base_url, m.login, !m.is_htmx, true, false, show_images);},
-          [&](const PageOf<CommentDetail>& l){r.write_comment_list(l, base_url, m.login, !m.is_htmx, true, true, show_images);}
-        }, list);
+        r.write_fmt(R"(<ol class="{}-list" id="top-level-list">)", show_threads ? "thread" : "comment");
+        const auto from = req->getQuery("from");
+        const auto next = show_threads ?
+          self->controller->list_board_threads(
+            [&](auto& e){r.write_thread_entry(e, m.login, true, true, false, show_images);},
+            txn, board_id, sort, m.login, from
+          ) :
+          self->controller->list_board_comments(
+            [&](auto& e){r.write_comment_entry(e, m.login, true, false, true, true, show_images);},
+            txn, board_id, sort, m.login, from
+          );
+        r.write("</ol>").write_pagination(base_url, from.empty(), next);
         if (!m.is_htmx) r.write("</main></div>").write_html_footer(m);
         r.finish();
       })
@@ -1979,10 +1935,6 @@ namespace Ludwig {
           EnumNameUserPostSortType(sort),
           show_images ? 1 : 0
         );
-        const auto list = show_threads
-          ? PostList(self->controller->list_user_threads(txn, user_id, sort, m.login, req->getQuery("from")))
-          : PostList(self->controller->list_user_comments(txn, user_id, sort, m.login, req->getQuery("from")));
-        // ---
         auto r = self->writer(rsp);
         if (m.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
@@ -2001,10 +1953,18 @@ namespace Ludwig {
             .write_sort_options(req->getUrl(), sort, show_threads, show_images)
             .write(R"(</section><main>)");
         }
-        std::visit(overload{
-          [&](const PageOf<ThreadDetail>& l){r.write_thread_list(l, base_url, m.login, !m.is_htmx, false, false, show_images);},
-          [&](const PageOf<CommentDetail>& l){r.write_comment_list(l, base_url, m.login, !m.is_htmx, false, true, show_images);}
-        }, list);
+        r.write_fmt(R"(<ol class="{}-list" id="top-level-list">)", show_threads ? "thread" : "comment");
+        const auto from = req->getQuery("from");
+        const auto next = show_threads ?
+          self->controller->list_user_threads(
+            [&](auto& e){r.write_thread_entry(e, m.login, true, false, false, show_images);},
+            txn, user_id, sort, m.login, from
+          ) :
+          self->controller->list_user_comments(
+            [&](auto& e){r.write_comment_entry(e, m.login, true, false, false, true, show_images);},
+            txn, user_id, sort, m.login, from
+          );
+        r.write("</ol>").write_pagination(base_url, from.empty(), next);
         if (!m.is_htmx) r.write("</main></div>").write_html_footer(m);
         r.finish();
       })

@@ -5,12 +5,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <duthomhas/csprng.hpp>
+#include <openssl/pem.h>
 #include "util/lambda_macros.h++"
 
 using std::function, std::min, std::nullopt, std::runtime_error, std::optional,
-    std::pair, std::shared_ptr, std::string, std::string_view,
-    flatbuffers::FlatBufferBuilder, flatbuffers::span, flatbuffers::Verifier,
-    flatbuffers::GetRoot;
+    std::pair, std::shared_ptr, std::string, std::string_view, std::unique_ptr,
+    std::vector, flatbuffers::FlatBufferBuilder, flatbuffers::span,
+    flatbuffers::Verifier, flatbuffers::GetRoot;
 
 #define assert_fmt(CONDITION, ...) if (!(CONDITION)) { spdlog::critical(__VA_ARGS__); throw runtime_error("Assertion failed: " #CONDITION); }
 
@@ -124,6 +125,12 @@ namespace Ludwig {
   static inline auto db_put(MDB_txn* txn, MDB_dbi dbi, string_view k, string_view v, unsigned flags = 0) -> void {
     MDB_val kval{ k.length(), const_cast<char*>(k.data()) };
     MDB_val vval{ v.length(), const_cast<char*>(v.data()) };
+    db_put(txn, dbi, kval, vval, flags);
+  }
+
+  static inline auto db_put(MDB_txn* txn, MDB_dbi dbi, string_view k, span<uint8_t> v, unsigned flags = 0) -> void {
+    MDB_val kval{ k.length(), const_cast<char*>(k.data()) };
+    MDB_val vval{ v.size(), v.data() };
     db_put(txn, dbi, kval, vval, flags);
   }
 
@@ -290,12 +297,13 @@ namespace Ludwig {
     if ((err = db_get(txn, dbis[Settings], SettingsKey::jwt_secret, val))) {
       spdlog::info("Opened database {} for the first time, generating secrets", filename);
       duthomhas::csprng rng;
+      uint8_t jwt_secret[JWT_SECRET_SIZE];
       rng(jwt_secret);
       const auto now = now_s();
       db_put(txn, dbis[Settings], SettingsKey::next_id, 1ULL);
       val = { JWT_SECRET_SIZE, jwt_secret };
       db_put(txn, dbis[Settings], SettingsKey::jwt_secret, val);
-      db_put(txn, dbis[Settings], SettingsKey::domain, "http://localhost:2023");
+      db_put(txn, dbis[Settings], SettingsKey::base_url, "http://localhost:2023");
       db_put(txn, dbis[Settings], SettingsKey::created_at, now);
       db_put(txn, dbis[Settings], SettingsKey::updated_at, now);
       db_put(txn, dbis[Settings], SettingsKey::name, "Ludwig");
@@ -310,7 +318,6 @@ namespace Ludwig {
     } else {
       spdlog::debug("Loaded existing database {}", filename);
       assert_fmt(val.mv_size == JWT_SECRET_SIZE, "jwt_secret is wrong size: expected {}, got {}", JWT_SECRET_SIZE, val.mv_size);
-      memcpy(jwt_secret, val.mv_data, JWT_SECRET_SIZE);
     }
     if ((err = mdb_txn_commit(txn))) goto die;
     return;
@@ -473,19 +480,6 @@ namespace Ludwig {
     return root;
   }
 
-  static auto int_key(std::pair<MDB_val, MDB_val>& kv) -> uint64_t {
-    return val_as<uint64_t>(kv.first);
-  };
-  static auto int_val(std::pair<MDB_val, MDB_val>& kv) -> uint64_t {
-    return val_as<uint64_t>(kv.second);
-  };
-  static auto second_key(std::pair<MDB_val, MDB_val>& kv) -> uint64_t {
-    return Cursor(kv.first).int_field_1();
-  };
-  static auto third_key(std::pair<MDB_val, MDB_val>& kv) -> uint64_t {
-    return Cursor(kv.first).int_field_2();
-  };
-
   static inline auto count(MDB_dbi dbi, MDB_txn* txn, optional<Cursor> from = {}, optional<Cursor> to = {}) -> uint64_t {
     DBIter iter(dbi, txn, Dir::Asc, from, to);
     uint64_t n = 0;
@@ -503,10 +497,47 @@ namespace Ludwig {
   }
   auto ReadTxnBase::get_setting_int(string_view key) -> uint64_t {
     MDB_val v;
-    if (db_get(txn, db.dbis[Settings], key, v)) return {};
+    if (db_get(txn, db.dbis[Settings], key, v)) return 0;
     return val_as<uint64_t>(v);
   }
-
+  auto ReadTxnBase::get_jwt_secret() -> JwtSecret {
+    MDB_val v;
+    if (auto err = db_get(txn, db.dbis[Settings], SettingsKey::jwt_secret, v)) throw DBError("jwt_secret error", err);
+    return std::span<uint8_t, JWT_SECRET_SIZE>((uint8_t*)v.mv_data, v.mv_size);
+  }
+  auto ReadTxnBase::get_public_key() -> unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> {
+    MDB_val v;
+    if (auto err = db_get(txn, db.dbis[Settings], SettingsKey::public_key, v)) throw DBError("public_key error", err);
+    const auto bio = unique_ptr<BIO, int(*)(BIO*)>(BIO_new_mem_buf(v.mv_data, (ssize_t)v.mv_size), BIO_free);
+    auto* k = PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr);
+    if (k == nullptr) throw runtime_error("public_key is not valid");
+    return unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)>(k, EVP_PKEY_free);
+  }
+  auto ReadTxnBase::get_private_key() -> unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> {
+    MDB_val v;
+    if (auto err = db_get(txn, db.dbis[Settings], SettingsKey::private_key, v)) throw DBError("private_key error", err);
+    const auto bio = unique_ptr<BIO, int(*)(BIO*)>(BIO_new_mem_buf(v.mv_data, (ssize_t)v.mv_size), BIO_free);
+    auto* k = PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr);
+    if (k == nullptr) throw runtime_error("private_key is not valid");
+    return unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)>(k, EVP_PKEY_free);
+  }
+  auto ReadTxnBase::get_site_stats() -> const SiteStats& {
+    MDB_val v;
+    if (db_get(txn, db.dbis[Settings], SettingsKey::site_stats, v)) {
+      static std::atomic<bool> initialized = false;
+      static FlatBufferBuilder fbb;
+      bool expected = false;
+      if (initialized.compare_exchange_strong(expected, true)) {
+        fbb.Finish(CreateSiteStats(fbb, 0, 0, 0, 0));
+      }
+      return *GetRoot<SiteStats>(fbb.GetBufferPointer());
+    }
+    return get_fb<SiteStats>(v);
+  }
+  auto ReadTxnBase::get_admin_list() -> span<uint64_t> {
+    const auto s = get_setting_str(SettingsKey::admins);
+    return span<uint64_t>((uint64_t*)s.data(), s.length() / sizeof(uint64_t));
+  }
   auto ReadTxnBase::get_session(uint64_t session_id) -> OptRef<Session> {
     MDB_val v;
     if (db_get(txn, db.dbis[Session_Session], session_id, v)) {
@@ -964,6 +995,7 @@ namespace Ludwig {
     int err = mdb_cursor_open(txn, db.dbis[Settings], &cur);
     bool first = true;
     for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) {
+      if (!SettingsKey::is_exported(string_view{(const char*)k.mv_data, k.mv_size})) continue;
       if (first) first = false;
       else {
         on_data(fbb.GetBufferSpan(), false);
@@ -1098,7 +1130,7 @@ namespace Ludwig {
     string_view user_agent,
     bool remember,
     uint64_t lifetime_seconds
-  ) -> std::pair<uint64_t, uint64_t> {
+  ) -> pair<uint64_t, uint64_t> {
     uint64_t id, now = now_s();
     if (!(++db.session_counter % 4)) {
       // Every 4 sessions, clean up old sessions.
@@ -1163,13 +1195,31 @@ namespace Ludwig {
   }
   auto WriteTxn::set_local_user(uint64_t id, span<uint8_t> span) -> void {
     const auto& user = get_fb<LocalUser>(span);
-    if (const auto old_user_opt = get_local_user(id)) {
+    const auto old_user_opt = get_local_user(id);
+    if (old_user_opt) {
       const auto& old_user = old_user_opt->get();
       if (old_user.email() &&
         (!user.email() || user.email()->string_view() != old_user.email()->string_view())
       ) {
         db_del(txn, db.dbis[User_Email], old_user.email()->string_view());
       }
+    }
+    if (!old_user_opt || old_user_opt->get().admin() != user.admin()) {
+      const auto& s = get_site_stats();
+      const auto old_admins = get_admin_list();
+      vector admins(old_admins.begin(), old_admins.end());
+      auto existing = std::find(admins.begin(), admins.end(), id);
+      if (user.admin()) { if (existing == admins.end()) admins.push_back(id); }
+      else if (existing != admins.end()) admins.erase(existing);
+      db_put(txn, db.dbis[Settings], SettingsKey::admins, string_view{(const char*)admins.data(), admins.size() * sizeof(uint64_t)});
+      FlatBufferBuilder fbb;
+      fbb.Finish(CreateSiteStats(fbb,
+        s.user_count() + (old_user_opt ? 0 : 1),
+        s.board_count(),
+        s.thread_count(),
+        s.comment_count()
+      ));
+      db_put(txn, db.dbis[Settings], SettingsKey::site_stats, fbb.GetBufferSpan());
     }
     db_put(txn, db.dbis[User_Email], user.email()->string_view(), id);
     db_put(txn, db.dbis[LocalUser_User], id, span);
@@ -1190,6 +1240,20 @@ namespace Ludwig {
     if (const auto local_user_opt = get_local_user(id)) {
       db_del(txn, db.dbis[User_Email], local_user_opt->get().email()->string_view());
       db_del(txn, db.dbis[LocalUser_User], id);
+      const auto old_admins = get_admin_list();
+      vector admins(old_admins.begin(), old_admins.end());
+      auto existing = std::find(admins.begin(), admins.end(), id);
+      if (existing != admins.end()) admins.erase(existing);
+      db_put(txn, db.dbis[Settings], SettingsKey::admins, string_view{(const char*)admins.data(), admins.size() * sizeof(uint64_t)});
+      FlatBufferBuilder fbb;
+      const auto& s = get_site_stats();
+      fbb.Finish(CreateSiteStats(fbb,
+        std::min(s.user_count(), s.user_count() - 1),
+        s.board_count(),
+        s.thread_count(),
+        s.comment_count()
+      ));
+      db_put(txn, db.dbis[Settings], SettingsKey::site_stats, fbb.GetBufferSpan());
     }
 
     for (const auto board_id : list_subscribed_boards(id)) {
@@ -1202,11 +1266,7 @@ namespace Ludwig {
           s.comment_count(),
           s.latest_post_time(),
           s.latest_post_id(),
-          min(s.subscriber_count(), s.subscriber_count() - 1),
-          s.users_active_half_year(),
-          s.users_active_month(),
-          s.users_active_week(),
-          s.users_active_day()
+          min(s.subscriber_count(), s.subscriber_count() - 1)
         ));
         db_put(txn, db.dbis[BoardStats_Board], id, fbb.GetBufferSpan());
       }
@@ -1269,7 +1329,16 @@ namespace Ludwig {
         db_del(txn, db.dbis[BoardsOwned_User], old_board.owner(), id);
       }
     } else {
-      spdlog::debug("Updating local board {:x}", id);
+      spdlog::debug("Creating local board {:x}", id);
+      FlatBufferBuilder fbb;
+      const auto& s = get_site_stats();
+      fbb.Finish(CreateSiteStats(fbb,
+        s.user_count(),
+        s.board_count() + 1,
+        s.thread_count(),
+        s.comment_count()
+      ));
+      db_put(txn, db.dbis[Settings], SettingsKey::site_stats, fbb.GetBufferSpan());
     }
     db_put(txn, db.dbis[BoardsOwned_User], board.owner(), id);
     db_put(txn, db.dbis[LocalBoard_Board], id, span);
@@ -1304,6 +1373,15 @@ namespace Ludwig {
 
     if (const auto local_board = get_local_board(id)) {
       spdlog::debug("Deleting local board {:x}", id);
+      FlatBufferBuilder fbb;
+      const auto& s = get_site_stats();
+      fbb.Finish(CreateSiteStats(fbb,
+        s.user_count(),
+        std::min(s.board_count(), s.board_count() - 1),
+        s.thread_count(),
+        s.comment_count()
+      ));
+      db_put(txn, db.dbis[Settings], SettingsKey::site_stats, fbb.GetBufferSpan());
       db_del(txn, db.dbis[BoardsOwned_User], local_board->get().owner(), id);
       db_del(txn, db.dbis[LocalBoard_Board], id);
     }
@@ -1338,11 +1416,7 @@ namespace Ludwig {
         s.comment_count(),
         s.latest_post_time(),
         s.latest_post_id(),
-        subscriber_count,
-        s.users_active_half_year(),
-        s.users_active_month(),
-        s.users_active_week(),
-        s.users_active_day()
+        subscriber_count
       ));
       db_put(txn, db.dbis[BoardStats_Board], board_id, fbb.GetBufferSpan());
       db_del(txn, db.dbis[BoardsMostSubscribers_Subscribers], old_subscriber_count, board_id);
@@ -1412,11 +1486,7 @@ namespace Ludwig {
             s.comment_count(),
             s.subscriber_count(),
             s.latest_post_time(),
-            s.latest_post_id(),
-            s.users_active_half_year(),
-            s.users_active_month(),
-            s.users_active_week(),
-            s.users_active_day()
+            s.latest_post_id()
           ));
           db_put(txn, db.dbis[BoardStats_Board], old_thread.board(), fbb.GetBufferSpan());
         }
@@ -1437,6 +1507,17 @@ namespace Ludwig {
       fbb.ForceDefaults(true);
       fbb.Finish(CreatePostStats(fbb, created_at));
       db_put(txn, db.dbis[PostStats_Post], id, fbb.GetBufferSpan());
+      if (!thread.instance()) {
+        fbb.Clear();
+        const auto& s = get_site_stats();
+        fbb.Finish(CreateSiteStats(fbb,
+          s.user_count(),
+          s.board_count(),
+          s.thread_count() + 1,
+          s.comment_count()
+        ));
+        db_put(txn, db.dbis[Settings], SettingsKey::site_stats, fbb.GetBufferSpan());
+      }
       if (const auto user_stats = get_user_stats(author_id)) {
         const auto& s = user_stats->get();
         const auto last_post_count = s.thread_count() + s.comment_count(),
@@ -1466,11 +1547,7 @@ namespace Ludwig {
           s.comment_count(),
           created_at,
           id,
-          s.subscriber_count(),
-          s.users_active_half_year(),
-          s.users_active_month(),
-          s.users_active_week(),
-          s.users_active_day()
+          s.subscriber_count()
         ));
         db_put(txn, db.dbis[BoardStats_Board], board_id, fbb.GetBufferSpan());
         db_del(txn, db.dbis[BoardsNewPosts_Time], last_new_post, board_id);
@@ -1561,6 +1638,17 @@ namespace Ludwig {
 
     spdlog::debug("Deleting top-level post {:x} (board {:x}, author {:x})", id, board_id, author);
     FlatBufferBuilder fbb;
+    if (!thread.instance()) {
+      const auto& s = get_site_stats();
+      fbb.Finish(CreateSiteStats(fbb,
+        s.user_count(),
+        s.board_count(),
+        std::min(s.thread_count(), s.thread_count() - 1),
+        s.comment_count()
+      ));
+      db_put(txn, db.dbis[Settings], SettingsKey::site_stats, fbb.GetBufferSpan());
+      fbb.Clear();
+    }
     if (const auto user_stats = get_user_stats(author)) {
       const auto& s = user_stats->get();
       const auto last_post_count = s.thread_count() + s.comment_count();
@@ -1585,11 +1673,7 @@ namespace Ludwig {
         min(s.comment_count(), s.comment_count() - descendant_count),
         s.latest_post_time(),
         s.latest_post_id() == id ? 0 : s.latest_post_id(),
-        s.subscriber_count(),
-        s.users_active_half_year(),
-        s.users_active_month(),
-        s.users_active_week(),
-        s.users_active_day()
+        s.subscriber_count()
       ));
       db_put(txn, db.dbis[BoardStats_Board], board_id, fbb.GetBufferSpan());
       fbb.Clear();
@@ -1669,6 +1753,17 @@ namespace Ludwig {
       fbb.Finish(CreatePostStats(fbb, created_at));
       db_put(txn, db.dbis[PostStats_Post], id, fbb.GetBufferSpan());
 
+      if (!comment.instance()) {
+        fbb.Clear();
+        const auto& s = get_site_stats();
+        fbb.Finish(CreateSiteStats(fbb,
+          s.user_count(),
+          s.board_count(),
+          s.thread_count(),
+          s.comment_count() + 1
+        ));
+        db_put(txn, db.dbis[Settings], SettingsKey::site_stats, fbb.GetBufferSpan());
+      }
       for (OptRef<Comment> comment_opt = {comment}; comment_opt; comment_opt = get_comment(comment_opt->get().parent())) {
         const auto parent = comment_opt->get().parent();
         if (const auto parent_stats_opt = get_post_stats(parent)) {
@@ -1736,11 +1831,7 @@ namespace Ludwig {
           s.comment_count() + 1,
           created_at,
           id,
-          s.subscriber_count(),
-          s.users_active_half_year(),
-          s.users_active_month(),
-          s.users_active_week(),
-          s.users_active_day()
+          s.subscriber_count()
         ));
         db_put(txn, db.dbis[BoardStats_Board], board_id, fbb.GetBufferSpan());
         db_del(txn, db.dbis[BoardsNewPosts_Time], last_new_post, board_id);
@@ -1767,6 +1858,19 @@ namespace Ludwig {
       descendant_count = stats.descendant_count();
 
     FlatBufferBuilder fbb;
+    if (!comment.instance()) {
+      const auto& s = get_site_stats();
+      const auto next_comment_count =
+        (descendant_count + 1) > s.comment_count() ? 0 : s.comment_count() - (descendant_count + 1);
+      fbb.Finish(CreateSiteStats(fbb,
+        s.user_count(),
+        s.board_count(),
+        s.thread_count(),
+        next_comment_count
+      ));
+      db_put(txn, db.dbis[Settings], SettingsKey::site_stats, fbb.GetBufferSpan());
+      fbb.Clear();
+    }
     for (OptRef<Comment> comment_opt = {comment}; comment_opt; comment_opt = get_comment(comment_opt->get().parent())) {
       const auto parent = comment_opt->get().parent();
       if (const auto parent_stats_opt = get_post_stats(parent)) {
@@ -1809,11 +1913,7 @@ namespace Ludwig {
         (descendant_count + 1) > s.comment_count() ? 0 : s.comment_count() - (descendant_count + 1),
         s.latest_post_time(),
         s.latest_post_id() == id ? 0 : s.latest_post_id(),
-        s.subscriber_count(),
-        s.users_active_half_year(),
-        s.users_active_month(),
-        s.users_active_week(),
-        s.users_active_day()
+        s.subscriber_count()
       ));
       db_put(txn, db.dbis[BoardStats_Board], board_id, fbb.GetBufferSpan());
       db_del(txn, db.dbis[BoardsMostPosts_Posts], last_post_count, board_id);

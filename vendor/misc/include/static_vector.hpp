@@ -410,7 +410,13 @@ struct static_vector {
         m_size++;
     }
 
-    // TODO pop_back
+    // Added by Adam Nelson for Ludwig
+    void pop_back() {
+        if (empty())
+            throw std::out_of_range("size()");
+        erase(std::prev(end()));
+    }
+
     // TODO resize
     // TODO swap
 

@@ -11,6 +11,7 @@
 using std::make_shared, std::make_unique, std::nullopt, std::optional,
     std::pair, std::runtime_error, std::shared_ptr, std::string,
     std::string_view, std::vector;
+using namespace std::chrono_literals;
 using namespace std::literals::string_view_literals;
 using namespace Ludwig;
 

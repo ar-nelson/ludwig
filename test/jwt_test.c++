@@ -1,8 +1,8 @@
+#include "test_common.h++"
 #include "util/jwt.h++"
 #include "util/base64.h++"
-#include <catch2/catch_test_macros.hpp>
 
-static const std::string SECRET_BASE64 = "67GWYhThscMwBm3jItLAxy6vY4fg49K5eYLYAHexxpW0Z3FOOBz_MQ3MfXiJPXmmztAok4iC3jDGkpSbQyDL9Q",
+static const string SECRET_BASE64 = "67GWYhThscMwBm3jItLAxy6vY4fg49K5eYLYAHexxpW0Z3FOOBz_MQ3MfXiJPXmmztAok4iC3jDGkpSbQyDL9Q",
   BYTES32_BASE64 = "2kVD14ALWWbYccEdphAtnGlZslzeBz2FIE9Z1LGqAyQ",
   SAMPLE_JWT = "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjEyMzQsImlhdCI6MTUxNjIzOTAyMiwiZXhwIjoxNTE2MjQ5MDIyfQ.0roIyXlCzgkJl1kFgWguYzPA3ouRZF29jDdiLkffXBYi46MgLJJYxJ9X-kdo2btjpiXdeMccC1k38MZo4JhE6Q";
 
@@ -35,7 +35,7 @@ TEST_CASE("make_jwt -> parse_jwt roundtrip", "[jwt]") {
   const uint64_t user = 1234;
   uint8_t secret[Ludwig::JWT_SECRET_SIZE];
   const auto len = Base64::decode(SECRET_BASE64, secret, Ludwig::JWT_SECRET_SIZE);
-  const auto encoded = Ludwig::make_jwt(user, 60, secret);
+  const auto encoded = Ludwig::make_jwt(user, std::chrono::system_clock::now() + 60s, secret);
   REQUIRE(encoded.starts_with(Ludwig::JWT_HEADER));
   const auto decoded = Ludwig::parse_jwt(encoded, secret);
   REQUIRE(!!decoded);
@@ -46,7 +46,7 @@ TEST_CASE("make_jwt -> parse_jwt roundtrip fails with wrong secret", "[jwt]") {
   const uint64_t user = 1234;
   uint8_t secret[Ludwig::JWT_SECRET_SIZE];
   const auto len = Base64::decode(SECRET_BASE64, secret, Ludwig::JWT_SECRET_SIZE);
-  const auto encoded = Ludwig::make_jwt(user, 60, secret);
+  const auto encoded = Ludwig::make_jwt(user, std::chrono::system_clock::now() + 60s, secret);
   secret[0]++;
   const auto decoded = Ludwig::parse_jwt(encoded, secret);
   REQUIRE(!decoded);

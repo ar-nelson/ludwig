@@ -4,14 +4,14 @@
 #include <queue>
 #include <duthomhas/csprng.hpp>
 #include <openssl/evp.h>
+#include <static_vector.hpp>
 #include "util/web.h++"
 #include "util/lambda_macros.h++"
 
 using std::function, std::max, std::min, std::nullopt, std::optional, std::pair,
-    std::prev, std::priority_queue, std::regex, std::regex_match,
-    std::shared_ptr, std::string, std::string_view, std::tuple, std::vector,
-    flatbuffers::Offset, flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot,
-    flatbuffers::Vector;
+    std::priority_queue, std::regex, std::regex_match, std::shared_ptr,
+    std::string, std::string_view, std::tuple, std::vector, flatbuffers::Offset,
+    flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot, flatbuffers::Vector;
 namespace chrono = std::chrono;
 
 namespace Ludwig {
@@ -19,7 +19,6 @@ namespace Ludwig {
   // https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#pbkdf2
   static constexpr uint32_t PASSWORD_HASH_ITERATIONS = 600'000;
 
-  //static constexpr uint64_t JWT_DURATION = 86400; // 1 day
   static constexpr double RANK_GRAVITY = 1.8;
 
   static const regex username_regex(R"([a-z0-9_]{1,64})", regex::ECMAScript);
@@ -49,44 +48,46 @@ namespace Ludwig {
 
   using RankedQueue = priority_queue<RankedId, vector<RankedId>, decltype(ranked_id_cmp)*>;
 
-  template <class T, size_t PageSize>
+  template <class T>
   static inline auto finish_ranked_queue(
-    stlpb::static_vector<T, PageSize>& entries,
+    Writer<T> out,
     RankedQueue& queue,
-    function<optional<T> (uint64_t)>& get_entry
+    function<optional<T> (uint64_t)>& get_entry,
+    uint16_t limit,
+    double last_rank
   ) -> PageCursor {
     while (!queue.empty()) {
       const auto [id, rank] = queue.top();
       queue.pop();
       if (auto entry = get_entry(id)) {
-        if (entries.full()) {
-          return PageCursor(prev(entries.end())->rank, id);
-        } else {
-          entry->rank = rank;
-          entries.push_back(*entry);
-        }
+        if (limit == 0) return PageCursor(last_rank, id);
+        entry->rank = last_rank = rank;
+        out(*entry);
+        limit--;
       }
     }
     return {};
   }
 
-  template <class T, size_t PageSize = ITEMS_PER_PAGE>
+  template <class T>
   static inline auto ranked_active(
-    stlpb::static_vector<T, PageSize>& entries,
+    Writer<T> out,
     ReadTxnBase& txn,
     DBIter iter_by_new,
     DBIter iter_by_top,
     function<optional<T> (uint64_t)> get_entry,
-    double max_rank = INFINITY
+    double max_rank = INFINITY,
+    uint16_t limit = ITEMS_PER_PAGE
   ) -> PageCursor {
     using namespace chrono;
     int64_t max_possible_karma;
-    if (iter_by_top.is_done() || iter_by_new.is_done()) return {};
+    if (limit == 0 || iter_by_top.is_done() || iter_by_new.is_done()) return {};
     if (auto top_stats = txn.get_post_stats(*iter_by_top)) {
       max_possible_karma = top_stats->get().karma();
     } else return {};
     const auto max_possible_numerator = rank_numerator(max_possible_karma);
     const auto now = system_clock::now();
+    double last_rank;
     RankedQueue queue(ranked_id_cmp);
     for (auto id : iter_by_new) {
       const auto stats = txn.get_post_stats(id);
@@ -105,31 +106,33 @@ namespace Ludwig {
       if (max_possible_rank > top_rank) continue;
       queue.pop();
       if (auto entry = get_entry(top_id)) {
-        entry->rank = top_rank;
-        entries.push_back(*entry);
-        if (entries.full()) break;
+        entry->rank = last_rank = top_rank;
+        out(*entry);
+        if (--limit == 0) break;
       }
     }
-    return finish_ranked_queue(entries, queue, get_entry);
+    return finish_ranked_queue(out, queue, get_entry, limit, last_rank);
   }
 
-  template <class T, size_t PageSize = ITEMS_PER_PAGE>
+  template <class T>
   static inline auto ranked_hot(
-    stlpb::static_vector<T, PageSize>& entries,
+    Writer<T> out,
     ReadTxnBase& txn,
     DBIter iter_by_new,
     DBIter iter_by_top,
     function<optional<T> (uint64_t)> get_entry,
-    double max_rank = INFINITY
+    double max_rank = INFINITY,
+    uint16_t limit = ITEMS_PER_PAGE
   ) -> PageCursor {
     using namespace chrono;
     int64_t max_possible_karma;
-    if (iter_by_top.is_done() || iter_by_new.is_done()) return {};
+    if (limit == 0 || iter_by_top.is_done() || iter_by_new.is_done()) return {};
     if (auto top_stats = txn.get_post_stats(*iter_by_top)) {
       max_possible_karma = top_stats->get().karma();
     } else return {};
     const auto max_possible_numerator = rank_numerator(max_possible_karma);
     const auto now = system_clock::now();
+    double last_rank;
     RankedQueue queue(ranked_id_cmp);
     for (auto id : iter_by_new) {
       const auto timestamp = T::get_created_at(txn, id);
@@ -144,27 +147,29 @@ namespace Ludwig {
       if (max_possible_rank > top_rank) continue;
       queue.pop();
       if (auto entry = get_entry(top_id)) {
-        entry->rank = top_rank;
-        entries.push_back(*entry);
-        if (entries.full()) break;
+        entry->rank = last_rank = top_rank;
+        out(*entry);
+        if (--limit == 0) break;
       }
     }
-    return finish_ranked_queue(entries, queue, get_entry);
+    return finish_ranked_queue(out, queue, get_entry, limit, last_rank);
   }
 
-  template <class T, size_t PageSize = ITEMS_PER_PAGE>
+  template <class T>
   static inline auto ranked_new_comments(
-    stlpb::static_vector<T, PageSize>& entries,
+    Writer<T> out,
     ReadTxnBase& txn,
     DBIter iter_by_new,
     function<optional<T> (uint64_t)> get_entry,
-    optional<chrono::system_clock::time_point> from = {}
+    optional<chrono::system_clock::time_point> from = {},
+    uint16_t limit = ITEMS_PER_PAGE
   ) -> PageCursor {
     using namespace chrono;
     using IdTime = pair<uint64_t, system_clock::time_point>;
     static constexpr auto id_time_cmp = [](const IdTime& a, const IdTime& b) -> bool { return a.second < b.second; };
     const auto now = system_clock::now();
     const auto max_time = from.value_or(now);
+    uint64_t last_time;
     priority_queue<IdTime, vector<IdTime>, decltype(id_time_cmp)> queue;
     for (uint64_t id : iter_by_new) {
       const auto stats = txn.get_post_stats(id);
@@ -177,16 +182,19 @@ namespace Ludwig {
       if (max_possible_time > top_time) continue;
       queue.pop();
       if (auto entry = get_entry(top_id)) {
-        entries.push_back(*entry);
-        if (entries.full()) break;
+        last_time = stats->get().latest_comment();
+        out(*entry);
+        if (--limit == 0) break;
       }
     }
     while (!queue.empty()) {
       const auto [id, timestamp] = queue.top();
       queue.pop();
       if (auto entry = get_entry(id)) {
-        if (entries.full()) return PageCursor(prev(entries.end())->stats().latest_comment());
-        else entries.push_back(*entry);
+        if (limit == 0) return PageCursor(last_time);
+        last_time = entry->stats().latest_comment();
+        out(*entry);
+        --limit;
       }
     }
     return {};
@@ -203,8 +211,8 @@ namespace Ludwig {
     OptRef<Board> board = {},
     bool is_board_hidden = false,
     PageCursor from = {},
-    size_t max_comments = ITEMS_PER_PAGE,
-    size_t max_depth = 5
+    uint16_t max_comments = ITEMS_PER_PAGE,
+    uint16_t max_depth = 5
   ) -> void {
     if (!max_depth) {
       tree.mark_continued(parent);
@@ -214,10 +222,10 @@ namespace Ludwig {
     optional<DBIter> iter;
     switch (sort) {
       case CommentSortType::Hot: {
-        // TODO: Truncate when running out of total comments
-        stlpb::static_vector<CommentDetail, ITEMS_PER_PAGE> entries;
+        vector<CommentDetail> entries;
+        entries.reserve(max_comments);
         auto page_cursor = ranked_hot<CommentDetail>(
-          entries,
+          [&](auto& x){entries.push_back(x);},
           txn,
           txn.list_comments_of_post_new(parent),
           txn.list_comments_of_post_top(parent),
@@ -228,7 +236,8 @@ namespace Ludwig {
             );
             return e.should_show(login) ? optional(e) : nullopt;
           },
-          from.rank_k()
+          from.rank_k(),
+          max_comments
         );
         for (auto entry : entries) {
           if (tree.size() >= max_comments) {
@@ -403,7 +412,8 @@ namespace Ludwig {
     uint64_t id,
     CommentSortType sort,
     Login login,
-    PageCursor from
+    PageCursor from,
+    uint16_t limit
   ) -> pair<ThreadDetail, CommentTree> {
     pair<ThreadDetail, CommentTree> p(ThreadDetail::get(txn, id, login), {});
     if (!p.first.can_view(login)) throw ApiError("Cannot view this thread", 403);
@@ -412,7 +422,7 @@ namespace Ludwig {
       txn, p.second, id, sort, login,
       p.first.thread(), p.first.hidden,
       p.first.board(), p.first.board_hidden,
-      from
+      from, limit
     );
     return p;
   }
@@ -421,7 +431,8 @@ namespace Ludwig {
     uint64_t id,
     CommentSortType sort,
     Login login,
-    PageCursor from
+    PageCursor from,
+    uint16_t limit
   ) -> pair<CommentDetail, CommentTree> {
     pair<CommentDetail, CommentTree> p(CommentDetail::get(txn, id, login), {});
     if (!p.first.can_view(login)) throw ApiError("Cannot view this comment", 403);
@@ -429,7 +440,7 @@ namespace Ludwig {
       txn, p.second, id, sort, login,
       p.first.thread(), p.first.thread_hidden,
       p.first.board(), p.first.board_hidden,
-      from
+      from, limit
     );
     return p;
   }
@@ -454,13 +465,14 @@ namespace Ludwig {
     return detail;
   }
   auto InstanceController::list_users(
+    Writer<UserDetail> out,
     ReadTxnBase& txn,
     UserSortType sort,
     bool local_only,
     Login login,
-    PageCursor from
-  ) -> PageOf<UserDetail> {
-    PageOf<UserDetail> out { {}, !from, {} };
+    PageCursor from,
+    uint16_t limit
+  ) -> PageCursor {
     optional<DBIter> iter;
     switch (sort) {
       case UserSortType::New:
@@ -482,26 +494,25 @@ namespace Ludwig {
         const auto d = UserDetail::get(txn, id, login);
         if (local_only && d.user().instance()) continue;
         if (!d.should_show(login)) continue;
-        out.entries.push_back(d);
+        out(d);
       } catch (const ApiError& e) {
         spdlog::warn("User {:x} error: {}", id, e.what());
       }
-      if (out.entries.size() >= ITEMS_PER_PAGE) break;
+      if (--limit == 0) break;
     }
-    if (!iter->is_done()) {
-      out.next = PageCursor(iter->get_cursor()->int_field_0(), **iter);
-    }
-    return out;
+    if (iter->is_done()) return {};
+    return PageCursor(iter->get_cursor()->int_field_0(), **iter);
   }
   auto InstanceController::list_boards(
+    Writer<BoardDetail> out,
     ReadTxnBase& txn,
     BoardSortType sort,
     bool local_only,
     bool subscribed_only,
     Login login,
-    PageCursor from
-  ) -> PageOf<BoardDetail> {
-    PageOf<BoardDetail> out { {}, !from, {} };
+    PageCursor from,
+    uint16_t limit
+  ) -> PageCursor {
     optional<DBIter> iter;
     switch (sort) {
       case BoardSortType::New:
@@ -527,16 +538,14 @@ namespace Ludwig {
         const auto d = BoardDetail::get(txn, id, login);
         if (local_only && d.board().instance()) continue;
         if (!d.should_show(login)) continue;
-        out.entries.push_back(d);
+        out(d);
       } catch (const ApiError& e) {
         spdlog::warn("Board {:x} error: {}", id, e.what());
       }
-      if (out.entries.size() >= ITEMS_PER_PAGE) break;
+      if (--limit == 0) break;
     }
-    if (!iter->is_done()) {
-      out.next = PageCursor(iter->get_cursor()->int_field_0(), **iter);
-    }
-    return out;
+    if (iter->is_done()) return {};
+    return PageCursor(iter->get_cursor()->int_field_0(), **iter);
   }
   static inline auto earliest_time(SortType sort) -> chrono::time_point<chrono::system_clock> {
     using namespace chrono;
@@ -563,52 +572,58 @@ namespace Ludwig {
     return pair(first_k ? Cursor(*first_k, time) : Cursor(time), from.v);
   }
   auto InstanceController::list_board_threads(
+    Writer<ThreadDetail> out,
     ReadTxnBase& txn,
     uint64_t board_id,
     SortType sort,
     Login login,
-    PageCursor from
-  ) -> PageOf<ThreadDetail> {
+    PageCursor from,
+    uint16_t limit
+  ) -> PageCursor {
     using namespace chrono;
-    PageOf<ThreadDetail> out { {}, !from, {} };
     const auto board = txn.get_board(board_id);
     if (!board) throw ApiError("Board does not exist", 404);
+    const auto out_with_card = [&](const ThreadDetail& thread) {
+      if (thread.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, thread.id);
+      out(thread);
+    };
     const auto get_entry = [&](uint64_t id) -> optional<ThreadDetail> {
       if (from && id == from.v) return {};
       const auto e = optional(ThreadDetail::get(txn, id, login, {}, false, board, false));
       return e->should_show(login) ? e : nullopt;
     };
     optional<DBIter> iter;
+    PageCursor next;
     switch (sort) {
       case SortType::Active:
-        out.next = ranked_active<ThreadDetail>(
-          out.entries,
+        return ranked_active<ThreadDetail>(
+          out_with_card,
           txn,
           txn.list_threads_of_board_new(board_id),
           txn.list_threads_of_board_top(board_id),
           get_entry,
-          from.rank_k()
+          from.rank_k(),
+          limit
         );
-        goto done;
       case SortType::Hot:
-        out.next = ranked_hot<ThreadDetail>(
-          out.entries,
+        return ranked_hot<ThreadDetail>(
+          out_with_card,
           txn,
           txn.list_threads_of_board_new(board_id),
           txn.list_threads_of_board_top(board_id),
           get_entry,
-          from.rank_k()
+          from.rank_k(),
+          limit
         );
-        goto done;
       case SortType::NewComments:
-        out.next = ranked_new_comments<ThreadDetail>(
-          out.entries,
+        return ranked_new_comments<ThreadDetail>(
+          out_with_card,
           txn,
           txn.list_threads_of_board_new(board_id, new_comments_cursor(from, board_id)),
           get_entry,
-          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt
+          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt,
+          limit
         );
-        goto done;
       case SortType::New:
         iter.emplace(txn.list_threads_of_board_new(board_id, from.next_cursor_desc(board_id)));
         break;
@@ -631,39 +646,32 @@ namespace Ludwig {
         iter.emplace(txn.list_threads_of_board_top(board_id, from.next_cursor_desc(board_id)));
         break;
     }
-    {
-      assert(!!iter);
-      const auto earliest = earliest_time(sort);
-      for (uint64_t thread_id : *iter) {
-        try {
-          const auto entry = ThreadDetail::get(txn, thread_id, login, {}, false, board, false);
-          const system_clock::time_point time(seconds(entry.thread().created_at()));
-          if (time < earliest || !entry.should_show(login)) continue;
-          out.entries.push_back(entry);
-        } catch (const ApiError& e) {
-          spdlog::warn("Thread {:x} error: {}", thread_id, e.what());
-        }
-        if (out.entries.full()) break;
+    assert(!!iter);
+    const auto earliest = earliest_time(sort);
+    for (uint64_t thread_id : *iter) {
+      try {
+        const auto entry = ThreadDetail::get(txn, thread_id, login, {}, false, board, false);
+        const system_clock::time_point time(seconds(entry.thread().created_at()));
+        if (time < earliest || !entry.should_show(login)) continue;
+        out_with_card(entry);
+      } catch (const ApiError& e) {
+        spdlog::warn("Thread {:x} error: {}", thread_id, e.what());
       }
-      if (!iter->is_done()) {
-        out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
-      }
+      if (--limit == 0) break;
     }
-  done:
-    for (const auto& thread : out.entries) {
-      if (thread.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, thread.id);
-    }
-    return out;
+    if (iter->is_done()) return {};
+    return PageCursor(iter->get_cursor()->int_field_1(), **iter);
   }
   auto InstanceController::list_board_comments(
+    Writer<CommentDetail> out,
     ReadTxnBase& txn,
     uint64_t board_id,
     SortType sort,
     Login login,
-    PageCursor from
-  ) -> PageOf<CommentDetail> {
+    PageCursor from,
+    uint16_t limit
+  ) -> PageCursor {
     using namespace chrono;
-    PageOf<CommentDetail> out { {}, !from, {} };
     const auto board = txn.get_board(board_id);
     if (!board) throw ApiError("Board does not exist", 404);
     const auto get_entry = [&](uint64_t id) -> optional<CommentDetail> {
@@ -674,34 +682,34 @@ namespace Ludwig {
     optional<DBIter> iter;
     switch (sort) {
       case SortType::Active:
-        out.next = ranked_active<CommentDetail>(
-          out.entries,
+        return ranked_active<CommentDetail>(
+          out,
           txn,
           txn.list_comments_of_board_new(board_id),
           txn.list_comments_of_board_top(board_id),
           get_entry,
-          from.rank_k()
+          from.rank_k(),
+          limit
         );
-        return out;
       case SortType::Hot:
-        out.next = ranked_hot<CommentDetail>(
-          out.entries,
+        return ranked_hot<CommentDetail>(
+          out,
           txn,
           txn.list_comments_of_board_new(board_id),
           txn.list_comments_of_board_top(board_id),
           get_entry,
-          from.rank_k()
+          from.rank_k(),
+          limit
         );
-        return out;
       case SortType::NewComments:
-        out.next = ranked_new_comments<CommentDetail>(
-          out.entries,
+        return ranked_new_comments<CommentDetail>(
+          out,
           txn,
           txn.list_comments_of_board_new(board_id, new_comments_cursor(from, board_id)),
           get_entry,
-          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt
+          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt,
+          limit
         );
-        return out;
       case SortType::New:
         iter.emplace(txn.list_comments_of_board_new(board_id, from.next_cursor_desc(board_id)));
         break;
@@ -731,26 +739,25 @@ namespace Ludwig {
         const auto entry = CommentDetail::get(txn, comment_id, login, {}, false, {}, false, board, false);
         const system_clock::time_point time(seconds(entry.comment().created_at()));
         if (time < earliest || !entry.should_show(login)) continue;
-        out.entries.push_back(entry);
+        out(entry);
       } catch (const ApiError& e) {
         spdlog::warn("Comment {:x} error: {}", comment_id, e.what());
       }
-      if (out.entries.full()) break;
+      if (--limit == 0) break;
     }
-    if (!iter->is_done()) {
-      out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
-    }
-    return out;
+    if (iter->is_done()) return {};
+    return PageCursor(iter->get_cursor()->int_field_1(), **iter);
   }
   auto InstanceController::list_feed_threads(
+    Writer<ThreadDetail> out,
     ReadTxnBase& txn,
     uint64_t feed_id,
     SortType sort,
     Login login,
-    PageCursor from
-  ) -> PageOf<ThreadDetail> {
+    PageCursor from,
+    uint16_t limit
+  ) -> PageCursor {
     using namespace chrono;
-    PageOf<ThreadDetail> out { {}, !from, {} };
     function<bool (const ThreadDetail&)> filter_thread;
     switch (feed_id) {
       case FEED_ALL:
@@ -771,6 +778,10 @@ namespace Ludwig {
       default:
         throw ApiError(fmt::format("No feed with ID {:x}", feed_id), 404);
     }
+    const auto out_with_card = [&](const ThreadDetail& thread) {
+      if (thread.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, thread.id);
+      out(thread);
+    };
     const auto get_entry = [&](uint64_t id) -> optional<ThreadDetail> {
       if (from && id == from.v) return {};
       const auto e = optional(ThreadDetail::get(txn, id, login));
@@ -779,34 +790,34 @@ namespace Ludwig {
     optional<DBIter> iter;
     switch (sort) {
       case SortType::Active:
-        out.next = ranked_active<ThreadDetail>(
-          out.entries,
+        return ranked_active<ThreadDetail>(
+          out_with_card,
           txn,
           txn.list_threads_new(),
           txn.list_threads_top(),
           get_entry,
-          from.rank_k()
+          from.rank_k(),
+          limit
         );
-        goto done;
       case SortType::Hot:
-        out.next = ranked_hot<ThreadDetail>(
-          out.entries,
+        return ranked_hot<ThreadDetail>(
+          out_with_card,
           txn,
           txn.list_threads_new(),
           txn.list_threads_top(),
           get_entry,
-          from.rank_k()
+          from.rank_k(),
+          limit
         );
-        goto done;
       case SortType::NewComments:
-        out.next = ranked_new_comments<ThreadDetail>(
-          out.entries,
+        return ranked_new_comments<ThreadDetail>(
+          out_with_card,
           txn,
           txn.list_threads_new(new_comments_cursor(from)),
           get_entry,
-          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt
+          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt,
+          limit
         );
-        goto done;
       case SortType::New:
         iter.emplace(txn.list_threads_new(from.next_cursor_desc()));
         break;
@@ -829,39 +840,32 @@ namespace Ludwig {
         iter.emplace(txn.list_threads_top(from.next_cursor_desc()));
         break;
     }
-    {
-      assert(!!iter);
-      const auto earliest = earliest_time(sort);
-      for (uint64_t thread_id : *iter) {
-        try {
-          const auto entry = ThreadDetail::get(txn, thread_id, login);
-          const system_clock::time_point time(seconds(entry.thread().created_at()));
-          if (time < earliest || !entry.should_show(login)) continue;
-          out.entries.push_back(entry);
-        } catch (const ApiError& e) {
-          spdlog::warn("Thread {:x} error: {}", thread_id, e.what());
-        }
-        if (out.entries.full()) break;
+    assert(!!iter);
+    const auto earliest = earliest_time(sort);
+    for (uint64_t thread_id : *iter) {
+      try {
+        const auto entry = ThreadDetail::get(txn, thread_id, login);
+        const system_clock::time_point time(seconds(entry.thread().created_at()));
+        if (time < earliest || !entry.should_show(login)) continue;
+        out_with_card(entry);
+      } catch (const ApiError& e) {
+        spdlog::warn("Thread {:x} error: {}", thread_id, e.what());
       }
-      if (!iter->is_done()) {
-        out.next = PageCursor(iter->get_cursor()->int_field_0(), **iter);
-      }
+      if (--limit == 0) break;
     }
-  done:
-    for (const auto& thread : out.entries) {
-      if (thread.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, thread.id);
-    }
-    return out;
+    if (iter->is_done()) return {};
+    return PageCursor(iter->get_cursor()->int_field_0(), **iter);
   }
   auto InstanceController::list_feed_comments(
+    Writer<CommentDetail> out,
     ReadTxnBase& txn,
     uint64_t feed_id,
     SortType sort,
     Login login,
-    PageCursor from
-  ) -> PageOf<CommentDetail> {
+    PageCursor from,
+    uint16_t limit
+  ) -> PageCursor {
     using namespace chrono;
-    PageOf<CommentDetail> out { {}, !from, {} };
     function<bool (const CommentDetail&)> filter_comment;
     switch (feed_id) {
       case FEED_ALL:
@@ -890,34 +894,34 @@ namespace Ludwig {
     optional<DBIter> iter;
     switch (sort) {
       case SortType::Active:
-        out.next = ranked_active<CommentDetail>(
-          out.entries,
+        return ranked_active<CommentDetail>(
+          out,
           txn,
           txn.list_comments_new(),
           txn.list_comments_top(),
           get_entry,
-          from.rank_k()
+          from.rank_k(),
+          limit
         );
-        return out;
       case SortType::Hot:
-        out.next = ranked_hot<CommentDetail>(
-          out.entries,
+        return ranked_hot<CommentDetail>(
+          out,
           txn,
           txn.list_comments_new(),
           txn.list_comments_top(),
           get_entry,
-          from.rank_k()
+          from.rank_k(),
+          limit
         );
-        return out;
       case SortType::NewComments:
-        out.next = ranked_new_comments<CommentDetail>(
-          out.entries,
+        return ranked_new_comments<CommentDetail>(
+          out,
           txn,
           txn.list_comments_new(new_comments_cursor(from)),
           get_entry,
-          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt
+          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt,
+          limit
         );
-        return out;
       case SortType::New:
         iter.emplace(txn.list_comments_new(from.next_cursor_desc()));
         break;
@@ -947,25 +951,24 @@ namespace Ludwig {
         const auto entry = CommentDetail::get(txn, comment_id, login);
         const system_clock::time_point time(seconds(entry.comment().created_at()));
         if (time < earliest || !entry.should_show(login)) continue;
-        out.entries.push_back(entry);
+        out(entry);
       } catch (const ApiError& e) {
         spdlog::warn("Comment {:x} error: {}", comment_id, e.what());
       }
-      if (out.entries.full()) break;
+      if (--limit == 0) break;
     }
-    if (!iter->is_done()) {
-      out.next = PageCursor(iter->get_cursor()->int_field_0(), **iter);
-    }
-    return out;
+    if (iter->is_done()) return {};
+    return PageCursor(iter->get_cursor()->int_field_0(), **iter);
   }
   auto InstanceController::list_user_threads(
+    Writer<ThreadDetail> out,
     ReadTxnBase& txn,
     uint64_t user_id,
     UserPostSortType sort,
     Login login,
-    PageCursor from
-  ) -> PageOf<ThreadDetail> {
-    PageOf<ThreadDetail> out { {}, !from, {} };
+    PageCursor from,
+    uint16_t limit
+  ) -> PageCursor {
     const auto user = txn.get_user(user_id);
     if (!user) throw ApiError("User does not exist", 404);
     optional<DBIter> iter;
@@ -985,30 +988,27 @@ namespace Ludwig {
       try {
         const auto entry = ThreadDetail::get(txn, thread_id, login, user);
         if (!entry.should_show(login)) continue;
-        out.entries.push_back(std::move(entry));
+        if (entry.should_fetch_card()) {
+          event_bus->dispatch(Event::ThreadFetchLinkCard, entry.id);
+        }
+        out(entry);
       } catch (const ApiError& e) {
         spdlog::warn("Thread {:x} error: {}", thread_id, e.what());
       }
-      if (out.entries.size() >= ITEMS_PER_PAGE) break;
+      if (--limit == 0) break;
     }
-    if (!iter->is_done()) {
-      out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
-    }
-    for (const auto& thread : out.entries) {
-      if (thread.should_fetch_card()) {
-        event_bus->dispatch(Event::ThreadFetchLinkCard, thread.id);
-      }
-    }
-    return out;
+    if (iter->is_done()) return {};
+    return PageCursor(iter->get_cursor()->int_field_1(), **iter);
   }
   auto InstanceController::list_user_comments(
+    Writer<CommentDetail> out,
     ReadTxnBase& txn,
     uint64_t user_id,
     UserPostSortType sort,
     Login login,
-    PageCursor from
-  ) -> PageOf<CommentDetail> {
-    PageOf<CommentDetail> out { {}, !from, {} };
+    PageCursor from,
+    uint16_t limit
+  ) -> PageCursor {
     optional<DBIter> iter;
     switch (sort) {
       case UserPostSortType::New:
@@ -1026,16 +1026,14 @@ namespace Ludwig {
       try {
         const auto entry = CommentDetail::get(txn, comment_id, login);
         if (!entry.should_show(login)) continue;
-        out.entries.push_back(std::move(entry));
+        out(entry);
       } catch (const ApiError& e) {
         spdlog::warn("Comment {:x} error: {}", comment_id, e.what());
       }
-      if (out.entries.size() >= ITEMS_PER_PAGE) break;
+      if (--limit == 0) break;
     }
-    if (!iter->is_done()) {
-      out.next = PageCursor(iter->get_cursor()->int_field_1(), **iter);
-    }
-    return out;
+    if (iter->is_done()) return {};
+    return PageCursor(iter->get_cursor()->int_field_1(), **iter);
   }
   auto InstanceController::search_step_1(SearchQuery query, SearchEngine::Callback&& callback) -> void {
     if (!search_engine) throw ApiError("Search is not enabled on this server", 403);
@@ -1083,9 +1081,12 @@ namespace Ludwig {
     return out;
   }
 
-  auto InstanceController::update_site(const SiteUpdate& update) -> void {
+  auto InstanceController::update_site(const SiteUpdate& update, optional<uint64_t> as_user) -> void {
     {
       auto txn = db->open_write_txn();
+      if (as_user && !can_change_site_settings(LocalUserDetail::get(txn, *as_user))) {
+        throw ApiError("User does not have permission to change site settings", 403);
+      }
       if (const auto v = update.name) txn.set_setting(SettingsKey::name, *v);
       if (const auto v = update.description) txn.set_setting(SettingsKey::description, *v);
       if (const auto v = update.icon_url) txn.set_setting(SettingsKey::icon_url, v->value_or(""));
@@ -1247,9 +1248,13 @@ namespace Ludwig {
     txn.commit();
     return user_id;
   }
-  auto InstanceController::update_local_user(uint64_t id, const LocalUserUpdate& update) -> void {
+  auto InstanceController::update_local_user(uint64_t id, optional<uint64_t> as_user, const LocalUserUpdate& update) -> void {
     auto txn = db->open_write_txn();
     const auto detail = LocalUserDetail::get(txn, id);
+    const auto login = as_user.transform([&](auto id){return LocalUserDetail::get(txn, id);});
+    if (login && !detail.can_change_settings(login)) {
+      throw ApiError("User does not have permission to modify this user", 403);
+    }
     if (update.email && !regex_match(*update.email, email_regex)) {
       throw ApiError("Invalid email address", 400);
     }
@@ -1267,39 +1272,49 @@ namespace Ludwig {
         update.javascript_enabled) {
       const auto& lu = detail.local_user();
       FlatBufferBuilder fbb;
-      fbb.Finish(CreateLocalUserDirect(fbb,
-        update.email.value_or(lu.email()->c_str()),
-        lu.password_hash(),
-        lu.password_salt(),
-        lu.admin(),
-        update.approved.value_or(lu.approved()),
-        update.accepted_application.value_or(lu.accepted_application()),
-        update.email_verified.value_or(lu.email_verified()),
-        lu.invite(),
-        update.open_links_in_new_tab.value_or(lu.open_links_in_new_tab()),
-        lu.send_notifications_to_email(),
-        update.show_avatars.value_or(lu.show_avatars()),
-        lu.show_images_threads(),
-        lu.show_images_comments(),
-        update.show_bot_accounts.value_or(lu.show_bot_accounts()),
-        lu.show_new_post_notifs(),
-        update.hide_cw_posts.value_or(lu.hide_cw_posts()),
-        update.expand_cw_posts.value_or(lu.expand_cw_posts()),
-        update.expand_cw_images.value_or(lu.expand_cw_images()),
-        lu.show_read_posts(),
-        update.show_karma.value_or(lu.show_karma()),
-        update.javascript_enabled.value_or(lu.javascript_enabled()),
-        lu.infinite_scroll_enabled(),
-        lu.interface_language() ? lu.interface_language()->c_str() : nullptr,
-        lu.theme() ? lu.theme()->c_str() : nullptr,
-        lu.default_sort_type(),
-        lu.default_comment_sort_type()
-      ));
+      const auto email = fbb.CreateString(update.email.value_or(lu.email()->c_str()));
+      const auto theme = fbb.CreateString(lu.theme());
+      const auto lemmy_theme = fbb.CreateString(lu.lemmy_theme());
+      LocalUserBuilder b(fbb);
+      b.add_email(email);
+      b.add_password_hash(lu.password_hash());
+      b.add_password_salt(lu.password_salt());
+      b.add_admin(lu.admin());
+      b.add_approved(update.approved.value_or(lu.approved()));
+      b.add_accepted_application(update.accepted_application.value_or(lu.accepted_application()));
+      b.add_email_verified(update.email_verified.value_or(lu.email_verified()));
+      if (lu.invite()) b.add_invite(*lu.invite());
+      b.add_open_links_in_new_tab(update.open_links_in_new_tab.value_or(lu.open_links_in_new_tab()));
+      b.add_send_notifications_to_email(lu.send_notifications_to_email());
+      b.add_show_avatars(update.show_avatars.value_or(lu.show_avatars()));
+      b.add_show_images_threads(lu.show_images_threads());
+      b.add_show_images_comments(lu.show_images_comments());
+      b.add_show_bot_accounts(update.show_bot_accounts.value_or(lu.show_bot_accounts()));
+      b.add_show_new_post_notifs(lu.show_new_post_notifs());
+      b.add_hide_cw_posts(update.hide_cw_posts.value_or(lu.hide_cw_posts()));
+      b.add_expand_cw_posts(update.expand_cw_posts.value_or(lu.expand_cw_posts()));
+      b.add_expand_cw_images(update.expand_cw_images.value_or(lu.expand_cw_images()));
+      b.add_show_read_posts(lu.show_read_posts());
+      b.add_show_karma(update.show_karma.value_or(lu.show_karma()));
+      b.add_javascript_enabled(update.javascript_enabled.value_or(lu.javascript_enabled()));
+      b.add_infinite_scroll_enabled(lu.infinite_scroll_enabled());
+      b.add_theme(theme);
+      b.add_lemmy_theme(lemmy_theme);
+      b.add_default_sort_type(lu.default_sort_type());
+      b.add_default_comment_sort_type(lu.default_comment_sort_type());
+      fbb.Finish(b.Finish());
       txn.set_local_user(id, fbb.GetBufferSpan());
     }
     if (update.display_name || update.bio || update.avatar_url || update.banner_url) {
       const auto& u = detail.user();
       FlatBufferBuilder fbb;
+      const auto name = fbb.CreateString(u.name()),
+        matrix_user_id = fbb.CreateString(u.matrix_user_id()),
+        avatar_url = update.avatar_url.value_or(u.avatar_url() ? optional(u.avatar_url()->string_view()) : nullopt)
+          .transform([&](auto s) { return fbb.CreateString(s); }).value_or(0),
+        banner_url = update.banner_url.value_or(u.banner_url() ? optional(u.banner_url()->string_view()) : nullopt)
+          .transform([&](auto s) { return fbb.CreateString(s); }).value_or(0),
+        mod_reason = fbb.CreateString(u.mod_reason());
       const auto [display_name_type, display_name] =
         update.display_name
           .transform([](optional<string_view> sv) { return sv.transform(λx(string(x))); })
@@ -1316,24 +1331,27 @@ namespace Ludwig {
             return tuple(fbb.CreateString(s), bio_type, bio);
           })
           .value_or(tuple(0, 0, 0));
-      fbb.Finish(CreateUser(fbb,
-        fbb.CreateString(u.name()),
-        display_name_type, display_name,
-        bio_raw, bio_type, bio,
-        0, 0, {},
-        u.created_at(), now_s(), u.deleted_at(),
-        update.avatar_url.value_or(u.avatar_url() ? optional(u.avatar_url()->string_view()) : nullopt)
-          .transform([&](auto s) { return fbb.CreateString(s); }).value_or(0),
-        update.banner_url.value_or(u.banner_url() ? optional(u.banner_url()->string_view()) : nullopt)
-          .transform([&](auto s) { return fbb.CreateString(s); }).value_or(0),
-        u.bot(),
-        u.mod_state(), fbb.CreateString(u.mod_reason())
-      ));
+      UserBuilder b(fbb);
+      b.add_name(name);
+      b.add_display_name_type(display_name_type);
+      b.add_display_name(display_name);
+      b.add_bio_raw(bio_raw);
+      b.add_bio_type(bio_type);
+      b.add_bio(bio);
+      b.add_matrix_user_id(matrix_user_id);
+      b.add_created_at(u.created_at());
+      b.add_updated_at(now_s());
+      b.add_avatar_url(avatar_url);
+      b.add_banner_url(banner_url);
+      b.add_bot(u.bot());
+      b.add_mod_state(u.mod_state());
+      b.add_mod_reason(mod_reason);
+      fbb.Finish(b.Finish());
       txn.set_user(id, fbb.GetBufferSpan());
     }
     txn.commit();
   }
-  auto InstanceController::approve_local_user_application(uint64_t user_id) -> void {
+  auto InstanceController::approve_local_user_application(uint64_t user_id, optional<uint64_t> as_user) -> void {
     LocalUserUpdate update;
     {
       auto txn = db->open_read_txn();
@@ -1345,15 +1363,16 @@ namespace Ludwig {
       update.accepted_application = true;
       update.approved = old.approved() || site_detail()->registration_application_required;
     }
-    update_local_user(user_id, update);
+    update_local_user(user_id, as_user, update);
   }
-  auto InstanceController::create_site_invite(uint64_t inviter_user_id) -> uint64_t {
+  auto InstanceController::create_site_invite(optional<uint64_t> as_user) -> uint64_t {
+    using namespace chrono;
     auto txn = db->open_write_txn();
-    const auto user = LocalUserDetail::get(txn, inviter_user_id);
-    if (site_detail()->invite_admin_only && !user.local_user().admin()) {
+    const auto user = as_user.transform([&](auto id){return LocalUserDetail::get(txn, id);});
+    if (site_detail()->invite_admin_only && user && !user->local_user().admin()) {
       throw ApiError("Only admins can create invite codes", 403);
     }
-    const auto id = txn.create_invite(inviter_user_id, 86400 * 7);
+    const auto id = txn.create_invite(as_user.value_or(0), duration_cast<seconds>(weeks{1}).count());
     txn.commit();
     return id;
   }
@@ -1416,6 +1435,14 @@ namespace Ludwig {
     txn.set_local_board(board_id, fbb.GetBufferSpan());
     txn.commit();
     return board_id;
+  }
+  auto InstanceController::update_local_board(uint64_t id, optional<uint64_t> as_user, const LocalBoardUpdate& update) -> void {
+    auto txn = db->open_write_txn();
+    const auto detail = LocalUserDetail::get(txn, id);
+    const auto login = as_user.transform([&](auto id){return LocalUserDetail::get(txn, id);});
+    if (login && !detail.can_change_settings(login)) {
+      throw ApiError("User does not have permission to modify this board", 403);
+    }
   }
   auto InstanceController::create_local_thread(
     uint64_t author,

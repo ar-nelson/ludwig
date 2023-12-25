@@ -29,6 +29,14 @@ enum BoardSortType : ubyte { New, Old, MostSubscribers, MostPosts, NewPosts }
 
 enum UserSortType : ubyte { New, Old, MostPosts, NewPosts }
 
+enum HomePageType : ubyte {
+  Subscribed,
+  Local,
+  All,
+  BoardList,
+  SingleBoard
+}
+
 enum ModState : ubyte { Visible, Flagged, Locked, Removed }
 
 union TextBlock {
@@ -113,6 +121,7 @@ table User {
   bio: [TextBlock];
   actor_id: string;
   inbox_url: string;
+  matrix_user_id: string;
   instance: uint64 = null;
   created_at: uint64;
   updated_at: uint64 = null;
@@ -164,8 +173,8 @@ table LocalUser {
   show_karma: bool = true;
   javascript_enabled: bool = true;
   infinite_scroll_enabled: bool = true;
-  interface_language: string;
   theme: string;
+  lemmy_theme: string;
   default_sort_type: SortType = Active;
   default_comment_sort_type: CommentSortType = Hot;
 }
@@ -181,6 +190,7 @@ table Board {
   display_name: [PlainTextWithEmojis];
   actor_id: string;
   inbox_url: string;
+  followers_url: string;
   instance: uint64 = null;
   created_at: uint64;
   updated_at: uint64 = null;
@@ -205,10 +215,6 @@ table BoardStats {
   latest_post_time: uint64 = 0;
   latest_post_id: uint64 = 0;
   subscriber_count: uint64 = 0;
-  users_active_half_year: uint32 = 0;
-  users_active_month: uint32 = 0;
-  users_active_week: uint32 = 0;
-  users_active_day: uint32 = 0;
 }
 
 table LocalBoard {
@@ -319,6 +325,13 @@ table Invite {
   from: uint64;
   accepted_at: uint64 = null;
   to: uint64 = null;
+}
+
+table SiteStats {
+  user_count: uint64;
+  board_count: uint64;
+  thread_count: uint64;
+  comment_count: uint64;
 }
 
 table SettingRecord {

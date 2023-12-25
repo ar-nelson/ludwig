@@ -5,6 +5,7 @@
 #include <variant>
 #include <uWebSockets/App.h>
 #include <flatbuffers/string.h>
+#include <flatbuffers/idl.h>
 #include <simdjson.h>
 
 namespace Ludwig {
@@ -80,39 +81,51 @@ namespace Ludwig {
 
   struct QueryString {
     std::string_view query;
-    inline auto required_hex_id(std::string_view key) -> uint64_t {
+    auto required_hex_id(std::string_view key) -> uint64_t {
       try {
         return std::stoull(std::string(uWS::getDecodedQueryValue(key, query)), nullptr, 16);
       } catch (...) {
         throw ApiError(fmt::format("Invalid or missing '{}' parameter", key), 400);
       }
     }
-    inline auto required_int(std::string_view key) -> int {
+    auto required_int(std::string_view key) -> int {
       try {
         return std::stoi(std::string(uWS::getDecodedQueryValue(key, query)));
       } catch (...) {
         throw ApiError(fmt::format("Invalid or missing '{}' parameter", key), 400);
       }
     }
-    inline auto required_string(std::string_view key) -> std::string_view {
+    auto required_string(std::string_view key) -> std::string_view {
       auto s = uWS::getDecodedQueryValue(key, query);
       if (s.empty()) throw ApiError(fmt::format("Invalid or missing '{}' parameter", key), 400);
       return s;
     }
-    inline auto required_vote(std::string_view key) -> Vote {
+    auto required_vote(std::string_view key) -> Vote {
       const auto vote_str = uWS::getDecodedQueryValue(key, query);
       if (vote_str == "1") return Vote::Upvote;
       else if (vote_str == "-1") return Vote::Downvote;
       else if (vote_str == "0") return Vote::NoVote;
       else throw ApiError(fmt::format("Invalid or missing '{}' parameter", key), 400);
     }
-    inline auto optional_string(std::string_view key) -> std::optional<std::string_view> {
+    auto id(std::string_view key) -> uint64_t {
+      if (key.empty()) return 0;
+      try {
+        return std::stoull(std::string(uWS::getDecodedQueryValue(key, query)), nullptr);
+      } catch (...) {
+        throw ApiError(fmt::format("Invalid '{}' parameter", key), 400);
+      }
+    }
+    auto string(std::string_view key) -> std::string_view {
+      return uWS::getDecodedQueryValue(key, query);
+    }
+    auto optional_string(std::string_view key) -> std::optional<std::string_view> {
       auto s = uWS::getDecodedQueryValue(key, query);
       if (s.empty()) return {};
       return s;
     }
-    inline auto optional_bool(std::string_view key) -> bool {
-      return uWS::getDecodedQueryValue(key, query) == "1";
+    auto optional_bool(std::string_view key) -> bool {
+      const auto decoded = uWS::getDecodedQueryValue(key, query);
+      return decoded == "1" || decoded == "true";
     }
   };
 
@@ -369,10 +382,55 @@ namespace Ludwig {
       return std::move(*this);
     }
 
+    Router &&put(std::string pattern, PostHandler<std::string>&& handler, size_t max_size = 10 * 1024 * 1024) {
+      app.put(pattern, post_handler<std::string>(std::move(handler), max_size, {}, "", [](auto&& s){return s;}));
+      return std::move(*this);
+    }
+
     Router &&post_form(std::string pattern, PostHandler<QueryString>&& handler, size_t max_size = 10 * 1024 * 1024) {
       app.post(pattern, post_handler<QueryString>(std::move(handler), max_size, TYPE_FORM, "?", [](auto&& s){
         if (!simdjson::validate_utf8(s)) throw ApiError("POST body is not valid UTF-8", 415);
         return QueryString{s};
+      }));
+      return std::move(*this);
+    }
+
+    template <class T> Router &&post_json_fb(
+      std::string pattern,
+      std::shared_ptr<flatbuffers::Parser> parser,
+      const char table_name[],
+      PostHandler<std::unique_ptr<T, std::function<void(T*)>>>&& handler,
+      size_t max_size = 10 * 1024 * 1024
+    ) {
+      using Ptr = std::unique_ptr<T, std::function<void(T*)>>;
+      app.post(pattern, post_handler<Ptr>(std::move(handler), max_size, "application/json", "", [parser, table_name](auto&& s) -> Ptr {
+        parser->SetRootType(table_name);
+        if (!parser->ParseJson(s.c_str())) {
+          throw ApiError(fmt::format("Invalid JSON {} object: {}", table_name, parser->error_), 400);
+        }
+        auto fbb = new flatbuffers::FlatBufferBuilder;
+        fbb->Swap(parser->builder_);
+        return Ptr(flatbuffers::GetMutableRoot<T>(fbb->GetBufferPointer()), [fbb](auto*){delete fbb;});
+      }));
+      return std::move(*this);
+    }
+
+    template <class T> Router &&put_json_fb(
+      std::string pattern,
+      std::shared_ptr<flatbuffers::Parser> parser,
+      const char table_name[],
+      PostHandler<std::unique_ptr<T, std::function<void(T*)>>>&& handler,
+      size_t max_size = 10 * 1024 * 1024
+    ) {
+      using Ptr = std::unique_ptr<T, std::function<void(T*)>>;
+      app.put(pattern, post_handler<Ptr>(std::move(handler), max_size, "application/json", "", [parser, table_name](auto&& s) -> Ptr {
+        parser->SetRootType(table_name);
+        if (!parser->ParseJson(s.c_str())) {
+          throw ApiError(fmt::format("Invalid JSON {} object: {}", table_name, parser->error_), 400);
+        }
+        auto fbb = new flatbuffers::FlatBufferBuilder;
+        fbb->Swap(parser->builder_);
+        return Ptr(flatbuffers::GetMutableRoot<T>(fbb->GetBufferPointer()), [fbb](auto*){delete fbb;});
       }));
       return std::move(*this);
     }

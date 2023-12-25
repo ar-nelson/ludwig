@@ -3,6 +3,7 @@
 #include "util/rich_text.h++"
 #include "models/db.h++"
 #include "models/detail.h++"
+#include "models/enums.h++"
 #include "services/db.h++"
 #include "services/event_bus.h++"
 #include "services/http_client.h++"
@@ -11,7 +12,6 @@
 #include <map>
 #include <regex>
 #include <variant>
-#include <static_vector.hpp>
 #include <openssl/crypto.h>
 
 namespace Ludwig {
@@ -52,55 +52,63 @@ namespace Ludwig {
 
     using OptKV = std::optional<std::pair<Cursor, uint64_t>>;
 
-    inline auto rank_k() -> double {
+    auto rank_k() -> double {
       return exists ? *reinterpret_cast<double*>(&k) : INFINITY;
     }
-    inline auto next_cursor_desc() -> OptKV {
+    auto next_cursor_desc() -> OptKV {
       if (!exists) return {};
       return {{Cursor(k), v ? v - 1 : v}};
     }
-    inline auto next_cursor_asc() -> OptKV {
+    auto next_cursor_asc() -> OptKV {
       if (!exists) return {};
       return {{Cursor(k), v ? v + 1 : ID_MAX}};
     }
-    inline auto next_cursor_desc(uint64_t prefix) -> OptKV {
+    auto next_cursor_desc(uint64_t prefix) -> OptKV {
       if (!exists) return {};
       return {{Cursor(prefix, k), v ? v - 1 : v}};
     }
-    inline auto next_cursor_asc(uint64_t prefix) -> OptKV {
+    auto next_cursor_asc(uint64_t prefix) -> OptKV {
       if (!exists) return {};
       return {{Cursor(prefix, k), v ? v + 1 : ID_MAX}};
     }
   };
 
-  template <typename T> struct PageOf {
-    stlpb::static_vector<T, ITEMS_PER_PAGE> entries;
-    bool is_first;
-    PageCursor next;
-  };
+  template <typename T> using Writer = std::function<void (const T&)>;
 
   struct CommentTree {
     std::unordered_map<uint64_t, PageCursor> continued;
     std::multimap<uint64_t, CommentDetail> comments;
 
-    inline auto size() const -> size_t {
+    auto size() const -> size_t {
       return comments.size();
     }
-    inline auto emplace(uint64_t parent, CommentDetail e) -> void {
+    auto emplace(uint64_t parent, CommentDetail e) -> void {
       comments.emplace(parent, e);
     }
-    inline auto mark_continued(uint64_t parent, PageCursor from = {}) {
+    auto mark_continued(uint64_t parent, PageCursor from = {}) {
       continued.emplace(parent, from);
     }
   };
 
   struct SiteUpdate {
     std::optional<std::string_view> name, description;
-    std::optional<std::optional<std::string_view>> icon_url, banner_url;
+    std::optional<std::optional<std::string_view>> icon_url, banner_url, application_question;
     std::optional<uint64_t> max_post_length;
-    std::optional<bool> javascript_enabled, board_creation_admin_only,
-         registration_enabled, registration_application_required,
-         registration_invite_required, invite_admin_only;
+    std::optional<HomePageType> home_page_type;
+    std::optional<bool> javascript_enabled, infinite_scroll_enabled,
+        votes_enabled, downvotes_enabled, cws_enabled, require_login_to_view,
+        board_creation_admin_only, registration_enabled,
+        registration_application_required, registration_invite_required,
+        invite_admin_only;
+  };
+
+  struct FirstRunSetup : SiteUpdate {
+    std::optional<std::string_view> base_url, default_board_name, admin_name;
+    std::optional<SecretString> admin_password;
+  };
+
+  struct FirstRunSetupOptions {
+    bool admin_exists, default_board_exists, base_url_set, home_page_type_set;
   };
 
   struct LocalUserUpdate {
@@ -112,7 +120,7 @@ namespace Ludwig {
   };
 
   struct LocalBoardUpdate {
-    std::optional<std::optional<const char*>> display_name, description, icon_url, banner_url;
+    std::optional<std::optional<const char*>> display_name, description, icon_url, banner_url, content_warning;
     std::optional<bool> is_private, restricted_posting, approve_subscribe, can_upvote, can_downvote;
   };
 
@@ -139,60 +147,6 @@ namespace Ludwig {
     const auto s = fmt::format("{:016X}", id);
     const std::string_view v = s;
     return fmt::format("{}-{}-{}-{}", v.substr(0, 5), v.substr(5, 3), v.substr(8, 3), v.substr(11, 5));
-  }
-
-  static inline auto parse_sort_type(std::string_view str, Login login = {}) -> SortType {
-    if (str.empty()) return login ? login->local_user().default_sort_type() : SortType::Active;
-    if (str == "Hot") return SortType::Hot;
-    if (str == "Active") return SortType::Active;
-    if (str == "New") return SortType::New;
-    if (str == "Old") return SortType::Old;
-    if (str == "MostComments") return SortType::MostComments;
-    if (str == "NewComments") return SortType::NewComments;
-    if (str == "Top" || str == "TopAll") return SortType::TopAll;
-    if (str == "TopYear") return SortType::TopYear;
-    if (str == "TopSixMonths") return SortType::TopSixMonths;
-    if (str == "TopThreeMonths") return SortType::TopThreeMonths;
-    if (str == "TopMonth") return SortType::TopMonth;
-    if (str == "TopWeek") return SortType::TopWeek;
-    if (str == "TopDay") return SortType::TopDay;
-    if (str == "TopTwelveHour") return SortType::TopTwelveHour;
-    if (str == "TopSixHour") return SortType::TopSixHour;
-    if (str == "TopHour") return SortType::TopHour;
-    throw ApiError("Bad sort type", 400);
-  }
-
-  static inline auto parse_comment_sort_type(std::string_view str, Login login = {}) -> CommentSortType {
-    if (str.empty()) return login ? login->local_user().default_comment_sort_type() : CommentSortType::Hot;
-    if (str == "Hot") return CommentSortType::Hot;
-    if (str == "New") return CommentSortType::New;
-    if (str == "Old") return CommentSortType::Old;
-    if (str == "Top") return CommentSortType::Top;
-    throw ApiError("Bad comment sort type", 400);
-  }
-
-  static inline auto parse_user_post_sort_type(std::string_view str) -> UserPostSortType {
-    if (str.empty() || str == "New") return UserPostSortType::New;
-    if (str == "Old") return UserPostSortType::Old;
-    if (str == "Top") return UserPostSortType::Top;
-    throw ApiError("Bad post sort type", 400);
-  }
-
-  static inline auto parse_user_sort_type(std::string_view str) -> UserSortType {
-    if (str.empty() || str == "NewPosts") return UserSortType::NewPosts;
-    if (str == "MostPosts") return UserSortType::MostPosts;
-    if (str == "New") return UserSortType::New;
-    if (str == "Old") return UserSortType::Old;
-    throw ApiError("Bad user sort type", 400);
-  }
-
-  static inline auto parse_board_sort_type(std::string_view str) -> BoardSortType {
-    if (str.empty() || str == "MostSubscribers") return BoardSortType::MostSubscribers;
-    if (str == "NewPosts") return BoardSortType::NewPosts;
-    if (str == "MostPosts") return BoardSortType::MostPosts;
-    if (str == "New") return BoardSortType::New;
-    if (str == "Old") return BoardSortType::Old;
-    throw ApiError("Bad board sort type", 400);
   }
 
   static auto parse_hex_id(std::string hex_id) -> std::optional<uint64_t> {
@@ -238,13 +192,13 @@ namespace Ludwig {
     static auto can_change_site_settings(Login login) -> bool;
     auto can_create_board(Login login) -> bool;
 
-    inline auto open_read_txn() -> ReadTxnImpl {
+    auto open_read_txn() -> ReadTxnImpl {
       return db->open_read_txn();
     }
 
     static auto hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void;
 
-    inline auto validate_session(ReadTxnBase& txn, uint64_t session_id) -> std::optional<uint64_t> {
+    auto validate_session(ReadTxnBase& txn, uint64_t session_id) -> std::optional<uint64_t> {
       auto session = txn.get_session(session_id);
       if (session) return { session->get().user() };
       return {};
@@ -262,7 +216,7 @@ namespace Ludwig {
       std::string_view user_agent,
       bool remember = false
     ) -> LoginResponse;
-    inline auto site_detail() -> const SiteDetail* {
+    auto site_detail() -> const SiteDetail* {
       return cached_site_detail;
     }
     auto thread_detail(
@@ -270,76 +224,94 @@ namespace Ludwig {
       uint64_t id,
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
-      PageCursor from = {}
+      PageCursor from = {},
+      uint16_t limit = ITEMS_PER_PAGE
     ) -> std::pair<ThreadDetail, CommentTree>;
     auto comment_detail(
       ReadTxnBase& txn,
       uint64_t id,
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
-      PageCursor from = {}
+      PageCursor from = {},
+      uint16_t limit = ITEMS_PER_PAGE
     ) -> std::pair<CommentDetail, CommentTree>;
     auto user_detail(ReadTxnBase& txn, uint64_t id, Login login) -> UserDetail;
     auto local_user_detail(ReadTxnBase& txn, uint64_t id, Login login) -> LocalUserDetail;
     auto board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> BoardDetail;
     auto local_board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> LocalBoardDetail;
     auto list_users(
+      Writer<UserDetail> out,
       ReadTxnBase& txn,
       UserSortType sort,
       bool local_only,
       Login login = {},
-      PageCursor from = {}
-    ) -> PageOf<UserDetail>;
+      PageCursor from = {},
+      uint16_t limit = ITEMS_PER_PAGE
+    ) -> PageCursor;
     auto list_boards(
+      Writer<BoardDetail> out,
       ReadTxnBase& txn,
       BoardSortType sort,
       bool local_only,
       bool subscribed_only,
       Login login = {},
-      PageCursor from = {}
-    ) -> PageOf<BoardDetail>;
+      PageCursor from = {},
+      uint16_t limit = ITEMS_PER_PAGE
+    ) -> PageCursor;
     auto list_board_threads(
+      Writer<ThreadDetail> out,
       ReadTxnBase& txn,
       uint64_t board_id,
       SortType sort = SortType::Active,
       Login login = {},
-      PageCursor from = {}
-    ) -> PageOf<ThreadDetail>;
+      PageCursor from = {},
+      uint16_t limit = ITEMS_PER_PAGE
+    ) -> PageCursor;
     auto list_board_comments(
+      Writer<CommentDetail> out,
       ReadTxnBase& txn,
       uint64_t board_id,
       SortType sort = SortType::Active,
       Login login = {},
-      PageCursor from = {}
-    ) -> PageOf<CommentDetail>;
+      PageCursor from = {},
+      uint16_t limit = ITEMS_PER_PAGE
+    ) -> PageCursor;
     auto list_feed_threads(
+      Writer<ThreadDetail> out,
       ReadTxnBase& txn,
       uint64_t feed_id,
       SortType sort = SortType::Active,
       Login login = {},
-      PageCursor from = {}
-    ) -> PageOf<ThreadDetail>;
+      PageCursor from = {},
+      uint16_t limit = ITEMS_PER_PAGE
+    ) -> PageCursor;
     auto list_feed_comments(
+      Writer<CommentDetail> out,
       ReadTxnBase& txn,
       uint64_t feed_id,
       SortType sort = SortType::Active,
       Login login = {},
-      PageCursor from = {}
-    ) -> PageOf<CommentDetail>;
+      PageCursor from = {},
+      uint16_t limit = ITEMS_PER_PAGE
+    ) -> PageCursor;
     auto list_user_threads(
+      Writer<ThreadDetail> out,
       ReadTxnBase& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
-      PageCursor from = {}
-    ) -> PageOf<ThreadDetail>;
+      PageCursor from = {},
+      uint16_t limit = ITEMS_PER_PAGE
+    ) -> PageCursor;
     auto list_user_comments(
+      Writer<CommentDetail> out,
       ReadTxnBase& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
-      PageCursor from = {}
-    ) -> PageOf<CommentDetail>;
+      PageCursor from = {},
+      uint16_t limit = ITEMS_PER_PAGE
+    ) -> PageCursor;
     auto search_step_1(SearchQuery query, SearchEngine::Callback&& callback) -> void;
     auto search_step_2(
       ReadTxnBase& txn,
@@ -347,8 +319,10 @@ namespace Ludwig {
       size_t max_len,
       Login login
     ) -> std::vector<SearchResultDetail>;
+    auto first_run_setup_options(ReadTxnBase& txn) -> FirstRunSetupOptions;
 
-    auto update_site(const SiteUpdate& update) -> void;
+    auto first_run_setup(const FirstRunSetup& update) -> void;
+    auto update_site(const SiteUpdate& update, std::optional<uint64_t> as_user) -> void;
     auto register_local_user(
       std::string_view username,
       std::string_view email,
@@ -365,9 +339,17 @@ namespace Ludwig {
       bool is_bot,
       std::optional<uint64_t> invite = {}
     ) -> uint64_t;
-    auto update_local_user(uint64_t id, const LocalUserUpdate& update) -> void;
-    auto approve_local_user_application(uint64_t user_id) -> void;
-    auto create_site_invite(uint64_t inviter_user_id) -> uint64_t;
+    auto update_local_user(uint64_t id, std::optional<uint64_t> as_user, const LocalUserUpdate& update) -> void;
+    auto reset_password(uint64_t user_id) -> std::string;
+    auto change_password(uint64_t user_id, SecretString&& new_password) -> void;
+    auto change_password(std::string_view reset_token, SecretString&& new_password) -> std::string; // returns username
+    auto change_password(
+      uint64_t user_id,
+      SecretString&& old_password,
+      SecretString&& new_password
+    ) -> void;
+    auto approve_local_user_application(uint64_t user_id, std::optional<uint64_t> as_user) -> void;
+    auto create_site_invite(std::optional<uint64_t> as_user) -> uint64_t;
     auto create_local_board(
       uint64_t owner,
       std::string_view name,
@@ -377,7 +359,7 @@ namespace Ludwig {
       bool is_restricted_posting = false,
       bool is_local_only = false
     ) -> uint64_t;
-    auto update_local_board(uint64_t id, const LocalBoardUpdate& update) -> void;
+    auto update_local_board(uint64_t id, std::optional<uint64_t> as_user, const LocalBoardUpdate& update) -> void;
     auto create_local_thread(
       uint64_t author,
       uint64_t board,
@@ -386,14 +368,14 @@ namespace Ludwig {
       std::optional<std::string_view> text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
-    auto update_thread(uint64_t id, const ThreadUpdate& update) -> void;
+    auto update_thread(uint64_t id, std::optional<uint64_t> as_user, const ThreadUpdate& update) -> void;
     auto create_local_comment(
       uint64_t author,
       uint64_t parent,
       std::string_view text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
-    auto update_comment(uint64_t id, const CommentUpdate& update) -> void;
+    auto update_comment(uint64_t id, std::optional<uint64_t> as_user, const CommentUpdate& update) -> void;
     auto vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;
     auto subscribe(uint64_t user_id, uint64_t board_id, bool subscribed = true) -> void;
     auto save_post(uint64_t user_id, uint64_t post_id, bool saved = true) -> void;

@@ -5,12 +5,15 @@
 namespace Ludwig {
 
   struct SiteDetail {
-    std::string name, domain, description;
-    std::optional<std::string> icon_url, banner_url;
-    uint64_t max_post_length;
-    bool javascript_enabled, infinite_scroll_enabled, board_creation_admin_only,
-         registration_enabled, registration_application_required,
-         registration_invite_required, invite_admin_only;
+    std::string name, base_url, description, public_key_pem;
+    std::optional<std::string> icon_url, banner_url, application_question;
+    HomePageType home_page_type;
+    uint64_t default_board_id, post_max_length, created_at, updated_at;
+    bool setup_done, javascript_enabled, infinite_scroll_enabled, votes_enabled,
+        downvotes_enabled, cws_enabled, require_login_to_view,
+        board_creation_admin_only, registration_enabled,
+        registration_application_required, registration_invite_required,
+        invite_admin_only;
 
     static auto get(ReadTxnBase& txn) -> SiteDetail;
   };
@@ -35,6 +38,7 @@ namespace Ludwig {
 
     auto can_view(Login login) const noexcept -> bool;
     auto should_show(Login login) const noexcept -> bool;
+    auto can_change_settings(Login login) const noexcept -> bool;
 
     static constexpr std::string_view noun = "user";
     static auto get(ReadTxnBase& txn, uint64_t id, Login login) -> UserDetail;

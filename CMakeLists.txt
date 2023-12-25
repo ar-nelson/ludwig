@@ -133,8 +133,10 @@ set (ludwig_common_src
   src/models/detail.c++
   src/models/protocols_parser.c++
   src/controllers/instance.c++
+  src/controllers/lemmy_api.c++
   src/controllers/remote_media.c++
   src/views/media.c++
+  src/views/lemmy_api.c++
   src/views/webapp.c++
 )
 

@@ -20,7 +20,7 @@ struct Instance {
     auto db = make_shared<DB>(file.name);
     auto txn = db->open_write_txn();
     txn.set_setting(SettingsKey::created_at, epoch);
-    txn.set_setting(SettingsKey::domain, "ludwig.test");
+    txn.set_setting(SettingsKey::base_url, "http://ludwig.test");
     txn.commit();
     controller = make_shared<InstanceController>(db, nullptr, rich_text);
   }
@@ -38,7 +38,7 @@ struct PopulatedInstance {
     auto db = make_shared<DB>(file.name);
     auto txn = db->open_write_txn();
     txn.set_setting(SettingsKey::created_at, epoch);
-    txn.set_setting(SettingsKey::domain, "ludwig.test");
+    txn.set_setting(SettingsKey::base_url, "http://ludwig.test");
     FlatBufferBuilder fbb;
     fbb.ForceDefaults(true);
     {
@@ -327,13 +327,11 @@ TEST_CASE("hash password", "[instance]") {
 
 TEST_CASE_METHOD(PopulatedInstance, "list users", "[instance]") {
   auto txn = controller->open_read_txn();
-  PageOf<UserDetail> page;
   vector<string> vec;
+  const auto add_name = [&](auto& i){vec.emplace_back(i.user().name()->str());};
 
   // New, not logged in, local and federated
-  page = controller->list_users(txn, UserSortType::New, false);
-  REQUIRE(page.entries.size() > 0);
-  for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
+  auto next = controller->list_users(add_name, txn, UserSortType::New, false);
   {
     vector<string> tmp;
     for (int i = 0; i < ITEMS_PER_PAGE; i++) {
@@ -341,78 +339,57 @@ TEST_CASE_METHOD(PopulatedInstance, "list users", "[instance]") {
     }
     CHECK(vec == tmp);
   }
-  CHECK(page.is_first);
-  CHECK(!!page.next);
-  page = controller->list_users(txn, UserSortType::New, false, {}, page.next);
-  REQUIRE(page.entries.size() > 0);
+  CHECK(next);
   vec.clear();
-  for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
+  next = controller->list_users(add_name, txn, UserSortType::New, false, {}, next);
   CHECK(vec == vector<string>{
     "robot", "visitor@federated.test", "rando", "admin"
   });
-  CHECK_FALSE(page.is_first);
-  CHECK_FALSE(page.next);
+  CHECK_FALSE(next);
 
   // New, not logged in, local only
-  page = controller->list_users(txn, UserSortType::New, true);
-  REQUIRE(page.entries.size() > 0);
   vec.clear();
-  for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
+  next = controller->list_users(add_name, txn, UserSortType::New, true);
   CHECK(vec == vector<string>{"robot", "rando", "admin"});
-  CHECK(page.is_first);
-  CHECK_FALSE(page.next);
+  CHECK_FALSE(next);
 
   // Old, not logged in, local and federated
-  page = controller->list_users(txn, UserSortType::Old, false);
-  CHECK(page.entries.size() == ITEMS_PER_PAGE);
   vec.clear();
-  for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
+  next = controller->list_users(add_name, txn, UserSortType::Old, false);
+  CHECK(vec.size() == ITEMS_PER_PAGE);
   vec.resize(5);
   CHECK(vec == vector<string>{
     "admin", "rando", "visitor@federated.test", "robot", "filler_u0@federated.test"
   });
-  CHECK(page.is_first);
-  REQUIRE(page.next);
-  page = controller->list_users(txn, UserSortType::Old, false, {}, page.next);
-  CHECK(page.entries.size() == 4);
-  CHECK_FALSE(page.is_first);
-  CHECK_FALSE(page.next);
+  REQUIRE(next);
+  vec.clear();
+  next = controller->list_users(add_name, txn, UserSortType::Old, false, {}, next);
+  CHECK(vec.size() == 4);
+  CHECK_FALSE(next);
 
   // Old, not logged in, local only
-  page = controller->list_users(txn, UserSortType::Old, true);
-  REQUIRE(page.entries.size() > 0);
   vec.clear();
-  for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
+  next = controller->list_users(add_name, txn, UserSortType::Old, true);
   CHECK(vec == vector<string>{"admin", "rando", "robot"});
-  CHECK(page.is_first);
-  CHECK_FALSE(page.next);
+  CHECK_FALSE(next);
 
   // New, logged in as admin, local only
-  page = controller->list_users(txn, UserSortType::New, true, LocalUserDetail::get(txn, users[0]));
-  REQUIRE(page.entries.size() > 0);
   vec.clear();
-  for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
+  next = controller->list_users(add_name, txn, UserSortType::New, true, LocalUserDetail::get(txn, users[0]));
   CHECK(vec == vector<string>{"unapproved", "robot", "troll", "rando", "admin"});
-  CHECK(page.is_first);
-  CHECK_FALSE(page.next);
+  CHECK_FALSE(next);
 
   // New, logged in as rando (excludes bots), local only
-  page = controller->list_users(txn, UserSortType::New, true, LocalUserDetail::get(txn, users[1]));
-  REQUIRE(page.entries.size() > 0);
   vec.clear();
-  for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
+  next = controller->list_users(add_name, txn, UserSortType::New, true, LocalUserDetail::get(txn, users[1]));
   CHECK(vec == vector<string>{"rando", "admin"});
-  CHECK(page.is_first);
-  CHECK_FALSE(page.next);
+  CHECK_FALSE(next);
 
   // New, logged in as troll (includes self, hides admin), local only
-  page = controller->list_users(txn, UserSortType::New, true, LocalUserDetail::get(txn, users[2]));
-  REQUIRE(page.entries.size() > 0);
   vec.clear();
-  for (auto& i : page.entries) vec.emplace_back(i.user().name()->str());
+  next = controller->list_users(add_name, txn, UserSortType::New, true, LocalUserDetail::get(txn, users[2]));
   CHECK(vec == vector<string>{"robot", "troll", "rando"});
-  CHECK(page.is_first);
-  CHECK_FALSE(page.next);
+  CHECK_FALSE(next);
 }
 
 TEST_CASE_METHOD(Instance, "register and login", "[instance]") {
@@ -433,7 +410,7 @@ TEST_CASE_METHOD(Instance, "register and login", "[instance]") {
     .registration_enabled = true,
     .registration_application_required = false,
     .registration_invite_required = false
-  });
+  }, {});
   pair<uint64_t, bool> result;
   REQUIRE_NOTHROW(
     result = controller->register_local_user(
@@ -501,7 +478,7 @@ TEST_CASE_METHOD(Instance, "register with application", "[instance]") {
     .registration_enabled = true,
     .registration_application_required = true,
     .registration_invite_required = false
-  });
+  }, {});
 
   // Try registration with no application
   REQUIRE_THROWS_AS(
@@ -551,7 +528,7 @@ TEST_CASE_METHOD(Instance, "register with application", "[instance]") {
     CHECK(a.text()->string_view() == "please let me into the forum\n\ni am normal and can be trusted with post");
   }
 
-  REQUIRE_NOTHROW(controller->approve_local_user_application(id));
+  REQUIRE_NOTHROW(controller->approve_local_user_application(id, {}));
 
   {
     auto txn = controller->open_read_txn();
@@ -568,7 +545,7 @@ TEST_CASE_METHOD(PopulatedInstance, "register with invite", "[instance]") {
     .registration_enabled = true,
     .registration_application_required = false,
     .registration_invite_required = true
-  });
+  }, {});
 
   // Try registration with no invite
   REQUIRE_THROWS_AS(

@@ -9,7 +9,7 @@
 using std::optional, std::runtime_error, std::string, std::string_view;
 
 namespace Ludwig {
-  auto make_jwt(Jwt payload, const uint8_t secret[JWT_SECRET_SIZE]) -> string {
+  auto make_jwt(Jwt payload, JwtSecret secret) -> string {
     string json;
     {
       flatbuffers::FlatBufferBuilder fbb;
@@ -28,7 +28,7 @@ namespace Ludwig {
     uint8_t sig[64];
     unsigned sig_len;
     if (!HMAC(
-      EVP_sha512(), secret, JWT_SECRET_SIZE,
+      EVP_sha512(), secret.data(), JWT_SECRET_SIZE,
       reinterpret_cast<const uint8_t*>(buf.data()), buf.length(),
       sig, &sig_len
     )) {
@@ -39,12 +39,12 @@ namespace Ludwig {
     return buf;
   }
 
-  auto make_jwt(uint64_t session_id, uint64_t duration_seconds, const uint8_t secret[JWT_SECRET_SIZE]) -> string {
+  auto make_jwt(uint64_t session_id, std::chrono::system_clock::time_point expiration, JwtSecret secret) -> string {
     const auto iat = now_s();
     return make_jwt({
       .sub = session_id,
       .iat = iat,
-      .exp = iat + duration_seconds
+      .exp = (uint64_t)std::chrono::duration_cast<std::chrono::seconds>(expiration.time_since_epoch()).count()
     }, secret);
   }
 
@@ -65,7 +65,7 @@ namespace Ludwig {
     return jwt;
   }
 
-  auto parse_jwt(string_view jwt, const uint8_t secret[JWT_SECRET_SIZE]) -> optional<Jwt> {
+  auto parse_jwt(string_view jwt, JwtSecret secret) -> optional<Jwt> {
     const auto len = jwt.length(), header_len = JWT_HEADER.size();
     // Avoid DOS from impossibly huge strings
     if (len > 2048) {
@@ -98,7 +98,7 @@ namespace Ludwig {
     if (Base64::decode(sig_b64, expected_sig, 64) != 64) return {};
     unsigned sig_len;
     if (!HMAC(
-      EVP_sha512(), secret, JWT_SECRET_SIZE,
+      EVP_sha512(), secret.data(), JWT_SECRET_SIZE,
       reinterpret_cast<const uint8_t*>(to_sign.data()), to_sign.length(),
       actual_sig, &sig_len
     )) {

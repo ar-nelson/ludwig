@@ -14,12 +14,15 @@
 #include <spdlog/spdlog.h>
 #include <uWebSockets/MoveOnlyFunction.h>
 #include <openssl/crypto.h>
+#include <flatbuffers/string.h>
 
 namespace Ludwig {
   constexpr uint64_t ID_MAX = std::numeric_limits<uint64_t>::max();
 
   template<class... Ts> struct overload : Ts... { using Ts::operator()...; };
   template<class... Ts> overload(Ts...) -> overload<Ts...>;
+
+  template <typename T> using OptRef = std::optional<std::reference_wrapper<const T>>;
 
   template<typename T> static inline auto to_ascii_lowercase(T in) -> std::string {
     std::string out;
@@ -110,4 +113,19 @@ namespace Ludwig {
       return it;
     }
   };
+
+  static inline auto opt_c_str(const flatbuffers::String* s) -> std::optional<const char*> {
+    if (s) return s->c_str();
+    return {};
+  }
+
+  static inline auto opt_str(const flatbuffers::String* s) -> std::optional<std::string> {
+    if (s) return s->str();
+    return {};
+  }
+
+  static inline auto opt_sv(const flatbuffers::String* s) -> std::optional<std::string_view> {
+    if (s) return s->string_view();
+    return {};
+  }
 }
