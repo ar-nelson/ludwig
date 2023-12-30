@@ -1,6 +1,7 @@
 vendor/asio
 vendor/boringssl
 vendor/catch2
+vendor/cpufeatures
 vendor/flatbuffers
 vendor/giflib
 vendor/libjpeg

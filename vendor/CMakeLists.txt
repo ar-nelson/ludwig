@@ -131,6 +131,20 @@ option(PNG_TESTS  "Build libpng tests" OFF)
 add_subdirectory(libpng libpng)
 add_dependencies(png_static zlibstatic)
 
+# libwebp insists on using the Android NDK, which is a pain to install on Termux,
+# but it only needs the cpu-features library!
+if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
+  include_directories(cpu_features/include/)
+  execute_process(COMMAND mkdir -p
+    ${CMAKE_CURRENT_BINARY_DIR}/ndk_root/sources/android
+  )
+  execute_process(COMMAND ln -s
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpu_features/ndk_compat
+    ${CMAKE_CURRENT_BINARY_DIR}/ndk_root/sources/android/cpufeatures
+  )
+  set(ANDROID_NDK ${CMAKE_CURRENT_BINARY_DIR}/ndk_root)
+  add_compile_options(-DSTACK_LINE_READER_BUFFER_SIZE=1024)
+endif ()
 set(ZLIB_LIBRARY zlibstatic)
 set(ZLIB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/zlib ${CMAKE_CURRENT_BINARY_DIR}/zlib)
 set(JPEG_LIBRARY jpeg)

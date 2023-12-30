@@ -22,9 +22,13 @@ set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
 set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
-# Detect Android Termux to add -llog if necessary
+# Detect Android Termux
 if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
-  add_link_options (-llog)
+  add_link_options(-llog)
+  # Hack to fix libwebp
+  if ("X${ANDROID_ABI}" STREQUAL "X")
+    set(ANDROID_ABI aarch64)
+  endif ()
 endif ()
 
 # Generate static files
@@ -91,7 +95,7 @@ foreach (fbs_path IN ITEMS ${fbs_files})
 endforeach ()
 add_custom_target(flatbuffers_generated DEPENDS ${fbs_depends})
 
-if (CMAKE_BUILD_TYPE MATCHES Debug)
+if (${CMAKE_BUILD_TYPE} MATCHES Debug)
   set (buildtype_compile_options
     -DLUDWIG_DEBUG=1
     -g
@@ -164,17 +168,22 @@ add_dependencies(ludwig static_generated flatbuffers_generated)
 target_compile_options(ludwig PRIVATE ${compile_options})
 target_link_options(ludwig PRIVATE ${link_options})
 target_include_directories(ludwig PUBLIC src/ "${PROJECT_BINARY_DIR}/generated/")
-if (CMAKE_BUILD_TYPE MATCHES Release)
+if (${CMAKE_BUILD_TYPE} MATCHES Release)
   # Only build a fully static binary in release mode.
   # Debug mode needs to dynamically link asan.
   target_link_libraries(ludwig PRIVATE "-static")
 endif ()
 target_link_libraries(ludwig PRIVATE ${ludwig_libs})
 
-if (CMAKE_BUILD_TYPE MATCHES Debug)
-  file(GLOB_RECURSE test_files "test/*.c++")
-  add_executable(test ${ludwig_common_src} ${test_files})
-  add_dependencies(test static_generated flatbuffers_generated)
-  target_link_libraries(test PRIVATE ${ludwig_libs} Catch2::Catch2WithMain)
-  target_include_directories(test PRIVATE src/ "${PROJECT_BINARY_DIR}/generated/")
+if (${CMAKE_BUILD_TYPE} MATCHES Debug)
+  # Don't build tests on Android.
+  # Unfortunately, Catch2's templates are so complex that building tests will
+  # frequently trigger Android's OOM killer and crash Termux.
+  if (NOT ${CMAKE_SYSTEM_NAME} MATCHES "Android")
+    file(GLOB_RECURSE test_files "test/*.c++")
+    add_executable(test ${ludwig_common_src} ${test_files})
+    add_dependencies(test static_generated flatbuffers_generated)
+    target_link_libraries(test PRIVATE ${ludwig_libs} Catch2::Catch2WithMain)
+    target_include_directories(test PRIVATE src/ "${PROJECT_BINARY_DIR}/generated/")
+  endif ()
 endif ()

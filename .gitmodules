@@ -37,3 +37,6 @@
 [submodule "vendor/zstd"]
 	path = vendor/zstd
 	url = https://github.com/facebook/zstd.git
+[submodule "vendor/cpu_features"]
+	path = vendor/cpu_features
+	url = https://github.com/google/cpu_features.git
