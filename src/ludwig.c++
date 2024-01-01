@@ -1,4 +1,3 @@
-#include "util/common.h++"
 #include "util/rich_text.h++"
 #include "util/zstd_db_dump.h++"
 #include "services/db.h++"
@@ -7,8 +6,10 @@
 #include "services/lmdb_search_engine.h++"
 #include "controllers/instance.h++"
 #include "controllers/remote_media.h++"
+#include "controllers/lemmy_api.h++"
 #include "views/webapp.h++"
 #include "views/media.h++"
+#include "views/lemmy_api.h++"
 #include <uWebSockets/App.h>
 #include <asio.hpp>
 #include <optparse.h>
@@ -35,10 +36,6 @@ int main(int argc, char** argv) {
     .dest("port")
     .type("INT")
     .set_default(2023);
-  parser.add_option("-d", "--domain")
-    .dest("domain")
-    .help("site domain, with http:// or https:// prefix")
-    .set_default("http://localhost");
   parser.add_option("-s", "--map-size")
     .dest("map_size")
     .type("INT")
@@ -156,11 +153,23 @@ int main(int argc, char** argv) {
   auto xml_ctx = make_shared<LibXmlContext>();
   auto rich_text = make_shared<RichTextParser>(xml_ctx);
   auto instance_c = make_shared<InstanceController>(db, http_client, rich_text, event_bus, search_engine);
+  auto api_c = make_shared<Lemmy::ApiController>(instance_c, rich_text);
   auto remote_media_c = make_shared<RemoteMediaController>(
     db, http_client, xml_ctx, event_bus,
     [&pool](auto f) { pool.post(std::move(f)); },
     search_engine
   );
+
+  // TODO: Prompt user for first-run setup instead of doing it automatically
+  bool first_run = false;
+  {
+    auto txn = db->open_read_txn();
+    if (!txn.get_setting_int(SettingsKey::setup_done)) first_run = true;
+  }
+  if (first_run) {
+    spdlog::info("Doing automatic first-run setup (debug mode!)");
+    instance_c->first_run_setup({});
+  }
 
   struct sigaction sigint_handler { .sa_flags = 0 }, sigterm_handler { .sa_flags = 0 };
   sigint_handler.sa_handler = signal_handler;
@@ -175,6 +184,7 @@ int main(int argc, char** argv) {
     uWS::App app;
     media_routes(app, remote_media_c);
     webapp_routes(app, instance_c, rich_text, rate_limiter);
+    Lemmy::api_routes(app, api_c, rate_limiter);
     app.listen(port, [port, app = &app](auto *listen_socket) {
       if (listen_socket) {
         lock_guard<mutex> lock(on_close_mutex);

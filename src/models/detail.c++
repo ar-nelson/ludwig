@@ -2,8 +2,8 @@
 #include "util/web.h++"
 #include <flatbuffers/flatbuffers.h>
 
-using flatbuffers::FlatBufferBuilder, flatbuffers::Offset, std::nullopt, std::optional, std::string,
-    std::string_view, std::vector;
+using flatbuffers::FlatBufferBuilder, flatbuffers::Offset, std::nullopt,
+    std::optional, std::string, std::string_view, std::vector;
 namespace chrono = std::chrono;
 using namespace std::literals;
 
@@ -44,16 +44,19 @@ namespace Ludwig {
     FlatBufferBuilder fbb;
     fbb.ForceDefaults(true);
     const auto content_s = fbb.CreateString("[deleted]");
+    const auto title_type = fbb.CreateVector(vector{PlainTextWithEmojis::Plain});
+    const auto title = fbb.CreateVector(vector{content_s.Union()});
     const auto content_text_type = fbb.CreateVector(vector{TextBlock::P});
     const auto content_text = fbb.CreateVector(vector{CreateTextSpans(fbb,
       fbb.CreateVector(vector{TextSpan::Plain}),
       fbb.CreateVector(vector{content_s.Union()})
     ).Union()});
     ThreadBuilder thread(fbb);
+    thread.add_title_type(title_type);
+    thread.add_title(title);
     thread.add_content_text_raw(content_s);
     thread.add_content_text_type(content_text_type);
     thread.add_content_text(content_text);
-    thread.add_title(content_s);
     fbb.Finish(thread.Finish());
     return fbb;
   }
@@ -195,6 +198,9 @@ namespace Ludwig {
     return login && can_view(login) && comment().mod_state() < ModState::Locked &&
       thread().mod_state() < ModState::Locked && login->user().mod_state() < ModState::Locked &&
       board().can_downvote();
+  }
+  auto UserDetail::can_change_settings(Login login) const noexcept -> bool {
+    return maybe_local_user() && login && (login->local_user().admin() || login->id == id);
   }
   auto BoardDetail::can_change_settings(Login login) const noexcept -> bool {
     return maybe_local_board() && login && (login->local_user().admin() || login->id == maybe_local_board()->get().owner());

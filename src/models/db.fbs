@@ -122,9 +122,10 @@ table User {
   actor_id: string;
   inbox_url: string;
   matrix_user_id: string;
-  instance: uint64 = null;
+  instance: uint64 = 0;
   created_at: uint64;
   updated_at: uint64 = null;
+  fetched_at: uint64 = null;
   deleted_at: uint64 = null;
   avatar_url: string;
   banner_url: string;
@@ -158,7 +159,7 @@ table LocalUser {
   approved: bool = false;
   accepted_application: bool = false;
   email_verified: bool = false;
-  invite: uint64 = null;
+  invite: uint64 = 0;
   open_links_in_new_tab: bool = false;
   send_notifications_to_email: bool = false;
   show_avatars: bool = true;
@@ -173,7 +174,7 @@ table LocalUser {
   show_karma: bool = true;
   javascript_enabled: bool = true;
   infinite_scroll_enabled: bool = true;
-  theme: string;
+  theme: uint64 = 0;
   lemmy_theme: string;
   default_sort_type: SortType = Active;
   default_comment_sort_type: CommentSortType = Hot;
@@ -191,9 +192,11 @@ table Board {
   actor_id: string;
   inbox_url: string;
   followers_url: string;
-  instance: uint64 = null;
+  instance: uint64 = 0;
   created_at: uint64;
   updated_at: uint64 = null;
+  fetched_at: uint64 = null;
+  deleted_at: uint64 = null;
   description_raw: string;
   description: [TextBlock];
   icon_url: string;
@@ -203,8 +206,8 @@ table Board {
   approve_subscribe: bool = false;
   can_upvote: bool = true;
   can_downvote: bool = true;
-  default_sort_type: ubyte = 0;
-  default_comment_sort_type: ubyte = 0;
+  default_sort_type: SortType = Active;
+  default_comment_sort_type: CommentSortType = Hot;
   mod_state: ModState = Visible;
   mod_reason: string;
 }
@@ -230,16 +233,19 @@ enum MediaCategory : ubyte { Image, Audio, Video }
 table Thread {
   author: uint64;
   board: uint64;
-  title: string (required);
+  title: [PlainTextWithEmojis];
   created_at: uint64;
   updated_at: uint64 = null;
-  instance: uint64 = null;
+  fetched_at: uint64 = null;
+  deleted_at: uint64 = null;
+  instance: uint64 = 0;
   activity_url: string;
   original_post_url: string;
   content_url: string;
   content_text_raw: string;
   content_text: [TextBlock];
   content_warning: string;
+  featured: bool;
   mod_state: ModState = Visible;
   mod_reason: string;
 }
@@ -260,7 +266,9 @@ table Comment {
   thread: uint64;
   created_at: uint64;
   updated_at: uint64 = null;
-  instance: uint64 = null;
+  fetched_at: uint64 = null;
+  deleted_at: uint64 = null;
+  instance: uint64 = 0;
   activity_url: string;
   original_post_url: string;
   content_raw: string;

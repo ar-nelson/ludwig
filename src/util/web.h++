@@ -1,7 +1,6 @@
 #pragma once
 #include "util/common.h++"
 #include "models/db.h++"
-#include <regex>
 #include <variant>
 #include <uWebSockets/App.h>
 #include <flatbuffers/string.h>
@@ -79,52 +78,73 @@ namespace Ludwig {
     return rsp->getRemoteAddressAsText();
   };
 
+  static inline auto get_query_param(std::string_view query, std::string_view key) -> std::string_view {
+    return uWS::getDecodedQueryValue(key, query);
+  }
+
+  static inline auto get_query_param(uWS::HttpRequest* req, std::string_view key) -> std::string_view {
+    return req->getQuery(key);
+  }
+
+  template <typename T>
   struct QueryString {
-    std::string_view query;
+    T query;
+    QueryString(T query) : query(query) {}
+
     auto required_hex_id(std::string_view key) -> uint64_t {
       try {
-        return std::stoull(std::string(uWS::getDecodedQueryValue(key, query)), nullptr, 16);
+        return std::stoull(std::string(get_query_param(query, key)), nullptr, 16);
       } catch (...) {
         throw ApiError(fmt::format("Invalid or missing '{}' parameter", key), 400);
       }
     }
     auto required_int(std::string_view key) -> int {
       try {
-        return std::stoi(std::string(uWS::getDecodedQueryValue(key, query)));
+        return std::stoi(std::string(get_query_param(query, key)));
       } catch (...) {
         throw ApiError(fmt::format("Invalid or missing '{}' parameter", key), 400);
       }
     }
     auto required_string(std::string_view key) -> std::string_view {
-      auto s = uWS::getDecodedQueryValue(key, query);
+      auto s = get_query_param(query, key);
       if (s.empty()) throw ApiError(fmt::format("Invalid or missing '{}' parameter", key), 400);
       return s;
     }
     auto required_vote(std::string_view key) -> Vote {
-      const auto vote_str = uWS::getDecodedQueryValue(key, query);
+      const auto vote_str = get_query_param(query, key);
       if (vote_str == "1") return Vote::Upvote;
       else if (vote_str == "-1") return Vote::Downvote;
       else if (vote_str == "0") return Vote::NoVote;
       else throw ApiError(fmt::format("Invalid or missing '{}' parameter", key), 400);
     }
-    auto id(std::string_view key) -> uint64_t {
-      if (key.empty()) return 0;
+    auto optional_id(std::string_view key) -> uint64_t {
+      auto s = get_query_param(query, key);
+      if (s.empty()) return 0;
       try {
-        return std::stoull(std::string(uWS::getDecodedQueryValue(key, query)), nullptr);
+        return std::stoull(std::string(s), nullptr, 16);
       } catch (...) {
         throw ApiError(fmt::format("Invalid '{}' parameter", key), 400);
       }
     }
     auto string(std::string_view key) -> std::string_view {
-      return uWS::getDecodedQueryValue(key, query);
+      return get_query_param(query, key);
     }
     auto optional_string(std::string_view key) -> std::optional<std::string_view> {
-      auto s = uWS::getDecodedQueryValue(key, query);
+      auto s = get_query_param(query, key);
       if (s.empty()) return {};
       return s;
     }
+    auto optional_uint(std::string_view key, uint64_t default_value = 0) -> uint64_t {
+      auto s = get_query_param(query, key);
+      if (s.empty()) return default_value;
+      try {
+        return std::stoul(std::string(s));
+      } catch (...) {
+        throw ApiError(fmt::format("Invalid '{}' parameter", key), 400);
+      }
+    }
     auto optional_bool(std::string_view key) -> bool {
-      const auto decoded = uWS::getDecodedQueryValue(key, query);
+      const auto decoded = get_query_param(query, key);
       return decoded == "1" || decoded == "true";
     }
   };
@@ -387,10 +407,10 @@ namespace Ludwig {
       return std::move(*this);
     }
 
-    Router &&post_form(std::string pattern, PostHandler<QueryString>&& handler, size_t max_size = 10 * 1024 * 1024) {
-      app.post(pattern, post_handler<QueryString>(std::move(handler), max_size, TYPE_FORM, "?", [](auto&& s){
+    Router &&post_form(std::string pattern, PostHandler<QueryString<std::string_view>>&& handler, size_t max_size = 10 * 1024 * 1024) {
+      app.post(pattern, post_handler<QueryString<std::string_view>>(std::move(handler), max_size, TYPE_FORM, "?", [](auto&& s){
         if (!simdjson::validate_utf8(s)) throw ApiError("POST body is not valid UTF-8", 415);
-        return QueryString{s};
+        return QueryString<std::string_view>(s);
       }));
       return std::move(*this);
     }

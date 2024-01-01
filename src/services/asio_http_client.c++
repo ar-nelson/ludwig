@@ -2,7 +2,7 @@
 #include "util/web.h++"
 #include <uWebSockets/HttpParser.h>
 #include <asio/experimental/parallel_group.hpp>
-#include <duthomhas/csprng.hpp>
+#include <openssl/rand.h>
 #include <chrono>
 
 using namespace std::literals;
@@ -30,8 +30,8 @@ namespace Ludwig {
     static inline constexpr size_t MAX_RESPONSE_BYTES = 1024 * 1024 * 64; // 64MiB
     static inline auto random_uint64() -> uint64_t {
       uint64_t n;
-      duthomhas::csprng rng;
-      return rng(n);
+      RAND_pseudo_bytes((uint8_t*)&n, sizeof(uint64_t));
+      return n;
     }
     // This is random to ensure that servers cannot break this client by spoofing this header
     static const inline string response_header_key = fmt::format("x-response-{:016x}", random_uint64());

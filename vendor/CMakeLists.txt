@@ -1,7 +1,6 @@
 add_library(vendor-misc STATIC
   misc/src/mdb.c
   misc/src/midl.c
-  misc/src/csprng.cpp
   misc/src/mmd.c
   misc/src/rate_limiter.cpp
 )

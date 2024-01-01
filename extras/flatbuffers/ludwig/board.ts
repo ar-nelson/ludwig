@@ -4,8 +4,10 @@
 
 import * as flatbuffers from 'npm:flatbuffers';
 
+import { CommentSortType } from '../ludwig/comment-sort-type.ts';
 import { ModState } from '../ludwig/mod-state.ts';
 import { PlainTextWithEmojis, unionToPlainTextWithEmojis, unionListToPlainTextWithEmojis } from '../ludwig/plain-text-with-emojis.ts';
+import { SortType } from '../ludwig/sort-type.ts';
 import { TextBlock, unionToTextBlock, unionListToTextBlock } from '../ludwig/text-block.ts';
 
 
@@ -73,118 +75,135 @@ inboxUrl(optionalEncoding?:any):string|Uint8Array|null {
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
-instance():bigint|null {
+followersUrl():string|null
+followersUrl(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
+followersUrl(optionalEncoding?:any):string|Uint8Array|null {
   const offset = this.bb!.__offset(this.bb_pos, 14);
-  return offset ? this.bb!.readUint64(this.bb_pos + offset) : null;
+  return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
-createdAt():bigint {
+instance():bigint {
   const offset = this.bb!.__offset(this.bb_pos, 16);
   return offset ? this.bb!.readUint64(this.bb_pos + offset) : BigInt('0');
 }
 
-updatedAt():bigint|null {
+createdAt():bigint {
   const offset = this.bb!.__offset(this.bb_pos, 18);
+  return offset ? this.bb!.readUint64(this.bb_pos + offset) : BigInt('0');
+}
+
+updatedAt():bigint|null {
+  const offset = this.bb!.__offset(this.bb_pos, 20);
+  return offset ? this.bb!.readUint64(this.bb_pos + offset) : null;
+}
+
+fetchedAt():bigint|null {
+  const offset = this.bb!.__offset(this.bb_pos, 22);
+  return offset ? this.bb!.readUint64(this.bb_pos + offset) : null;
+}
+
+deletedAt():bigint|null {
+  const offset = this.bb!.__offset(this.bb_pos, 24);
   return offset ? this.bb!.readUint64(this.bb_pos + offset) : null;
 }
 
 descriptionRaw():string|null
 descriptionRaw(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 descriptionRaw(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 20);
+  const offset = this.bb!.__offset(this.bb_pos, 26);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 descriptionType(index: number):TextBlock|null {
-  const offset = this.bb!.__offset(this.bb_pos, 22);
+  const offset = this.bb!.__offset(this.bb_pos, 28);
   return offset ? this.bb!.readUint8(this.bb!.__vector(this.bb_pos + offset) + index) : 0;
 }
 
 descriptionTypeLength():number {
-  const offset = this.bb!.__offset(this.bb_pos, 22);
+  const offset = this.bb!.__offset(this.bb_pos, 28);
   return offset ? this.bb!.__vector_len(this.bb_pos + offset) : 0;
 }
 
 descriptionTypeArray():Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 22);
+  const offset = this.bb!.__offset(this.bb_pos, 28);
   return offset ? new Uint8Array(this.bb!.bytes().buffer, this.bb!.bytes().byteOffset + this.bb!.__vector(this.bb_pos + offset), this.bb!.__vector_len(this.bb_pos + offset)) : null;
 }
 
 description(index: number, obj:any|string):any|string|null {
-  const offset = this.bb!.__offset(this.bb_pos, 24);
+  const offset = this.bb!.__offset(this.bb_pos, 30);
   return offset ? this.bb!.__union_with_string(obj, this.bb!.__vector(this.bb_pos + offset) + index * 4) : null;
 }
 
 descriptionLength():number {
-  const offset = this.bb!.__offset(this.bb_pos, 24);
+  const offset = this.bb!.__offset(this.bb_pos, 30);
   return offset ? this.bb!.__vector_len(this.bb_pos + offset) : 0;
 }
 
 iconUrl():string|null
 iconUrl(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 iconUrl(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 26);
+  const offset = this.bb!.__offset(this.bb_pos, 32);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 bannerUrl():string|null
 bannerUrl(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 bannerUrl(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 28);
+  const offset = this.bb!.__offset(this.bb_pos, 34);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 contentWarning():string|null
 contentWarning(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 contentWarning(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 30);
+  const offset = this.bb!.__offset(this.bb_pos, 36);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 restrictedPosting():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 32);
+  const offset = this.bb!.__offset(this.bb_pos, 38);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
 approveSubscribe():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 34);
+  const offset = this.bb!.__offset(this.bb_pos, 40);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
 canUpvote():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 36);
+  const offset = this.bb!.__offset(this.bb_pos, 42);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : true;
 }
 
 canDownvote():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 38);
+  const offset = this.bb!.__offset(this.bb_pos, 44);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : true;
 }
 
-defaultSortType():number {
-  const offset = this.bb!.__offset(this.bb_pos, 40);
-  return offset ? this.bb!.readUint8(this.bb_pos + offset) : 0;
+defaultSortType():SortType {
+  const offset = this.bb!.__offset(this.bb_pos, 46);
+  return offset ? this.bb!.readUint8(this.bb_pos + offset) : SortType.Active;
 }
 
-defaultCommentSortType():number {
-  const offset = this.bb!.__offset(this.bb_pos, 42);
-  return offset ? this.bb!.readUint8(this.bb_pos + offset) : 0;
+defaultCommentSortType():CommentSortType {
+  const offset = this.bb!.__offset(this.bb_pos, 48);
+  return offset ? this.bb!.readUint8(this.bb_pos + offset) : CommentSortType.Hot;
 }
 
 modState():ModState {
-  const offset = this.bb!.__offset(this.bb_pos, 44);
+  const offset = this.bb!.__offset(this.bb_pos, 50);
   return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Visible;
 }
 
 modReason():string|null
 modReason(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 modReason(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 46);
+  const offset = this.bb!.__offset(this.bb_pos, 52);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 static startBoard(builder:flatbuffers.Builder) {
-  builder.startObject(22);
+  builder.startObject(25);
 }
 
 static addName(builder:flatbuffers.Builder, nameOffset:flatbuffers.Offset) {
@@ -231,24 +250,36 @@ static addInboxUrl(builder:flatbuffers.Builder, inboxUrlOffset:flatbuffers.Offse
   builder.addFieldOffset(4, inboxUrlOffset, 0);
 }
 
+static addFollowersUrl(builder:flatbuffers.Builder, followersUrlOffset:flatbuffers.Offset) {
+  builder.addFieldOffset(5, followersUrlOffset, 0);
+}
+
 static addInstance(builder:flatbuffers.Builder, instance:bigint) {
-  builder.addFieldInt64(5, instance, BigInt(0));
+  builder.addFieldInt64(6, instance, BigInt('0'));
 }
 
 static addCreatedAt(builder:flatbuffers.Builder, createdAt:bigint) {
-  builder.addFieldInt64(6, createdAt, BigInt('0'));
+  builder.addFieldInt64(7, createdAt, BigInt('0'));
 }
 
 static addUpdatedAt(builder:flatbuffers.Builder, updatedAt:bigint) {
-  builder.addFieldInt64(7, updatedAt, BigInt(0));
+  builder.addFieldInt64(8, updatedAt, BigInt(0));
+}
+
+static addFetchedAt(builder:flatbuffers.Builder, fetchedAt:bigint) {
+  builder.addFieldInt64(9, fetchedAt, BigInt(0));
+}
+
+static addDeletedAt(builder:flatbuffers.Builder, deletedAt:bigint) {
+  builder.addFieldInt64(10, deletedAt, BigInt(0));
 }
 
 static addDescriptionRaw(builder:flatbuffers.Builder, descriptionRawOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(8, descriptionRawOffset, 0);
+  builder.addFieldOffset(11, descriptionRawOffset, 0);
 }
 
 static addDescriptionType(builder:flatbuffers.Builder, descriptionTypeOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(9, descriptionTypeOffset, 0);
+  builder.addFieldOffset(12, descriptionTypeOffset, 0);
 }
 
 static createDescriptionTypeVector(builder:flatbuffers.Builder, data:TextBlock[]):flatbuffers.Offset {
@@ -264,7 +295,7 @@ static startDescriptionTypeVector(builder:flatbuffers.Builder, numElems:number) 
 }
 
 static addDescription(builder:flatbuffers.Builder, descriptionOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(10, descriptionOffset, 0);
+  builder.addFieldOffset(13, descriptionOffset, 0);
 }
 
 static createDescriptionVector(builder:flatbuffers.Builder, data:flatbuffers.Offset[]):flatbuffers.Offset {
@@ -280,47 +311,47 @@ static startDescriptionVector(builder:flatbuffers.Builder, numElems:number) {
 }
 
 static addIconUrl(builder:flatbuffers.Builder, iconUrlOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(11, iconUrlOffset, 0);
+  builder.addFieldOffset(14, iconUrlOffset, 0);
 }
 
 static addBannerUrl(builder:flatbuffers.Builder, bannerUrlOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(12, bannerUrlOffset, 0);
+  builder.addFieldOffset(15, bannerUrlOffset, 0);
 }
 
 static addContentWarning(builder:flatbuffers.Builder, contentWarningOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(13, contentWarningOffset, 0);
+  builder.addFieldOffset(16, contentWarningOffset, 0);
 }
 
 static addRestrictedPosting(builder:flatbuffers.Builder, restrictedPosting:boolean) {
-  builder.addFieldInt8(14, +restrictedPosting, +false);
+  builder.addFieldInt8(17, +restrictedPosting, +false);
 }
 
 static addApproveSubscribe(builder:flatbuffers.Builder, approveSubscribe:boolean) {
-  builder.addFieldInt8(15, +approveSubscribe, +false);
+  builder.addFieldInt8(18, +approveSubscribe, +false);
 }
 
 static addCanUpvote(builder:flatbuffers.Builder, canUpvote:boolean) {
-  builder.addFieldInt8(16, +canUpvote, +true);
+  builder.addFieldInt8(19, +canUpvote, +true);
 }
 
 static addCanDownvote(builder:flatbuffers.Builder, canDownvote:boolean) {
-  builder.addFieldInt8(17, +canDownvote, +true);
+  builder.addFieldInt8(20, +canDownvote, +true);
 }
 
-static addDefaultSortType(builder:flatbuffers.Builder, defaultSortType:number) {
-  builder.addFieldInt8(18, defaultSortType, 0);
+static addDefaultSortType(builder:flatbuffers.Builder, defaultSortType:SortType) {
+  builder.addFieldInt8(21, defaultSortType, SortType.Active);
 }
 
-static addDefaultCommentSortType(builder:flatbuffers.Builder, defaultCommentSortType:number) {
-  builder.addFieldInt8(19, defaultCommentSortType, 0);
+static addDefaultCommentSortType(builder:flatbuffers.Builder, defaultCommentSortType:CommentSortType) {
+  builder.addFieldInt8(22, defaultCommentSortType, CommentSortType.Hot);
 }
 
 static addModState(builder:flatbuffers.Builder, modState:ModState) {
-  builder.addFieldInt8(20, modState, ModState.Visible);
+  builder.addFieldInt8(23, modState, ModState.Visible);
 }
 
 static addModReason(builder:flatbuffers.Builder, modReasonOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(21, modReasonOffset, 0);
+  builder.addFieldOffset(24, modReasonOffset, 0);
 }
 
 static endBoard(builder:flatbuffers.Builder):flatbuffers.Offset {
@@ -329,18 +360,22 @@ static endBoard(builder:flatbuffers.Builder):flatbuffers.Offset {
   return offset;
 }
 
-static createBoard(builder:flatbuffers.Builder, nameOffset:flatbuffers.Offset, displayNameTypeOffset:flatbuffers.Offset, displayNameOffset:flatbuffers.Offset, actorIdOffset:flatbuffers.Offset, inboxUrlOffset:flatbuffers.Offset, instance:bigint|null, createdAt:bigint, updatedAt:bigint|null, descriptionRawOffset:flatbuffers.Offset, descriptionTypeOffset:flatbuffers.Offset, descriptionOffset:flatbuffers.Offset, iconUrlOffset:flatbuffers.Offset, bannerUrlOffset:flatbuffers.Offset, contentWarningOffset:flatbuffers.Offset, restrictedPosting:boolean, approveSubscribe:boolean, canUpvote:boolean, canDownvote:boolean, defaultSortType:number, defaultCommentSortType:number, modState:ModState, modReasonOffset:flatbuffers.Offset):flatbuffers.Offset {
+static createBoard(builder:flatbuffers.Builder, nameOffset:flatbuffers.Offset, displayNameTypeOffset:flatbuffers.Offset, displayNameOffset:flatbuffers.Offset, actorIdOffset:flatbuffers.Offset, inboxUrlOffset:flatbuffers.Offset, followersUrlOffset:flatbuffers.Offset, instance:bigint, createdAt:bigint, updatedAt:bigint|null, fetchedAt:bigint|null, deletedAt:bigint|null, descriptionRawOffset:flatbuffers.Offset, descriptionTypeOffset:flatbuffers.Offset, descriptionOffset:flatbuffers.Offset, iconUrlOffset:flatbuffers.Offset, bannerUrlOffset:flatbuffers.Offset, contentWarningOffset:flatbuffers.Offset, restrictedPosting:boolean, approveSubscribe:boolean, canUpvote:boolean, canDownvote:boolean, defaultSortType:SortType, defaultCommentSortType:CommentSortType, modState:ModState, modReasonOffset:flatbuffers.Offset):flatbuffers.Offset {
   Board.startBoard(builder);
   Board.addName(builder, nameOffset);
   Board.addDisplayNameType(builder, displayNameTypeOffset);
   Board.addDisplayName(builder, displayNameOffset);
   Board.addActorId(builder, actorIdOffset);
   Board.addInboxUrl(builder, inboxUrlOffset);
-  if (instance !== null)
-    Board.addInstance(builder, instance);
+  Board.addFollowersUrl(builder, followersUrlOffset);
+  Board.addInstance(builder, instance);
   Board.addCreatedAt(builder, createdAt);
   if (updatedAt !== null)
     Board.addUpdatedAt(builder, updatedAt);
+  if (fetchedAt !== null)
+    Board.addFetchedAt(builder, fetchedAt);
+  if (deletedAt !== null)
+    Board.addDeletedAt(builder, deletedAt);
   Board.addDescriptionRaw(builder, descriptionRawOffset);
   Board.addDescriptionType(builder, descriptionTypeOffset);
   Board.addDescription(builder, descriptionOffset);

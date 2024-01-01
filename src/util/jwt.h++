@@ -15,7 +15,7 @@ namespace Ludwig {
 
   static_assert(JWT_HEADER == Base64::FixedString{"eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9"});
 
-  auto make_jwt(Jwt payload, const uint8_t secret[JWT_SECRET_SIZE]) -> std::string;
+  auto make_jwt(Jwt payload, JwtSecret secret) -> std::string;
 
   auto make_jwt(uint64_t session_id, std::chrono::system_clock::time_point expiration, JwtSecret secret) -> std::string;
 

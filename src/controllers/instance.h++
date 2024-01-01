@@ -3,7 +3,6 @@
 #include "util/rich_text.h++"
 #include "models/db.h++"
 #include "models/detail.h++"
-#include "models/enums.h++"
 #include "services/db.h++"
 #include "services/event_bus.h++"
 #include "services/http_client.h++"
@@ -92,7 +91,8 @@ namespace Ludwig {
 
   struct SiteUpdate {
     std::optional<std::string_view> name, description;
-    std::optional<std::optional<std::string_view>> icon_url, banner_url, application_question;
+    std::optional<std::optional<std::string_view>> icon_url, banner_url,
+        application_question;
     std::optional<uint64_t> max_post_length;
     std::optional<HomePageType> home_page_type;
     std::optional<bool> javascript_enabled, infinite_scroll_enabled,
@@ -112,26 +112,31 @@ namespace Ludwig {
   };
 
   struct LocalUserUpdate {
-    std::optional<const char*> email;
-    std::optional<std::optional<std::string_view>> display_name, bio, avatar_url, banner_url;
-    std::optional<bool> approved, accepted_application, email_verified,
-        open_links_in_new_tab, show_avatars, show_bot_accounts, show_karma,
-        hide_cw_posts, expand_cw_images, expand_cw_posts, javascript_enabled;
+    std::optional<std::string_view> email;
+    std::optional<std::optional<std::string_view>> display_name, bio,
+        avatar_url, banner_url;
+    std::optional<bool> bot, open_links_in_new_tab, show_avatars,
+        show_bot_accounts, show_karma, hide_cw_posts, expand_cw_images,
+        expand_cw_posts, javascript_enabled, infinite_scroll_enabled;
+    std::optional<SortType> default_sort_type;
+    std::optional<CommentSortType> default_comment_sort_type;
   };
 
   struct LocalBoardUpdate {
-    std::optional<std::optional<const char*>> display_name, description, icon_url, banner_url, content_warning;
-    std::optional<bool> is_private, restricted_posting, approve_subscribe, can_upvote, can_downvote;
+    std::optional<std::optional<std::string_view>> display_name, description,
+        icon_url, banner_url, content_warning;
+    std::optional<bool> is_private, restricted_posting, approve_subscribe,
+        invite_required, invite_mod_only, can_upvote, can_downvote;
   };
 
   struct ThreadUpdate {
-    std::optional<const char*> title;
+    std::optional<std::string_view> title;
     std::optional<std::optional<std::string_view>> text_content, content_warning;
   };
 
   struct CommentUpdate {
-    std::optional<const char*> text_content;
-    std::optional<std::optional<const char*>> content_warning;
+    std::optional<std::string_view> text_content;
+    std::optional<std::optional<std::string_view>> content_warning;
   };
 
   static inline auto invite_code_to_id(std::string_view invite_code) -> uint64_t {
@@ -161,8 +166,11 @@ namespace Ludwig {
     std::shared_ptr<HttpClient> http_client;
     std::shared_ptr<RichTextParser> rich_text;
     std::shared_ptr<EventBus> event_bus;
+    EventBus::Subscription site_detail_sub;
     std::optional<std::shared_ptr<SearchEngine>> search_engine;
     std::atomic<const SiteDetail*> cached_site_detail;
+    std::map<uint64_t, std::pair<uint64_t, std::chrono::system_clock::time_point>> password_reset_tokens;
+    std::mutex password_reset_tokens_mutex;
 
     auto create_local_user_internal(
       WriteTxn& txn,
@@ -209,6 +217,10 @@ namespace Ludwig {
       std::string_view ip,
       std::string_view user_agent
     ) -> std::optional<LoginResponse>;
+    auto delete_session(uint64_t session_id) -> void {
+      auto txn = db->open_write_txn();
+      txn.delete_session(session_id);
+    }
     auto login(
       std::string_view username,
       SecretString&& password,
@@ -343,11 +355,7 @@ namespace Ludwig {
     auto reset_password(uint64_t user_id) -> std::string;
     auto change_password(uint64_t user_id, SecretString&& new_password) -> void;
     auto change_password(std::string_view reset_token, SecretString&& new_password) -> std::string; // returns username
-    auto change_password(
-      uint64_t user_id,
-      SecretString&& old_password,
-      SecretString&& new_password
-    ) -> void;
+    auto change_password(uint64_t user_id, SecretString&& old_password, SecretString&& new_password) -> void;
     auto approve_local_user_application(uint64_t user_id, std::optional<uint64_t> as_user) -> void;
     auto create_site_invite(std::optional<uint64_t> as_user) -> uint64_t;
     auto create_local_board(
@@ -368,14 +376,14 @@ namespace Ludwig {
       std::optional<std::string_view> text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
-    auto update_thread(uint64_t id, std::optional<uint64_t> as_user, const ThreadUpdate& update) -> void;
+    auto update_local_thread(uint64_t id, std::optional<uint64_t> as_user, const ThreadUpdate& update) -> void;
     auto create_local_comment(
       uint64_t author,
       uint64_t parent,
       std::string_view text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
-    auto update_comment(uint64_t id, std::optional<uint64_t> as_user, const CommentUpdate& update) -> void;
+    auto update_local_comment(uint64_t id, std::optional<uint64_t> as_user, const CommentUpdate& update) -> void;
     auto vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;
     auto subscribe(uint64_t user_id, uint64_t board_id, bool subscribed = true) -> void;
     auto save_post(uint64_t user_id, uint64_t post_id, bool saved = true) -> void;

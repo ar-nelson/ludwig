@@ -156,7 +156,7 @@ namespace Ludwig {
   auto LmdbSearchEngine::index(uint64_t id, const Thread& thread, optional<std::reference_wrapper<const LinkCard>> card_opt) -> void {
     Txn txn(env, 0);
     set<uint64_t> tokens;
-    into_set(tokens, processor.EncodeAsIds(thread.title()->string_view()));
+    into_set(tokens, processor.EncodeAsIds(RichTextParser::plain_text_with_emojis_to_text_content(thread.title_type(), thread.title())));
     if (thread.content_text_type()->size()) {
       into_set(tokens, processor.EncodeAsIds(RichTextParser::blocks_to_text_content(thread.content_text_type(), thread.content_text())));
     }

@@ -28,11 +28,11 @@ import { faker } from "npm:@faker-js/faker";
 import { pbkdf2Sync } from "node:crypto";
 import * as flatbuffers from "npm:flatbuffers";
 
+const ludwigDomain = "http://localhost:2023"
 const PASSWORD_SALT = new TextEncoder().encode("0123456789abcdef");
 
 const SCALE = 100;
 let nextId = 0n;
-let ludwigDomain = "localhost:2023";
 
 function genInstance(): { id: bigint; domain: string } {
   return { id: nextId++, domain: `${faker.internet.domainWord()}.test` };
@@ -128,8 +128,10 @@ function genUser(
           `https://${instance.domain}/ap/actor/${baseName}/inbox`,
         )
         : 0,
-      instance ? instance.id : null,
+      0,
+      instance ? instance.id : 0n,
       BigInt(faker.date.past().valueOf()) / 1000n,
+      null,
       null,
       null,
       avatar ? fbb.createString(avatar) : 0,
@@ -222,8 +224,15 @@ function genBoard(
           `https://${instance.domain}/ap/actor/${baseName}/inbox`,
         )
         : 0,
-      instance ? instance.id : null,
+      instance
+        ? fbb.createString(
+          `https://${instance.domain}/ap/actor/${baseName}/followers`,
+        )
+        : 0,
+      instance ? instance.id : 0n,
       BigInt(faker.date.past().valueOf()) / 1000n,
+      null,
+      null,
       null,
       description ? fbb.createSharedString(description) : 0,
       Board.createDescriptionTypeVector(
@@ -297,7 +306,8 @@ function genThread(
       fbb,
       author,
       board,
-      fbb.createString(title),
+      Thread.createTitleTypeVector(fbb, [PlainTextWithEmojis.Plain]),
+      Thread.createTitleVector(fbb, [fbb.createString(title)]),
       BigInt(date.valueOf()) / 1000n,
       faker.helpers.maybe(
         () =>
@@ -306,7 +316,9 @@ function genThread(
           ) / 1000n,
         { probability: 0.1 },
       ) ?? null,
-      instance ? instance.id : null,
+      null,
+      null,
+      instance ? instance.id : 0n,
       instance
         ? fbb.createString(
           `https://${instance.domain}/ap/activity/${id.toString(16)}`,
@@ -336,6 +348,7 @@ function genThread(
       faker.datatype.boolean(0.05)
         ? fbb.createString(faker.company.catchPhrase())
         : 0,
+      false,
       faker.helpers.maybe(() => faker.helpers.enumValue(ModState), {
         probability: 0.05,
       }) ?? ModState.Visible,
@@ -374,7 +387,9 @@ function genComment(
           ) / 1000n,
         { probability: 0.1 },
       ) ?? null,
-      instance ? instance.id : null,
+      null,
+      null,
+      instance ? instance.id : 0n,
       instance
         ? fbb.createString(
           `https://${instance.domain}/ap/activity/${id.toString(16)}`,
@@ -456,36 +471,7 @@ function genAll(scale = SCALE) {
         ),
       );
       write(0n, DumpType.SettingRecord, fbb.asUint8Array());
-    },
-    writeSettingStr = (key: string, val: string | Uint8Array) => {
-      const fbb = new flatbuffers.Builder();
-      fbb.finish(
-        SettingRecord.createSettingRecord(
-          fbb,
-          fbb.createString(key),
-          null,
-          fbb.createString(val),
-        ),
-      );
-      write(0n, DumpType.SettingRecord, fbb.asUint8Array());
     };
-
-  writeSettingStr("jwt_secret", crypto.getRandomValues(new Uint8Array(64)));
-  writeSettingStr("domain", ludwigDomain);
-  const now = BigInt(Date.now()) / 1000n;
-  writeSettingInt("created_at", now);
-  writeSettingInt("updated_at", now);
-  writeSettingStr("name", "Ludwig");
-  writeSettingStr("description", "Randomly Generated Ludwig Server");
-  writeSettingInt("post_max_length", 1024n * 1024n);
-  writeSettingInt("media_upload_enabled", 0n);
-  writeSettingInt("board_creation_admin_only", 1n);
-  writeSettingInt("federation_enabled", 0n);
-  writeSettingInt("javascript_enabled", 1n);
-  writeSettingInt("infinite_scroll_enabled", 1n);
-  writeSettingInt("registration_enabled", 1n);
-  writeSettingInt("registration_application_required", 1n);
-  writeSettingInt("registration_invite_required", 0n);
 
   const admin = genUser("admin");
   write(admin.id, DumpType.User, admin.data);

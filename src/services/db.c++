@@ -1,11 +1,11 @@
 #include "services/db.h++"
-#include <random>
 #include <span>
 #include <vector>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <duthomhas/csprng.hpp>
+#include <openssl/bio.h>
 #include <openssl/pem.h>
+#include <openssl/rand.h>
 #include "util/lambda_macros.h++"
 
 using std::function, std::min, std::nullopt, std::runtime_error, std::optional,
@@ -292,32 +292,9 @@ namespace Ludwig {
     int err = init_env(filename, &txn);
     if (err) goto die;
 
-    // Load the secrets, or generate them if missing
     MDB_val val;
-    if ((err = db_get(txn, dbis[Settings], SettingsKey::jwt_secret, val))) {
-      spdlog::info("Opened database {} for the first time, generating secrets", filename);
-      duthomhas::csprng rng;
-      uint8_t jwt_secret[JWT_SECRET_SIZE];
-      rng(jwt_secret);
-      const auto now = now_s();
+    if (db_get(txn, dbis[Settings], SettingsKey::next_id, val)) {
       db_put(txn, dbis[Settings], SettingsKey::next_id, 1ULL);
-      val = { JWT_SECRET_SIZE, jwt_secret };
-      db_put(txn, dbis[Settings], SettingsKey::jwt_secret, val);
-      db_put(txn, dbis[Settings], SettingsKey::base_url, "http://localhost:2023");
-      db_put(txn, dbis[Settings], SettingsKey::created_at, now);
-      db_put(txn, dbis[Settings], SettingsKey::updated_at, now);
-      db_put(txn, dbis[Settings], SettingsKey::name, "Ludwig");
-      db_put(txn, dbis[Settings], SettingsKey::description, "A new Ludwig server");
-      db_put(txn, dbis[Settings], SettingsKey::post_max_length, MiB);
-      db_put(txn, dbis[Settings], SettingsKey::media_upload_enabled, 0ULL);
-      db_put(txn, dbis[Settings], SettingsKey::board_creation_admin_only, 1ULL);
-      db_put(txn, dbis[Settings], SettingsKey::federation_enabled, 0ULL);
-      db_put(txn, dbis[Settings], SettingsKey::federate_cw_content, 1ULL);
-      db_put(txn, dbis[Settings], SettingsKey::infinite_scroll_enabled, 1ULL);
-      db_put(txn, dbis[Settings], SettingsKey::javascript_enabled, 1ULL);
-    } else {
-      spdlog::debug("Loaded existing database {}", filename);
-      assert_fmt(val.mv_size == JWT_SECRET_SIZE, "jwt_secret is wrong size: expected {}, got {}", JWT_SECRET_SIZE, val.mv_size);
     }
     if ((err = mdb_txn_commit(txn))) goto die;
     return;
@@ -508,7 +485,7 @@ namespace Ludwig {
   auto ReadTxnBase::get_public_key() -> unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> {
     MDB_val v;
     if (auto err = db_get(txn, db.dbis[Settings], SettingsKey::public_key, v)) throw DBError("public_key error", err);
-    const auto bio = unique_ptr<BIO, int(*)(BIO*)>(BIO_new_mem_buf(v.mv_data, (ssize_t)v.mv_size), BIO_free);
+    const unique_ptr<BIO, int(*)(BIO*)> bio(BIO_new_mem_buf(v.mv_data, (ssize_t)v.mv_size), BIO_free);
     auto* k = PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr);
     if (k == nullptr) throw runtime_error("public_key is not valid");
     return unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)>(k, EVP_PKEY_free);
@@ -516,7 +493,7 @@ namespace Ludwig {
   auto ReadTxnBase::get_private_key() -> unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> {
     MDB_val v;
     if (auto err = db_get(txn, db.dbis[Settings], SettingsKey::private_key, v)) throw DBError("private_key error", err);
-    const auto bio = unique_ptr<BIO, int(*)(BIO*)>(BIO_new_mem_buf(v.mv_data, (ssize_t)v.mv_size), BIO_free);
+    const unique_ptr<BIO, int(*)(BIO*)> bio(BIO_new_mem_buf(v.mv_data, (ssize_t)v.mv_size), BIO_free);
     auto* k = PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr);
     if (k == nullptr) throw runtime_error("private_key is not valid");
     return unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)>(k, EVP_PKEY_free);
@@ -1149,8 +1126,10 @@ namespace Ludwig {
         spdlog::warn("Database error when deleting expired sessions: {}", mdb_strerror(err));
       }
     }
-    duthomhas::csprng prng;
-    prng(id);
+    if (!RAND_bytes((uint8_t*)&id, sizeof(uint64_t))) {
+      spdlog::warn("Could not get secure random number for session ID (err {}), using weaker random source", ERR_get_error());
+      RAND_pseudo_bytes((uint8_t*)&id, sizeof(uint64_t));
+    }
     FlatBufferBuilder fbb;
     fbb.Finish(CreateSession(fbb,
       user,
@@ -2007,7 +1986,10 @@ namespace Ludwig {
   }
   auto WriteTxn::create_invite(uint64_t sender_user_id, uint64_t lifetime_seconds) -> uint64_t {
     uint64_t id, now = now_s();
-    duthomhas::csprng()(id);
+    if (!RAND_bytes((uint8_t*)&id, sizeof(uint64_t))) {
+      spdlog::warn("Could not get secure random number for invite code (err {}), using weaker random source", ERR_get_error());
+      RAND_pseudo_bytes((uint8_t*)&id, sizeof(uint64_t));
+    }
     FlatBufferBuilder fbb;
     fbb.Finish(CreateInvite(fbb, now, now + lifetime_seconds, sender_user_id));
     set_invite(id, fbb.GetBufferSpan());

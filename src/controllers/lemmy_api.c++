@@ -2,9 +2,10 @@
 #include <stack>
 #include <spdlog/fmt/chrono.h>
 #include <static_vector.hpp>
+#include "models/detail.h++"
 #include "util/jwt.h++"
 #include "util/rich_text.h++"
-#include "models/detail.h++"
+#include "util/lambda_macros.h++"
 
 using flatbuffers::FlatBufferBuilder, flatbuffers::Offset, flatbuffers::String,
     std::nullopt, std::optional, std::string, std::string_view, std::vector;
@@ -71,6 +72,7 @@ namespace Ludwig::Lemmy {
   }
 
   auto ApiController::to_comment_aggregates(const CommentDetail& detail, FlatBufferBuilder& fbb) -> Offset<CommentAggregates> {
+    const auto published = write_timestamp(detail.comment().created_at(), fbb);
     return CreateCommentAggregates(fbb,
       detail.id,
       detail.id,
@@ -78,10 +80,12 @@ namespace Ludwig::Lemmy {
       detail.stats().upvotes(),
       detail.stats().downvotes(),
       detail.stats().karma(),
-      detail.rank
+      detail.rank,
+      published
     );
   }
   auto ApiController::to_community_aggregates(const BoardDetail& detail, FlatBufferBuilder& fbb) -> Offset<CommunityAggregates> {
+    const auto published = write_timestamp(detail.board().created_at(), fbb);
     return CreateCommunityAggregates(fbb,
       detail.id,
       detail.id,
@@ -89,7 +93,8 @@ namespace Ludwig::Lemmy {
       detail.stats().thread_count(),
       detail.stats().subscriber_count(),
       // TODO: User counts
-      0, 0, 0, 0
+      0, 0, 0, 0, 0,
+      published
     );
   }
   auto ApiController::to_person_aggregates(const UserDetail& detail, FlatBufferBuilder& fbb) -> Offset<PersonAggregates> {
@@ -148,7 +153,7 @@ namespace Ludwig::Lemmy {
     b.add_path(path);
     b.add_published(published);
     b.add_updated(updated);
-    b.add_deleted(false); // TODO: Track deletion as a tombstone field?
+    b.add_deleted(!!comment.deleted_at());
     b.add_distinguished(false);
     b.add_local(!comment.instance());
     b.add_removed(comment.mod_state() >= ModState::Removed);
@@ -191,8 +196,9 @@ namespace Ludwig::Lemmy {
       updated = board.updated_at() ? write_timestamp(*board.updated_at(), fbb) : 0;
     CommunityBuilder b(fbb);
     b.add_id(id);
-    b.add_instance_id(board.instance().value_or(0));
+    b.add_instance_id(board.instance());
     b.add_name(name);
+    b.add_title(name);
     b.add_actor_id(actor_id);
     b.add_inbox_url(inbox_url);
     b.add_followers_url(followers_url);
@@ -202,7 +208,7 @@ namespace Ludwig::Lemmy {
     b.add_banner(banner);
     b.add_description(description);
     b.add_display_name(display_name);
-    b.add_deleted(false); // TODO: Track deletion as a tombstone field?
+    b.add_deleted(!!board.deleted_at());
     b.add_hidden(hidden);
     b.add_nsfw(!!board.content_warning());
     b.add_local(!board.instance());
@@ -220,7 +226,7 @@ namespace Ludwig::Lemmy {
   ) -> Offset<Post> {
     const auto* site = instance->site_detail();
     const Offset<String>
-      name = fbb.CreateString(thread.title()),
+      name = fbb.CreateString(RichTextParser::plain_text_with_emojis_to_text_content(thread.title_type(), thread.title())),
       ap_id = fbb.CreateString(thread.activity_url()
           ? thread.activity_url()->str()
           : fmt::format("{}/ap/activity/{:x}", site->base_url, id)),
@@ -256,8 +262,8 @@ namespace Ludwig::Lemmy {
     b.add_embed_video_url(embed_video_url);
     b.add_thumbnail_url(thumbnail_url);
     b.add_url(url);
-    b.add_deleted(false); // TODO: Track deletion as a tombstone field?
-    b.add_featured_community(false); // TODO: Featured boards
+    b.add_deleted(!!thread.deleted_at());
+    b.add_featured_community(thread.featured());
     b.add_featured_local(false);
     b.add_local(!thread.instance());
     b.add_locked(thread.mod_state() >= ModState::Locked);
@@ -300,7 +306,7 @@ namespace Ludwig::Lemmy {
       updated = user.updated_at() ? write_timestamp(*user.updated_at(), fbb) : 0;
     PersonBuilder b(fbb);
     b.add_id(id);
-    b.add_instance_id(user.instance().value_or(0));
+    b.add_instance_id(user.instance());
     b.add_name(name);
     b.add_actor_id(actor_id);
     b.add_inbox_url(inbox_url);
@@ -312,10 +318,10 @@ namespace Ludwig::Lemmy {
     b.add_bio(bio);
     b.add_display_name(display_name);
     b.add_matrix_user_id(matrix_user_id);
-    b.add_admin(local_user.transform([](auto u){return u.get().admin();}).value_or(false));
+    b.add_admin(local_user.transform(λx(x.get().admin())).value_or(false));
     b.add_banned(user.mod_state() >= ModState::Removed);
     b.add_bot_account(user.bot());
-    b.add_deleted(false); // TODO: Track deletion as a tombstone field?
+    b.add_deleted(!!user.deleted_at());
     b.add_local(!user.instance());
     return b.Finish();
   }
@@ -428,7 +434,8 @@ namespace Ludwig::Lemmy {
       to_community(detail.thread().board(), detail.board(), detail.board_hidden, login, fbb),
       to_comment_aggregates(detail, fbb),
       to_person(detail.author_id(), detail.author(), txn.get_local_user(detail.author_id()), login, fbb),
-      to_post(detail.comment().thread(), detail.thread(), {}, login, fbb)
+      to_post(detail.comment().thread(), detail.thread(), {}, login, fbb),
+      fbb.CreateString("NotSubscribed") // TODO: Get board subscription status here
     );
   }
 
@@ -565,8 +572,8 @@ namespace Ludwig::Lemmy {
       .cws_enabled = form.enable_nsfw(),
       .require_login_to_view = form.private_instance(),
       .board_creation_admin_only = form.community_creation_admin_only(),
-      .registration_enabled = registration_mode.transform([](auto m){return m != RegistrationMode::Closed;}),
-      .registration_application_required = registration_mode.transform([](auto m){return m == RegistrationMode::RequireApplication;}),
+      .registration_enabled = registration_mode.transform(λx(x != RegistrationMode::Closed)),
+      .registration_application_required = registration_mode.transform(λx(x == RegistrationMode::RequireApplication)),
     }, nullopt, nullopt, nullopt, nullopt });
     auto txn = instance->open_read_txn();
     return CreateSiteResponse(fbb, get_site_view(txn, fbb));
@@ -596,7 +603,7 @@ namespace Ludwig::Lemmy {
   auto ApiController::edit_comment(EditComment& form, optional<SecretString>&& auth, FlatBufferBuilder& fbb) -> Offset<CommentResponse> {
     const auto user_id = require_auth(form, std::move(auth));
     // TODO: Use language_id
-    instance->update_comment(form.comment_id(), user_id, {
+    instance->update_local_comment(form.comment_id(), user_id, {
       .text_content = form.content() ? optional(form.content()->c_str()) : nullopt
     });
     auto txn = instance->open_read_txn();
@@ -629,9 +636,10 @@ namespace Ludwig::Lemmy {
 
   auto ApiController::edit_post(EditPost& form, optional<SecretString>&& auth, FlatBufferBuilder& fbb) -> Offset<PostResponse> {
     const auto user_id = require_auth(form, std::move(auth));
+    if (form.url()) throw ApiError("Updating thread URLs is not yet implemented", 500);
     // TODO: Use language_id
     // TODO: Update url
-    instance->update_thread(form.post_id(), user_id, {
+    instance->update_local_thread(form.post_id(), user_id, {
       .title = form.name() ? optional(form.name()->c_str()) : nullopt,
       .text_content = form.body() ? optional(form.body()->c_str()) : nullopt,
       .content_warning = form.nsfw() ? optional("NSFW") : nullopt
@@ -666,8 +674,8 @@ namespace Ludwig::Lemmy {
       .cws_enabled = form.enable_nsfw(),
       .require_login_to_view = form.private_instance(),
       .board_creation_admin_only = form.community_creation_admin_only(),
-      .registration_enabled = registration_mode.transform([](auto m){return m != RegistrationMode::Closed;}),
-      .registration_application_required = registration_mode.transform([](auto m){return m == RegistrationMode::RequireApplication;}),
+      .registration_enabled = registration_mode.transform(λx(x != RegistrationMode::Closed)),
+      .registration_application_required = registration_mode.transform(λx(x == RegistrationMode::RequireApplication)),
     }, user_id);
     auto txn = instance->open_read_txn();
     return CreateSiteResponse(fbb, get_site_view(txn, fbb));
@@ -842,8 +850,9 @@ namespace Ludwig::Lemmy {
     if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
     const auto login = login_id.transform([&txn](auto id){return LocalUserDetail::get(txn, id);});
-    if (!form.type + !form.community_id + form.community_name.empty() != 2) {
-      throw ApiError(R"(get_posts requires exactly one of "type", "community_id", or "community_name")", 400);
+    const int missing = (int)!form.type + (int)!form.community_id + (int)form.community_name.empty();
+    if (missing != 2) {
+      throw ApiError(R"(get_posts requires exactly one of "type", "community_id", or "community_name" (missing = )" + std::to_string(missing), 400);
     }
     const auto sort = parse_sort_type(form.sort, login);
     stlpb::static_vector<Offset<PostView>, 256> entries;
@@ -986,6 +995,17 @@ namespace Ludwig::Lemmy {
     );
   }
 
+  auto ApiController::logout(SecretString&& auth) -> void {
+    uint64_t session_id = 0;
+    {
+      auto txn = instance->open_read_txn();
+      if (const auto jwt = parse_jwt(auth.data, txn.get_jwt_secret())) {
+        session_id = jwt->sub;
+      }
+    }
+    if (session_id) instance->delete_session(session_id);
+  }
+
   auto ApiController::mark_all_as_read(MarkAllAsRead& form, optional<SecretString>&& auth, FlatBufferBuilder& fbb) -> Offset<GetRepliesResponse> {
     require_auth(form, std::move(auth));
     // TODO: Support mark as read (this does nothing)
@@ -1093,7 +1113,7 @@ namespace Ludwig::Lemmy {
       .show_avatars = form.show_avatars(),
       .show_bot_accounts = form.show_bot_accounts(),
       .show_karma = form.show_scores(),
-      .hide_cw_posts = form.show_nsfw().transform([](auto b){return !b;}),
+      .hide_cw_posts = form.show_nsfw().transform(λx(!x))
     });
     return CreateLoginResponseDirect(fbb, jwt.data.c_str());
   }
@@ -1137,6 +1157,10 @@ namespace Ludwig::Lemmy {
   /* transferCommunity */
 
   //auto ApiController::upload_image(const UploadImage& named_parameters, FlatBufferBuilder& fbb) -> Offset<UploadImageResponse>;
+
+  auto ApiController::validate_auth(std::optional<SecretString>&& auth) -> void {
+    if (auth) validate_jwt(std::move(*auth));
+  }
 
   auto ApiController::verify_email(VerifyEmail&) -> void {
     throw ApiError("Not yet supported (no email support)", 500);

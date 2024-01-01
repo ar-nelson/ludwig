@@ -1,6 +1,7 @@
 #include "views/webapp.h++"
 #include "util/web.h++"
 #include "util/zstd_db_dump.h++"
+#include "models/enums.h++"
 #include "static/default-theme.css.h++"
 #include "static/htmx.min.js.h++"
 #include "static/feather-sprite.svg.h++"
@@ -976,6 +977,7 @@ namespace Ludwig {
           is_list_item ? "<li><article" : "<div",
           thread.id
         );
+        const auto title = rt.plain_text_with_emojis_to_html(thread.thread().title_type(), thread.thread().title(), {});
         if (is_list_item || thread.thread().content_url()) {
           write_fmt(R"(<a class="thread-title-link" href="{}">{}</a></h2>)",
             Escape{
@@ -983,10 +985,10 @@ namespace Ludwig {
                 ? thread.thread().content_url()->string_view()
                 : fmt::format("/thread/{:x}", thread.id)
             },
-            Escape(thread.thread().title())
+            title
           );
         } else {
-          write_fmt("{}</h2>", Escape(thread.thread().title()));
+          write_fmt("{}</h2>", title);
         }
         // TODO: Selectively show CW'd images, maybe use blurhash
         if (show_images && !thread.thread().content_warning() && thread.link_card().image_url()) {
@@ -1055,7 +1057,9 @@ namespace Ludwig {
         write_datetime(comment.created_at());
         if (show_thread) {
           write_fmt(R"(</span><span>on <a href="/thread/{:x}">{}</a>)",
-            comment.comment().thread(), Escape(comment.thread().title()));
+            comment.comment().thread(),
+            rt.plain_text_with_emojis_to_html(comment.thread().title_type(), comment.thread().title(), {})
+          );
           if (comment.thread().content_warning() || comment.thread().mod_state() > ModState::Visible) {
             write_short_warnings(comment.thread());
           }
@@ -1375,7 +1379,8 @@ namespace Ludwig {
           "</span></p><br>"
           HTML_FIELD("title", "Title", "text", R"( value="{}" autocomplete="off" required)")
           HTML_TEXTAREA("text_content", "Text content", "{}", "{}"),
-          Escape(thread.thread().title()), thread.thread().content_url() ? "" : " required",
+          Escape(RichTextParser::plain_text_with_emojis_to_text_content(thread.thread().title_type(), thread.thread().title())),
+          thread.thread().content_url() ? "" : " required",
           Escape(thread.thread().content_text_raw())
         );
         write_content_warning_field(thread.thread().content_warning() ? thread.thread().content_warning()->string_view() : "");
@@ -2565,7 +2570,7 @@ namespace Ludwig {
           user = m->require_login(),
           referer = string(req->getHeader("referer")),
           is_htmx = m->is_htmx
-        ](QueryString body, auto&& write) {
+        ](QueryString<string_view> body, auto&& write) {
           self->controller->subscribe(user, board_id, !body.optional_bool("unsubscribe"));
           write([=](auto* rsp) mutable {
             if (is_htmx) {

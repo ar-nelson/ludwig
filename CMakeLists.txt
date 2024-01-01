@@ -96,15 +96,27 @@ endforeach ()
 add_custom_target(flatbuffers_generated DEPENDS ${fbs_depends})
 
 if (${CMAKE_BUILD_TYPE} MATCHES Debug)
-  set (buildtype_compile_options
-    -DLUDWIG_DEBUG=1
-    -g
-    -O0
-    -fno-omit-frame-pointer
-    -fsanitize=address,undefined
-    -fno-sanitize=alignment
-  )
-  set (link_options -fsanitize=address,undefined -fno-sanitize=alignment -stdlib=libc++ -lc++abi)
+  if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
+    # ubsan doesn't work on android
+    set (buildtype_compile_options
+      -DLUDWIG_DEBUG=1
+      -g
+      -O0
+      -fno-omit-frame-pointer
+      -fsanitize=address
+    )
+    set (link_options -fsanitize=address -stdlib=libc++ -lc++abi)
+  else ()
+    set (buildtype_compile_options
+      -DLUDWIG_DEBUG=1
+      -g
+      -O0
+      -fno-omit-frame-pointer
+      -fsanitize=address,undefined
+      -fno-sanitize=alignment
+    )
+    set (link_options -fsanitize=address,undefined -fno-sanitize=alignment -stdlib=libc++ -lc++abi)
+  endif ()
 else ()
   set (buildtype_compile_options -O3)
   set (link_options -stdlib=libc++ -lc++abi)
@@ -135,6 +147,7 @@ set (ludwig_common_src
   src/services/lmdb_search_engine.c++
   src/services/thumbnail_cache.c++
   src/models/detail.c++
+  src/models/patch.c++
   src/models/protocols_parser.c++
   src/controllers/instance.c++
   src/controllers/lemmy_api.c++

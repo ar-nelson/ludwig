@@ -167,13 +167,18 @@ TEST_CASE("create users and boards, subscribe and unsubscribe", "[db]") {
 
 static inline auto create_thread(WriteTxn& txn, uint64_t user, uint64_t board, const char* title, const char* url) -> uint64_t {
   FlatBufferBuilder fbb;
+  const vector title_type{PlainTextWithEmojis::Plain};
+  const vector title_vec{fbb.CreateString(title).Union()};
   fbb.Finish(CreateThreadDirect(fbb,
     user,
     board,
-    title,
+    &title_type,
+    &title_vec,
     now_s(),
     {},
     {},
+    {},
+    0,
     nullptr,
     nullptr,
     url
@@ -277,16 +282,21 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
   {
     auto txn = db.open_write_txn();
     for (size_t i = 0; i < RND_SIZE; i++) {
-      auto author = users[random_int(gen, RND_SIZE / 10)];
-      auto board = boards[random_int(gen, 3)];
+      const auto author = users[random_int(gen, RND_SIZE / 10)];
+      const auto board = boards[random_int(gen, 3)];
       fbb.Clear();
+      const vector title_type{PlainTextWithEmojis::Plain};
+      const vector title_vec{fbb.CreateString("Lorem ipsum dolor sit amet").Union()};
       fbb.Finish(CreateThreadDirect(fbb,
         author,
         board,
-        "Lorem ipsum dolor sit amet",
+        &title_type,
+        &title_vec,
         now - random_int(gen, 86400 * 30),
         {},
         {},
+        {},
+        0,
         nullptr,
         nullptr,
         "https://example.com"

@@ -279,14 +279,16 @@ struct PopulatedInstance {
     for (size_t i = 0; i < NUM_THREADS; i++) {
       fbb.Clear();
       const auto [board, user, time, title, content_warning, mod_state] = thread_data[i];
-      const auto title_s = fbb.CreateString(title),
-        url_s = fbb.CreateString("https://example.com"),
+      const auto url_s = fbb.CreateString("https://example.com"),
         content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
+      const auto title_type = fbb.CreateVector(vector{PlainTextWithEmojis::Plain});
+      const auto title_vec = fbb.CreateVector(vector{fbb.CreateString(title).Union()});
       ThreadBuilder t(fbb);
       t.add_board(boards[board]);
       t.add_author(users[user]);
       t.add_created_at(epoch + time);
-      t.add_title(title_s);
+      t.add_title_type(title_type);
+      t.add_title(title_vec);
       t.add_content_url(url_s);
       if (content_warning) t.add_content_warning(content_warning_s);
       if (mod_state) t.add_mod_state(*mod_state);
@@ -295,13 +297,15 @@ struct PopulatedInstance {
     }
     for (size_t i = 0; i < ITEMS_PER_PAGE * 3; i++) {
       fbb.Clear();
-      const auto title_s = fbb.CreateString(fmt::format("filler post {}", i)),
-        url_s = fbb.CreateString("https://example.com");
+      const auto url_s = fbb.CreateString("https://example.com");
+      const auto title_type = fbb.CreateVector(vector{PlainTextWithEmojis::Plain});
+      const auto title_vec = fbb.CreateVector(vector{fbb.CreateString(fmt::format("filler post {}", i)).Union()});
       ThreadBuilder t(fbb);
       t.add_board(boards[1]);
       t.add_author(users[3]);
       t.add_created_at(epoch + DAY * 3 + HOUR * i);
-      t.add_title(title_s);
+      t.add_title_type(title_type);
+      t.add_title(title_vec);
       t.add_content_url(url_s);
       fbb.Finish(t.Finish());
     }

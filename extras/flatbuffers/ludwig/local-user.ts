@@ -65,9 +65,9 @@ emailVerified():boolean {
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
-invite():bigint|null {
+invite():bigint {
   const offset = this.bb!.__offset(this.bb_pos, 18);
-  return offset ? this.bb!.readUint64(this.bb_pos + offset) : null;
+  return offset ? this.bb!.readUint64(this.bb_pos + offset) : BigInt('0');
 }
 
 openLinksInNewTab():boolean {
@@ -140,16 +140,14 @@ infiniteScrollEnabled():boolean {
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : true;
 }
 
-interfaceLanguage():string|null
-interfaceLanguage(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
-interfaceLanguage(optionalEncoding?:any):string|Uint8Array|null {
+theme():bigint {
   const offset = this.bb!.__offset(this.bb_pos, 48);
-  return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
+  return offset ? this.bb!.readUint64(this.bb_pos + offset) : BigInt('0');
 }
 
-theme():string|null
-theme(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
-theme(optionalEncoding?:any):string|Uint8Array|null {
+lemmyTheme():string|null
+lemmyTheme(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
+lemmyTheme(optionalEncoding?:any):string|Uint8Array|null {
   const offset = this.bb!.__offset(this.bb_pos, 50);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
@@ -197,7 +195,7 @@ static addEmailVerified(builder:flatbuffers.Builder, emailVerified:boolean) {
 }
 
 static addInvite(builder:flatbuffers.Builder, invite:bigint) {
-  builder.addFieldInt64(7, invite, BigInt(0));
+  builder.addFieldInt64(7, invite, BigInt('0'));
 }
 
 static addOpenLinksInNewTab(builder:flatbuffers.Builder, openLinksInNewTab:boolean) {
@@ -256,12 +254,12 @@ static addInfiniteScrollEnabled(builder:flatbuffers.Builder, infiniteScrollEnabl
   builder.addFieldInt8(21, +infiniteScrollEnabled, +true);
 }
 
-static addInterfaceLanguage(builder:flatbuffers.Builder, interfaceLanguageOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(22, interfaceLanguageOffset, 0);
+static addTheme(builder:flatbuffers.Builder, theme:bigint) {
+  builder.addFieldInt64(22, theme, BigInt('0'));
 }
 
-static addTheme(builder:flatbuffers.Builder, themeOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(23, themeOffset, 0);
+static addLemmyTheme(builder:flatbuffers.Builder, lemmyThemeOffset:flatbuffers.Offset) {
+  builder.addFieldOffset(23, lemmyThemeOffset, 0);
 }
 
 static addDefaultSortType(builder:flatbuffers.Builder, defaultSortType:SortType) {

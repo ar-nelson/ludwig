@@ -1,17 +1,19 @@
 #include "instance.h++"
-#include <mutex>
 #include <regex>
 #include <queue>
-#include <duthomhas/csprng.hpp>
+#include <openssl/bio.h>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/rand.h>
 #include <static_vector.hpp>
 #include "util/web.h++"
-#include "util/lambda_macros.h++"
+#include "models/patch.h++"
 
 using std::function, std::max, std::min, std::nullopt, std::optional, std::pair,
     std::priority_queue, std::regex, std::regex_match, std::shared_ptr,
-    std::string, std::string_view, std::tuple, std::vector, flatbuffers::Offset,
-    flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot, flatbuffers::Vector;
+    std::string, std::string_view, std::unique_ptr, std::vector, flatbuffers::Offset,
+    flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot,
+    flatbuffers::Vector;
 namespace chrono = std::chrono;
 
 namespace Ludwig {
@@ -307,7 +309,18 @@ namespace Ludwig {
     shared_ptr<RichTextParser> rich_text,
     shared_ptr<EventBus> event_bus,
     optional<shared_ptr<SearchEngine>> search_engine
-  ) : db(db), http_client(http_client), rich_text(rich_text), event_bus(event_bus), search_engine(search_engine) {
+  ) : db(db),
+      http_client(http_client),
+      rich_text(rich_text),
+      event_bus(event_bus),
+      site_detail_sub(event_bus->on_event(Event::SiteUpdate, [&](Event, uint64_t){
+        auto txn = open_read_txn();
+        auto detail = new SiteDetail;
+        *detail = SiteDetail::get(txn);
+        auto ptr = cached_site_detail.exchange(detail);
+        if (ptr) delete ptr;
+      })),
+      search_engine(search_engine) {
     auto txn = db->open_read_txn();
     auto detail = new SiteDetail;
     *detail = SiteDetail::get(txn);
@@ -1081,6 +1094,79 @@ namespace Ludwig {
     return out;
   }
 
+  auto InstanceController::first_run_setup(const FirstRunSetup& update) -> void {
+    const auto now = now_s();
+    auto txn = db->open_write_txn();
+    if (!txn.get_setting_int(SettingsKey::setup_done)) {
+      if (!txn.get_setting_int(SettingsKey::next_id)) txn.set_setting(SettingsKey::next_id, 1);
+
+      // JWT secret
+      uint8_t jwt_secret[JWT_SECRET_SIZE];
+      if (!RAND_bytes(jwt_secret, JWT_SECRET_SIZE)) {
+        throw ApiError("Not enough randomness to generate JWT secret", 500);
+      }
+      txn.set_setting(SettingsKey::jwt_secret, string_view{(const char*)jwt_secret, JWT_SECRET_SIZE});
+      OPENSSL_cleanse(jwt_secret, JWT_SECRET_SIZE);
+
+      // RSA keys
+      const unique_ptr<EVP_PKEY_CTX, void(*)(EVP_PKEY_CTX*)> kctx(
+        EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr),
+        EVP_PKEY_CTX_free
+      );
+      EVP_PKEY* key_ptr = nullptr;
+      if (
+        !kctx ||
+        !EVP_PKEY_keygen_init(kctx.get()) ||
+        !EVP_PKEY_CTX_set_rsa_keygen_bits(kctx.get(), 2048) ||
+        !EVP_PKEY_keygen(kctx.get(), &key_ptr)
+      ) {
+        throw ApiError("RSA key generation failed (keygen init)", 500);
+      }
+      const unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> key(key_ptr, EVP_PKEY_free);
+      const unique_ptr<BIO, int(*)(BIO*)>
+        bio_public(BIO_new(BIO_s_mem()), BIO_free),
+        bio_private(BIO_new(BIO_s_mem()), BIO_free);
+      if (
+        PEM_write_bio_PUBKEY(bio_public.get(), key.get()) != 1 ||
+        PEM_write_bio_PrivateKey(bio_private.get(), key.get(), nullptr, nullptr, 0, nullptr, nullptr) != 1
+      ) {
+        throw ApiError("RSA key generation failed (PEM generation)", 500);
+      }
+      const uint8_t* bio_data;
+      size_t bio_len;
+      if (!BIO_flush(bio_public.get()) || !BIO_mem_contents(bio_public.get(), &bio_data, &bio_len)) {
+        throw ApiError("RSA key generation failed (write public)", 500);
+      }
+      txn.set_setting(SettingsKey::public_key, string_view{(const char*)bio_data, bio_len});
+      if (!BIO_flush(bio_private.get()) || !BIO_mem_contents(bio_private.get(), &bio_data, &bio_len)) {
+        throw ApiError("RSA key generation failed (write private)", 500);
+      }
+      txn.set_setting(SettingsKey::private_key, string_view{(const char*)bio_data, bio_len});
+
+      txn.set_setting(SettingsKey::base_url, update.base_url.value_or("http://localhost:2023"));
+      txn.set_setting(SettingsKey::media_upload_enabled, 0);
+      txn.set_setting(SettingsKey::federation_enabled, 0);
+      txn.set_setting(SettingsKey::federate_cw_content, 0);
+      txn.set_setting(SettingsKey::setup_done, 1);
+      txn.set_setting(SettingsKey::created_at, now);
+    }
+    // TODO: Create admin account
+    // TODO: Create default board
+    txn.set_setting(SettingsKey::name, update.name.value_or("Ludwig"));
+    txn.set_setting(SettingsKey::description, update.description.value_or("A new Ludwig server"));
+    txn.set_setting(SettingsKey::icon_url, update.icon_url.value_or("").value_or(""));
+    txn.set_setting(SettingsKey::banner_url, update.banner_url.value_or("").value_or(""));
+    txn.set_setting(SettingsKey::post_max_length, update.max_post_length.value_or(1024 * 1024));
+    txn.set_setting(SettingsKey::javascript_enabled, update.javascript_enabled.value_or(false));
+    txn.set_setting(SettingsKey::board_creation_admin_only, update.board_creation_admin_only.value_or(true));
+    txn.set_setting(SettingsKey::registration_enabled, update.registration_enabled.value_or(false));
+    txn.set_setting(SettingsKey::registration_application_required, update.registration_application_required.value_or(false));
+    txn.set_setting(SettingsKey::registration_invite_required, update.registration_invite_required.value_or(false));
+    txn.set_setting(SettingsKey::invite_admin_only, update.invite_admin_only.value_or(false));
+    txn.set_setting(SettingsKey::updated_at, now);
+    txn.commit();
+    event_bus->dispatch(Event::SiteUpdate);
+  }
   auto InstanceController::update_site(const SiteUpdate& update, optional<uint64_t> as_user) -> void {
     {
       auto txn = db->open_write_txn();
@@ -1098,6 +1184,7 @@ namespace Ludwig {
       if (const auto v = update.registration_application_required) txn.set_setting(SettingsKey::registration_application_required, *v);
       if (const auto v = update.registration_invite_required) txn.set_setting(SettingsKey::registration_invite_required, *v);
       if (const auto v = update.invite_admin_only) txn.set_setting(SettingsKey::invite_admin_only, *v);
+      txn.set_setting(SettingsKey::updated_at, now_s());
       txn.commit();
     }
     {
@@ -1135,8 +1222,9 @@ namespace Ludwig {
       throw ApiError("A user with this email address already exists on this instance", 409);
     }
     uint8_t salt[16], hash[32];
-    duthomhas::csprng rng;
-    rng(salt);
+    if (!RAND_bytes(salt, 16)) {
+      throw ApiError("Not enough randomness to generate secure password salt", 500);
+    }
     hash_password(std::move(password), salt, hash);
     FlatBufferBuilder fbb;
     {
@@ -1248,6 +1336,7 @@ namespace Ludwig {
     txn.commit();
     return user_id;
   }
+
   auto InstanceController::update_local_user(uint64_t id, optional<uint64_t> as_user, const LocalUserUpdate& update) -> void {
     auto txn = db->open_write_txn();
     const auto detail = LocalUserDetail::get(txn, id);
@@ -1255,7 +1344,7 @@ namespace Ludwig {
     if (login && !detail.can_change_settings(login)) {
       throw ApiError("User does not have permission to modify this user", 403);
     }
-    if (update.email && !regex_match(*update.email, email_regex)) {
+    if (update.email && !regex_match(update.email->cbegin(), update.email->cend(), email_regex)) {
       throw ApiError("Invalid email address", 400);
     }
     if (update.email && txn.get_user_id_by_email(string(*update.email))) {
@@ -1264,113 +1353,101 @@ namespace Ludwig {
     if (update.display_name && *update.display_name && (*update.display_name)->length() > 1024) {
       throw ApiError("Display name cannot be longer than 1024 bytes", 400);
     }
-    if (update.email || update.approved || update.accepted_application ||
-        update.email_verified || update.open_links_in_new_tab ||
-        update.show_avatars || update.show_bot_accounts ||
-        update.hide_cw_posts || update.expand_cw_posts ||
-        update.expand_cw_images || update.show_karma ||
-        update.javascript_enabled) {
-      const auto& lu = detail.local_user();
+    if (update.email || update.open_links_in_new_tab || update.show_avatars ||
+        update.show_bot_accounts || update.hide_cw_posts ||
+        update.expand_cw_posts || update.expand_cw_images ||
+        update.show_karma || update.javascript_enabled ||
+        update.infinite_scroll_enabled || update.default_sort_type ||
+        update.default_comment_sort_type) {
       FlatBufferBuilder fbb;
-      const auto email = fbb.CreateString(update.email.value_or(lu.email()->c_str()));
-      const auto theme = fbb.CreateString(lu.theme());
-      const auto lemmy_theme = fbb.CreateString(lu.lemmy_theme());
-      LocalUserBuilder b(fbb);
-      b.add_email(email);
-      b.add_password_hash(lu.password_hash());
-      b.add_password_salt(lu.password_salt());
-      b.add_admin(lu.admin());
-      b.add_approved(update.approved.value_or(lu.approved()));
-      b.add_accepted_application(update.accepted_application.value_or(lu.accepted_application()));
-      b.add_email_verified(update.email_verified.value_or(lu.email_verified()));
-      if (lu.invite()) b.add_invite(*lu.invite());
-      b.add_open_links_in_new_tab(update.open_links_in_new_tab.value_or(lu.open_links_in_new_tab()));
-      b.add_send_notifications_to_email(lu.send_notifications_to_email());
-      b.add_show_avatars(update.show_avatars.value_or(lu.show_avatars()));
-      b.add_show_images_threads(lu.show_images_threads());
-      b.add_show_images_comments(lu.show_images_comments());
-      b.add_show_bot_accounts(update.show_bot_accounts.value_or(lu.show_bot_accounts()));
-      b.add_show_new_post_notifs(lu.show_new_post_notifs());
-      b.add_hide_cw_posts(update.hide_cw_posts.value_or(lu.hide_cw_posts()));
-      b.add_expand_cw_posts(update.expand_cw_posts.value_or(lu.expand_cw_posts()));
-      b.add_expand_cw_images(update.expand_cw_images.value_or(lu.expand_cw_images()));
-      b.add_show_read_posts(lu.show_read_posts());
-      b.add_show_karma(update.show_karma.value_or(lu.show_karma()));
-      b.add_javascript_enabled(update.javascript_enabled.value_or(lu.javascript_enabled()));
-      b.add_infinite_scroll_enabled(lu.infinite_scroll_enabled());
-      b.add_theme(theme);
-      b.add_lemmy_theme(lemmy_theme);
-      b.add_default_sort_type(lu.default_sort_type());
-      b.add_default_comment_sort_type(lu.default_comment_sort_type());
-      fbb.Finish(b.Finish());
+      fbb.Finish(patch_local_user(fbb, detail.local_user(), {
+        .email = update.email,
+        .open_links_in_new_tab = update.open_links_in_new_tab,
+        .show_avatars = update.show_avatars,
+        .show_bot_accounts = update.show_bot_accounts,
+        .hide_cw_posts = update.hide_cw_posts,
+        .expand_cw_posts = update.expand_cw_posts,
+        .expand_cw_images = update.expand_cw_images,
+        .show_karma = update.show_karma,
+        .javascript_enabled = update.javascript_enabled,
+        .infinite_scroll_enabled = update.infinite_scroll_enabled,
+        .default_sort_type = update.default_sort_type,
+        .default_comment_sort_type = update.default_comment_sort_type
+      }));
       txn.set_local_user(id, fbb.GetBufferSpan());
     }
-    if (update.display_name || update.bio || update.avatar_url || update.banner_url) {
-      const auto& u = detail.user();
+    if (update.display_name || update.bio || update.avatar_url || update.banner_url || update.bot) {
       FlatBufferBuilder fbb;
-      const auto name = fbb.CreateString(u.name()),
-        matrix_user_id = fbb.CreateString(u.matrix_user_id()),
-        avatar_url = update.avatar_url.value_or(u.avatar_url() ? optional(u.avatar_url()->string_view()) : nullopt)
-          .transform([&](auto s) { return fbb.CreateString(s); }).value_or(0),
-        banner_url = update.banner_url.value_or(u.banner_url() ? optional(u.banner_url()->string_view()) : nullopt)
-          .transform([&](auto s) { return fbb.CreateString(s); }).value_or(0),
-        mod_reason = fbb.CreateString(u.mod_reason());
-      const auto [display_name_type, display_name] =
-        update.display_name
-          .transform([](optional<string_view> sv) { return sv.transform(λx(string(x))); })
-          .value_or(u.display_name_type()->size()
-            ? optional(rich_text->plain_text_with_emojis_to_text_content(u.display_name_type(), u.display_name()))
-            : nullopt)
-          .transform([&](string s) { return rich_text->parse_plain_text_with_emojis(fbb, s); })
-          .value_or(pair(0, 0));
-      const auto [bio_raw, bio_type, bio] =
-        update.bio
-          .value_or(u.bio_raw() ? optional(u.bio_raw()->string_view()) : nullopt)
-          .transform([&](string_view s) {
-            const auto [bio_type, bio] = rich_text->parse_markdown(fbb, s);
-            return tuple(fbb.CreateString(s), bio_type, bio);
-          })
-          .value_or(tuple(0, 0, 0));
-      UserBuilder b(fbb);
-      b.add_name(name);
-      b.add_display_name_type(display_name_type);
-      b.add_display_name(display_name);
-      b.add_bio_raw(bio_raw);
-      b.add_bio_type(bio_type);
-      b.add_bio(bio);
-      b.add_matrix_user_id(matrix_user_id);
-      b.add_created_at(u.created_at());
-      b.add_updated_at(now_s());
-      b.add_avatar_url(avatar_url);
-      b.add_banner_url(banner_url);
-      b.add_bot(u.bot());
-      b.add_mod_state(u.mod_state());
-      b.add_mod_reason(mod_reason);
-      fbb.Finish(b.Finish());
+      fbb.Finish(patch_user(fbb, *rich_text, detail.user(), {
+        .display_name = update.display_name,
+        .bio = update.bio,
+        .avatar_url = update.avatar_url,
+        .banner_url = update.banner_url,
+        .updated_at = now_s(),
+        .bot = update.bot
+      }));
       txn.set_user(id, fbb.GetBufferSpan());
     }
     txn.commit();
   }
   auto InstanceController::approve_local_user_application(uint64_t user_id, optional<uint64_t> as_user) -> void {
-    LocalUserUpdate update;
-    {
-      auto txn = db->open_read_txn();
-      const auto old_opt = txn.get_local_user(user_id);
-      if (!old_opt) throw ApiError("User does not exist", 404);
-      const auto& old = old_opt->get();
-      if (old.accepted_application()) throw ApiError("User's application has already been accepted", 409);
-      if (!txn.get_application(user_id)) throw ApiError("User does not have an application to approve", 404);
-      update.accepted_application = true;
-      update.approved = old.approved() || site_detail()->registration_application_required;
+    FlatBufferBuilder fbb;
+    LocalUserPatch patch { .accepted_application = true };
+    auto txn = db->open_write_txn();
+    if (as_user && !LocalUserDetail::get(txn, *as_user).local_user().admin()) {
+      throw ApiError("Only admins can approve user applications", 403);
     }
-    update_local_user(user_id, as_user, update);
+    const auto old_opt = txn.get_local_user(user_id);
+    if (!old_opt) throw ApiError("User does not exist", 404);
+    const auto& old = old_opt->get();
+    if (old.accepted_application()) throw ApiError("User's application has already been accepted", 409);
+    if (!txn.get_application(user_id)) throw ApiError("User does not have an application to approve", 404);
+    fbb.Finish(patch_local_user(fbb, old, {
+      .approved = old.approved() || site_detail()->registration_application_required,
+      .accepted_application = true
+    }));
+    txn.set_local_user(user_id, fbb.GetBufferSpan());
+    txn.commit();
+  }
+  auto InstanceController::reset_password(uint64_t user_id) -> string {
+    // TODO: Reset password
+    throw ApiError("Reset password is not yet supported", 500);
+  }
+  auto InstanceController::change_password(uint64_t user_id, SecretString&& new_password) -> void {
+    auto txn = db->open_write_txn();
+    auto user = LocalUserDetail::get(txn, user_id);
+    FlatBufferBuilder fbb;
+    fbb.Finish(patch_local_user(fbb, user.local_user(), { .password = std::move(new_password) }));
+    txn.set_local_user(user_id, fbb.GetBufferSpan());
+  }
+  auto InstanceController::change_password(string_view reset_token, SecretString&& new_password) -> string {
+    // TODO: Reset password
+    throw ApiError("Reset password is not yet supported", 500);
+  }
+  auto InstanceController::change_password(uint64_t user_id, SecretString&& old_password, SecretString&& new_password) -> void {
+    auto txn = db->open_write_txn();
+    auto user = LocalUserDetail::get(txn, user_id);
+    uint8_t hash[32];
+    hash_password(std::move(old_password), user.local_user().password_salt()->bytes()->Data(), hash);
+    // Note that this returns 0 on success, 1 on failure!
+    if (CRYPTO_memcmp(hash, user.local_user().password_hash()->bytes()->Data(), 32)) {
+      throw ApiError("Old password incorrect", 400);
+    }
+    FlatBufferBuilder fbb;
+    fbb.Finish(patch_local_user(fbb, user.local_user(), { .password = std::move(new_password) }));
+    txn.set_local_user(user_id, fbb.GetBufferSpan());
   }
   auto InstanceController::create_site_invite(optional<uint64_t> as_user) -> uint64_t {
     using namespace chrono;
     auto txn = db->open_write_txn();
     const auto user = as_user.transform([&](auto id){return LocalUserDetail::get(txn, id);});
-    if (site_detail()->invite_admin_only && user && !user->local_user().admin()) {
-      throw ApiError("Only admins can create invite codes", 403);
+    if (user) {
+      if (site_detail()->invite_admin_only && !user->local_user().admin()) {
+        throw ApiError("Only admins can create invite codes", 403);
+      }
+      if (user->mod_state() >= ModState::Locked) {
+        throw ApiError("User does not have permission to create invite codes", 403);
+      }
     }
     const auto id = txn.create_invite(as_user.value_or(0), duration_cast<seconds>(weeks{1}).count());
     txn.commit();
@@ -1400,13 +1477,8 @@ namespace Ludwig {
     }
     FlatBufferBuilder fbb;
     {
-      Offset<Vector<PlainTextWithEmojis>> display_name_types;
-      Offset<Vector<Offset<void>>> display_name_values;
-      if (display_name) {
-        const auto display_name_s = fbb.CreateString(*display_name);
-        display_name_types = fbb.CreateVector<PlainTextWithEmojis>(vector{PlainTextWithEmojis::Plain});
-        display_name_values = fbb.CreateVector<Offset<void>>(vector{display_name_s.Union()});
-      }
+      const auto [display_name_types, display_name_values] =
+        display_name ? rich_text->parse_plain_text_with_emojis(fbb, *display_name) : pair(0, 0);
       const auto content_warning_s = content_warning.transform([&](auto s) { return fbb.CreateString(s); });
       const auto name_s = fbb.CreateString(name);
       BoardBuilder b(fbb);
@@ -1438,11 +1510,34 @@ namespace Ludwig {
   }
   auto InstanceController::update_local_board(uint64_t id, optional<uint64_t> as_user, const LocalBoardUpdate& update) -> void {
     auto txn = db->open_write_txn();
-    const auto detail = LocalUserDetail::get(txn, id);
     const auto login = as_user.transform([&](auto id){return LocalUserDetail::get(txn, id);});
+    const auto detail = LocalBoardDetail::get(txn, id, login);
     if (login && !detail.can_change_settings(login)) {
       throw ApiError("User does not have permission to modify this board", 403);
     }
+    if (update.display_name && *update.display_name && (*update.display_name)->length() > 1024) {
+      throw ApiError("Display name cannot be longer than 1024 bytes", 400);
+    }
+    if (update.is_private || update.invite_required || update.invite_mod_only) {
+      FlatBufferBuilder fbb;
+      fbb.Finish(patch_local_board(fbb, detail.local_board(), {
+        .private_ = update.is_private,
+        .invite_required = update.invite_required,
+        .invite_mod_only = update.invite_mod_only
+      }));
+      txn.set_local_board(id, fbb.GetBufferSpan());
+    }
+    if (update.display_name || update.description || update.icon_url || update.banner_url) {
+      FlatBufferBuilder fbb;
+      fbb.Finish(patch_board(fbb, *rich_text, detail.board(), {
+        .display_name = update.display_name,
+        .description = update.description,
+        .icon_url = update.icon_url,
+        .banner_url = update.banner_url
+      }));
+      txn.set_board(id, fbb.GetBufferSpan());
+    }
+    txn.commit();
   }
   auto InstanceController::create_local_thread(
     uint64_t author,
@@ -1487,17 +1582,18 @@ namespace Ludwig {
         throw ApiError("User cannot create a thread in this board", 403);
       }
       FlatBufferBuilder fbb;
-      const auto title_s = fbb.CreateString(title),
-        submission_s = submission_url ? fbb.CreateString(*submission_url) : 0,
+      const auto submission_s = submission_url ? fbb.CreateString(*submission_url) : 0,
         content_raw_s = text_content_markdown ? fbb.CreateString(*text_content_markdown) : 0,
         content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
+      auto [title_blocks_type, title_blocks] = rich_text->parse_plain_text_with_emojis(fbb, title);
       pair<Offset<Vector<TextBlock>>, Offset<Vector<Offset<void>>>> content_blocks;
       if (text_content_markdown) content_blocks = rich_text->parse_markdown(fbb, *text_content_markdown);
       ThreadBuilder b(fbb);
       b.add_created_at(now_s());
       b.add_author(author);
       b.add_board(board);
-      b.add_title(title_s);
+      b.add_title_type(title_blocks_type);
+      b.add_title(title_blocks);
       if (submission_url) b.add_content_url(submission_s);
       if (text_content_markdown) {
         b.add_content_text_raw(content_raw_s);
@@ -1516,6 +1612,29 @@ namespace Ludwig {
     event_bus->dispatch(Event::UserStatsUpdate, author);
     event_bus->dispatch(Event::BoardStatsUpdate, board);
     return thread_id;
+  }
+  auto InstanceController::update_local_thread(uint64_t id, optional<uint64_t> as_user, const ThreadUpdate& update) -> void {
+    auto txn = db->open_write_txn();
+    const auto login = as_user.transform([&](auto id){return LocalUserDetail::get(txn, id);});
+    const auto detail = ThreadDetail::get(txn, id, login);
+    if (detail.thread().instance()) {
+      throw ApiError("Cannot edit a thread from a different instance", 403);
+    }
+    if (login && !detail.can_edit(login)) {
+      throw ApiError("User does not have permission to edit this thread", 403);
+    }
+    if (update.title && update.title->empty()) {
+      throw ApiError("Title cannot be empty", 400);
+    }
+    FlatBufferBuilder fbb;
+    fbb.Finish(patch_thread(fbb, *rich_text, detail.thread(), {
+      .title = update.title,
+      .content_text = update.text_content,
+      .content_warning = update.content_warning,
+      .updated_at = now_s()
+    }));
+    txn.set_thread(id, fbb.GetBufferSpan());
+    txn.commit();
   }
   auto InstanceController::create_local_comment(
     uint64_t author,
@@ -1545,15 +1664,15 @@ namespace Ludwig {
     FlatBufferBuilder fbb;
     const auto content_raw_s = fbb.CreateString(text_content_markdown),
       content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
-    const auto content_blocks = rich_text->parse_markdown(fbb, text_content_markdown);
+    const auto [content_type, content] = rich_text->parse_markdown(fbb, text_content_markdown);
     CommentBuilder b(fbb);
     b.add_created_at(now_s());
     b.add_author(author);
     b.add_thread(parent_thread->id);
     b.add_parent(parent);
     b.add_content_raw(content_raw_s);
-    b.add_content_type(content_blocks.first);
-    b.add_content(content_blocks.second);
+    b.add_content_type(content_type);
+    b.add_content(content);
     if (content_warning) b.add_content_warning(content_warning_s);
     fbb.Finish(b.Finish());
     const auto comment_id = txn.create_comment(fbb.GetBufferSpan());
@@ -1568,6 +1687,28 @@ namespace Ludwig {
     event_bus->dispatch(Event::PostStatsUpdate, parent_thread->id);
     if (parent != parent_thread->id) event_bus->dispatch(Event::PostStatsUpdate, parent);
     return comment_id;
+  }
+  auto InstanceController::update_local_comment(uint64_t id, optional<uint64_t> as_user, const CommentUpdate& update) -> void {
+    auto txn = db->open_write_txn();
+    const auto login = as_user.transform([&](auto id){return LocalUserDetail::get(txn, id);});
+    const auto detail = CommentDetail::get(txn, id, login);
+    if (detail.comment().instance()) {
+      throw ApiError("Cannot edit a comment from a different instance", 403);
+    }
+    if (login && !detail.can_edit(login)) {
+      throw ApiError("User does not have permission to edit this comment", 403);
+    }
+    if (update.text_content && update.text_content->empty()) {
+      throw ApiError("Content cannot be empty", 400);
+    }
+    FlatBufferBuilder fbb;
+    fbb.Finish(patch_comment(fbb, *rich_text, detail.comment(), {
+      .content = update.text_content,
+      .content_warning = update.content_warning,
+      .updated_at = now_s()
+    }));
+    txn.set_comment(id, fbb.GetBufferSpan());
+    txn.commit();
   }
   auto InstanceController::vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void {
     auto txn = db->open_write_txn();
