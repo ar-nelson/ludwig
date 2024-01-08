@@ -1,11 +1,9 @@
 #pragma once
 #include "util/common.h++"
+#include "util/json.h++"
 #include "models/db.h++"
 #include <variant>
 #include <uWebSockets/App.h>
-#include <flatbuffers/string.h>
-#include <flatbuffers/idl.h>
-#include <simdjson.h>
 
 namespace Ludwig {
   static constexpr std::string_view ESCAPED = "<>'\"&",
@@ -397,17 +395,17 @@ namespace Ludwig {
       };
     }
 
-    Router &&post(std::string pattern, PostHandler<std::string>&& handler, size_t max_size = 10 * 1024 * 1024) {
+    Router &&post(std::string pattern, PostHandler<std::string>&& handler, size_t max_size = 10 * MiB) {
       app.post(pattern, post_handler<std::string>(std::move(handler), max_size, {}, "", [](auto&& s){return s;}));
       return std::move(*this);
     }
 
-    Router &&put(std::string pattern, PostHandler<std::string>&& handler, size_t max_size = 10 * 1024 * 1024) {
+    Router &&put(std::string pattern, PostHandler<std::string>&& handler, size_t max_size = 10 * MiB) {
       app.put(pattern, post_handler<std::string>(std::move(handler), max_size, {}, "", [](auto&& s){return s;}));
       return std::move(*this);
     }
 
-    Router &&post_form(std::string pattern, PostHandler<QueryString<std::string_view>>&& handler, size_t max_size = 10 * 1024 * 1024) {
+    Router &&post_form(std::string pattern, PostHandler<QueryString<std::string_view>>&& handler, size_t max_size = 10 * MiB) {
       app.post(pattern, post_handler<QueryString<std::string_view>>(std::move(handler), max_size, TYPE_FORM, "?", [](auto&& s){
         if (!simdjson::validate_utf8(s)) throw ApiError("POST body is not valid UTF-8", 415);
         return QueryString<std::string_view>(s);
@@ -415,42 +413,36 @@ namespace Ludwig {
       return std::move(*this);
     }
 
-    template <class T> Router &&post_json_fb(
+    template <class T> Router &&post_json(
       std::string pattern,
-      std::shared_ptr<flatbuffers::Parser> parser,
-      const char table_name[],
-      PostHandler<std::unique_ptr<T, std::function<void(T*)>>>&& handler,
-      size_t max_size = 10 * 1024 * 1024
+      std::shared_ptr<simdjson::ondemand::parser> parser,
+      PostHandler<T>&& handler,
+      size_t max_size = 10 * MiB
     ) {
-      using Ptr = std::unique_ptr<T, std::function<void(T*)>>;
-      app.post(pattern, post_handler<Ptr>(std::move(handler), max_size, "application/json", "", [parser, table_name](auto&& s) -> Ptr {
-        parser->SetRootType(table_name);
-        if (!parser->ParseJson(s.c_str())) {
-          throw ApiError(fmt::format("Invalid JSON {} object: {}", table_name, parser->error_), 400);
+      app.post(pattern, post_handler<T>(std::move(handler), max_size, "application/json", "", [parser](auto&& s) -> T {
+        try {
+          pad_json_string(s);
+          return JsonSerialize<T>::from_json(parser->iterate(s).value());
+        } catch (const simdjson::simdjson_error& e) {
+          throw ApiError(fmt::format("JSON does not match type: {}", simdjson::error_message(e.error())), 400);
         }
-        auto fbb = new flatbuffers::FlatBufferBuilder;
-        fbb->Swap(parser->builder_);
-        return Ptr(flatbuffers::GetMutableRoot<T>(fbb->GetBufferPointer()), [fbb](auto*){delete fbb;});
       }));
       return std::move(*this);
     }
 
-    template <class T> Router &&put_json_fb(
+    template <class T> Router &&put_json(
       std::string pattern,
-      std::shared_ptr<flatbuffers::Parser> parser,
-      const char table_name[],
-      PostHandler<std::unique_ptr<T, std::function<void(T*)>>>&& handler,
-      size_t max_size = 10 * 1024 * 1024
+      std::shared_ptr<simdjson::ondemand::parser> parser,
+      PostHandler<T>&& handler,
+      size_t max_size = 10 * MiB
     ) {
-      using Ptr = std::unique_ptr<T, std::function<void(T*)>>;
-      app.put(pattern, post_handler<Ptr>(std::move(handler), max_size, "application/json", "", [parser, table_name](auto&& s) -> Ptr {
-        parser->SetRootType(table_name);
-        if (!parser->ParseJson(s.c_str())) {
-          throw ApiError(fmt::format("Invalid JSON {} object: {}", table_name, parser->error_), 400);
+      app.put(pattern, post_handler<T>(std::move(handler), max_size, "application/json", "", [parser](auto&& s) -> T {
+        try {
+          pad_json_string(s);
+          return JsonSerialize<T>::from_json(parser->iterate(s).value());
+        } catch (const simdjson::simdjson_error& e) {
+          throw ApiError(fmt::format("JSON does not match type: {}", simdjson::error_message(e.error())), 400);
         }
-        auto fbb = new flatbuffers::FlatBufferBuilder;
-        fbb->Swap(parser->builder_);
-        return Ptr(flatbuffers::GetMutableRoot<T>(fbb->GetBufferPointer()), [fbb](auto*){delete fbb;});
       }));
       return std::move(*this);
     }

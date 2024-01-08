@@ -18,6 +18,7 @@
 
 namespace Ludwig {
   constexpr uint64_t ID_MAX = std::numeric_limits<uint64_t>::max();
+  constexpr size_t MiB = 1024 * 1024;
 
   template<class... Ts> struct overload : Ts... { using Ts::operator()...; };
   template<class... Ts> overload(Ts...) -> overload<Ts...>;
@@ -128,4 +129,12 @@ namespace Ludwig {
     if (s) return s->string_view();
     return {};
   }
+
+  template<typename T, size_t Size> struct ConstArray {
+    T arr[Size];
+
+    constexpr ConstArray(T x) : arr() {
+      for (size_t i = 0; i < Size; i++) arr[i] = x;
+    }
+  };
 }

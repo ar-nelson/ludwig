@@ -53,7 +53,7 @@ struct TempDB {
     if (err) throw runtime_error(mdb_strerror(err));
     err = mdb_env_set_maxdbs(env, 1);
     if (err) throw runtime_error(mdb_strerror(err));
-    err = mdb_env_set_mapsize(env, 1024 * 1024 * 10);
+    err = mdb_env_set_mapsize(env, 10 * MiB);
     if (err) throw runtime_error(mdb_strerror(err));
     err = mdb_env_open(env, file.name, MDB_NOSUBDIR, 0600);
     if (err) throw runtime_error(mdb_strerror(err));

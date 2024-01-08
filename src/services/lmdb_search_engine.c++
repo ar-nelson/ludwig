@@ -68,12 +68,11 @@ namespace Ludwig {
     }
   };
 
-  constexpr size_t MB = 1024 * 1024;
   constexpr unsigned DBI_FLAGS =
     MDB_CREATE | MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_REVERSEDUP;
 
   LmdbSearchEngine::LmdbSearchEngine(std::filesystem::path filename, size_t map_size_mb)
-    : map_size(map_size_mb * MB - (map_size_mb * MB) % (size_t)sysconf(_SC_PAGESIZE)) {
+    : map_size(map_size_mb * MiB - (map_size_mb * MiB) % (size_t)sysconf(_SC_PAGESIZE)) {
     MDB_txn* txn;
     int err;
     if ((err =

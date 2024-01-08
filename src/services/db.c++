@@ -284,7 +284,7 @@ namespace Ludwig {
     return 0;
   }
 
-  static constexpr size_t MiB = 1024 * 1024, DUMP_ENTRY_MAX_SIZE = 4 * MiB;
+  static constexpr size_t DUMP_ENTRY_MAX_SIZE = 4 * MiB;
 
   DB::DB(const char* filename, size_t map_size_mb) :
     map_size(map_size_mb * MiB - (map_size_mb * MiB) % (size_t)sysconf(_SC_PAGESIZE)) {

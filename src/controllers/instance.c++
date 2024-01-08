@@ -1156,7 +1156,7 @@ namespace Ludwig {
     txn.set_setting(SettingsKey::description, update.description.value_or("A new Ludwig server"));
     txn.set_setting(SettingsKey::icon_url, update.icon_url.value_or("").value_or(""));
     txn.set_setting(SettingsKey::banner_url, update.banner_url.value_or("").value_or(""));
-    txn.set_setting(SettingsKey::post_max_length, update.max_post_length.value_or(1024 * 1024));
+    txn.set_setting(SettingsKey::post_max_length, update.max_post_length.value_or(MiB));
     txn.set_setting(SettingsKey::javascript_enabled, update.javascript_enabled.value_or(false));
     txn.set_setting(SettingsKey::board_creation_admin_only, update.board_creation_admin_only.value_or(true));
     txn.set_setting(SettingsKey::registration_enabled, update.registration_enabled.value_or(false));
@@ -1557,8 +1557,8 @@ namespace Ludwig {
     }
     if (text_content_markdown) {
       auto len = text_content_markdown->length();
-      if (len > 1024 * 1024) {
-        throw ApiError("Post text content cannot be larger than 1MB", 400);
+      if (len > MiB) {
+        throw ApiError("Post text content cannot be larger than 1MiB", 400);
       } else if (len < 1) {
         text_content_markdown = {};
       }
@@ -1643,8 +1643,8 @@ namespace Ludwig {
     optional<string_view> content_warning
   ) -> uint64_t {
     auto len = text_content_markdown.length();
-    if (len > 1024 * 1024) {
-      throw ApiError("Comment text content cannot be larger than 1MB", 400);
+    if (len > MiB) {
+      throw ApiError("Comment text content cannot be larger than 1MiB", 400);
     } else if (len < 1) {
       throw ApiError("Comment text content cannot be blank", 400);
     }

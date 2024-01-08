@@ -27,7 +27,7 @@ namespace Ludwig {
   using SslSocket = ssl::stream<TcpSocket>;
 
   class AsioHttpClientResponse : public HttpClientResponse {
-    static inline constexpr size_t MAX_RESPONSE_BYTES = 1024 * 1024 * 64; // 64MiB
+    static inline constexpr size_t MAX_RESPONSE_BYTES = 64 * MiB;
     static inline auto random_uint64() -> uint64_t {
       uint64_t n;
       RAND_pseudo_bytes((uint8_t*)&n, sizeof(uint64_t));

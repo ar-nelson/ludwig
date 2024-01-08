@@ -1,7 +1,0 @@
-namespace Ludwig;
-
-table JwtPayload {
-  sub: uint64;
-  iat: uint64;
-  exp: uint64;
-}

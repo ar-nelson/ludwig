@@ -75,8 +75,6 @@ foreach (fbs_path IN ITEMS ${fbs_files})
       -o "${PROJECT_BINARY_DIR}/generated/models/"
       -I "${PROJECT_SOURCE_DIR}/src/models/"
       --cpp-std c++17
-      --gen-json-emit --strict-json
-      --reflect-types --reflect-names
       --filename-suffix "" --filename-ext "h++"
       -c "${fbs_path}"
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
@@ -148,7 +146,6 @@ set (ludwig_common_src
   src/services/thumbnail_cache.c++
   src/models/detail.c++
   src/models/patch.c++
-  src/models/protocols_parser.c++
   src/controllers/instance.c++
   src/controllers/lemmy_api.c++
   src/controllers/remote_media.c++
