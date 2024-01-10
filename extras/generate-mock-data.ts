@@ -28,7 +28,7 @@ import { faker } from "npm:@faker-js/faker";
 import { pbkdf2Sync } from "node:crypto";
 import * as flatbuffers from "npm:flatbuffers";
 
-const ludwigDomain = "http://localhost:2023"
+const ludwigDomain = "http://localhost:2023";
 const PASSWORD_SALT = new TextEncoder().encode("0123456789abcdef");
 
 const SCALE = 100;
@@ -121,7 +121,7 @@ function genUser(
           : [],
       ),
       instance
-        ? fbb.createString(`https://${instance.domain}/ap/actor/${baseName}`)
+        ? fbb.createString(`https://${instance.domain}/u/${baseName}`)
         : 0,
       instance
         ? fbb.createString(
@@ -217,7 +217,7 @@ function genBoard(
         displayName ? [fbb.createString(displayName)] : [],
       ),
       instance
-        ? fbb.createString(`https://${instance.domain}/ap/actor/${baseName}`)
+        ? fbb.createString(`https://${instance.domain}/c/${baseName}`)
         : 0,
       instance
         ? fbb.createString(
@@ -473,11 +473,11 @@ function genAll(scale = SCALE) {
       write(0n, DumpType.SettingRecord, fbb.asUint8Array());
     };
 
-  const admin = genUser("admin");
-  write(admin.id, DumpType.User, admin.data);
-  write(admin.id, DumpType.LocalUser, genLocalUser("admin", true));
-  localUsers.push(admin.id);
-  users.push({ id: admin.id });
+  // const admin = genUser("admin");
+  // write(admin.id, DumpType.User, admin.data);
+  // write(admin.id, DumpType.LocalUser, genLocalUser("admin", true));
+  // localUsers.push(admin.id);
+  // users.push({ id: admin.id });
   for (const name of usernames.slice(0, scale)) {
     const { id, data } = genUser(name);
     write(id, DumpType.User, data);

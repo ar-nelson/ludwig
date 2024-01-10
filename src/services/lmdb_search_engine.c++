@@ -130,10 +130,10 @@ namespace Ludwig {
     Txn txn(env, 0);
     set<uint64_t> tokens;
     into_set(tokens, processor.EncodeAsIds(user.name()->string_view()));
-    if (user.display_name_type()->size()) {
+    if (user.display_name_type() && user.display_name_type()->size()) {
       into_set(tokens, processor.EncodeAsIds(RichTextParser::plain_text_with_emojis_to_text_content(user.display_name_type(), user.display_name())));
     }
-    if (user.bio_type()->size()) {
+    if (user.bio_type() && user.bio_type()->size()) {
       into_set(tokens, processor.EncodeAsIds(RichTextParser::blocks_to_text_content(user.bio_type(), user.bio())));
     }
     index_tokens(std::move(txn), id, Token_Users, tokens);
@@ -143,10 +143,10 @@ namespace Ludwig {
     Txn txn(env, 0);
     set<uint64_t> tokens;
     into_set(tokens, processor.EncodeAsIds(board.name()->string_view()));
-    if (board.display_name()) {
+    if (board.display_name_type() && board.display_name_type()->size()) {
       into_set(tokens, processor.EncodeAsIds(RichTextParser::plain_text_with_emojis_to_text_content(board.display_name_type(), board.display_name())));
     }
-    if (board.description_type()->size()) {
+    if (board.description_type() && board.description_type()->size()) {
       into_set(tokens, processor.EncodeAsIds(RichTextParser::blocks_to_text_content(board.description_type(), board.description())));
     }
     index_tokens(std::move(txn), id, Token_Boards, tokens);
@@ -156,7 +156,7 @@ namespace Ludwig {
     Txn txn(env, 0);
     set<uint64_t> tokens;
     into_set(tokens, processor.EncodeAsIds(RichTextParser::plain_text_with_emojis_to_text_content(thread.title_type(), thread.title())));
-    if (thread.content_text_type()->size()) {
+    if (thread.content_text_type() && thread.content_text_type()->size()) {
       into_set(tokens, processor.EncodeAsIds(RichTextParser::blocks_to_text_content(thread.content_text_type(), thread.content_text())));
     }
     if (card_opt) {

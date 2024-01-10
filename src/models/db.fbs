@@ -29,14 +29,6 @@ enum BoardSortType : ubyte { New, Old, MostSubscribers, MostPosts, NewPosts }
 
 enum UserSortType : ubyte { New, Old, MostPosts, NewPosts }
 
-enum HomePageType : ubyte {
-  Subscribed,
-  Local,
-  All,
-  BoardList,
-  SingleBoard
-}
-
 enum ModState : ubyte { Visible, Flagged, Locked, Removed }
 
 union TextBlock {

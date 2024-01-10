@@ -16,22 +16,31 @@
 #include <csignal>
 
 using namespace Ludwig;
-using std::lock_guard, std::make_shared, std::mutex, std::optional,
+using std::lock_guard, std::make_shared, std::mutex, std::optional, std::pair,
     std::runtime_error, std::shared_ptr, std::stoull, std::thread,
     std::unique_ptr, std::vector;
 
-static vector<std::function<void()>> on_close;
-static mutex on_close_mutex;
+namespace Ludwig {
+  static vector<std::function<void()>> on_close;
+  static mutex on_close_mutex;
 
-void signal_handler(int) {
-  spdlog::warn("Caught signal, shutting down.");
-  lock_guard<mutex> lock(on_close_mutex);
-  for (auto& f : on_close) f();
+  void signal_handler(int) {
+    spdlog::warn("Caught signal, shutting down.");
+    lock_guard<mutex> lock(on_close_mutex);
+    for (auto& f : on_close) f();
+  }
+
+  // defined in util/setup.c++
+  auto interactive_setup(bool admin_exists, bool default_board_exists) -> FirstRunSetup;
 }
 
 int main(int argc, char** argv) {
   optparse::OptionParser parser =
     optparse::OptionParser().description("lemmy but better");
+  parser.add_option("--setup")
+    .dest("setup")
+    .nargs(0)
+    .help("runs interactive first-run setup and exits; fails if server is already set up");
   parser.add_option("-p", "--port")
     .dest("port")
     .type("INT")
@@ -95,11 +104,17 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
+  if (
+    (int)options.is_set_by_user("setup") +
+    (int)options.is_set_by_user("import") +
+    (int)options.is_set_by_user("export")
+    > 1
+  ) {
+    spdlog::critical("Only one of --setup, --import, or --export is allowed!");
+    return EXIT_FAILURE;
+  }
+
   if (options.is_set_by_user("import")) {
-    if (options.is_set_by_user("export")) {
-      spdlog::critical("Cannot --import and --export at the same time!");
-      return EXIT_FAILURE;
-    }
     const auto importfile = options["import"];
     uint64_t file_size = std::filesystem::file_size(importfile.c_str());
     unique_ptr<FILE, int(*)(FILE*)> f(fopen(importfile.c_str(), "rb"), &fclose);
@@ -140,10 +155,52 @@ int main(int argc, char** argv) {
     }
   }
 
+  bool first_run = false, admin_exists = true, default_board_exists = true;
+  {
+    auto txn = db->open_read_txn();
+    if (!txn.get_setting_int(SettingsKey::setup_done)) first_run = true;
+    if (txn.get_admin_list().empty()) admin_exists = false;
+  }
+
+  if (options.is_set_by_user("setup")) {
+    if (!first_run) {
+      spdlog::critical("This server is already configured; cannot run interactive setup.");
+      return EXIT_FAILURE;
+    }
+    auto setup = interactive_setup(admin_exists, default_board_exists);
+    auto instance = make_shared<InstanceController>(db, nullptr, make_shared<RichTextParser>(make_shared<LibXmlContext>()), make_shared<DummyEventBus>(), search_engine);
+    instance->first_run_setup(std::move(setup));
+    puts("\nFirst-run setup complete. You can now start Ludwig without --setup.");
+    return EXIT_SUCCESS;
+  }
+
   const auto port = std::stoi(options["port"]);
   if (port < 1 || port > 65535) {
     spdlog::critical("Invalid port: {}", options["port"]);
     return EXIT_FAILURE;
+  }
+
+  optional<pair<Hash, Salt>> first_run_admin_password = {};
+  if (first_run) {
+    if (admin_exists) {
+      spdlog::warn("The server is not yet configured, but an admin user exists.");
+      spdlog::warn("Log in as an admin user to complete first-run setup, or CTRL-C and re-run with --setup.");
+    } else {
+      SecretString admin_password = generate_password();
+      spdlog::critical("The server is not yet configured, and no users exist yet.");
+      spdlog::critical("A temporary admin user has been generated.");
+      spdlog::critical("USERNAME: {}", FIRST_RUN_ADMIN_USERNAME);
+      spdlog::critical("PASSWORD: {}", admin_password.data);
+      Hash hash;
+      Salt salt;
+      RAND_bytes((uint8_t*)salt.bytes()->Data(), 16);
+      InstanceController::hash_password(std::move(admin_password), salt.bytes()->Data(), (uint8_t*)hash.bytes()->Data());
+      first_run_admin_password = pair(hash, salt);
+      spdlog::critical(
+        "Go to http://localhost:{} and log in as this user to complete first-run setup, or CTRL-C and re-run with --setup.",
+        port
+      );
+    }
   }
 
   AsioThreadPool pool(threads);
@@ -152,24 +209,13 @@ int main(int argc, char** argv) {
   auto event_bus = make_shared<AsioEventBus>(pool.io);
   auto xml_ctx = make_shared<LibXmlContext>();
   auto rich_text = make_shared<RichTextParser>(xml_ctx);
-  auto instance_c = make_shared<InstanceController>(db, http_client, rich_text, event_bus, search_engine);
-  auto api_c = make_shared<Lemmy::ApiController>(instance_c, rich_text);
+  auto instance_c = make_shared<InstanceController>(db, http_client, rich_text, event_bus, search_engine, first_run_admin_password);
+  auto api_c = make_shared<Lemmy::ApiController>(instance_c);
   auto remote_media_c = make_shared<RemoteMediaController>(
     db, http_client, xml_ctx, event_bus,
     [&pool](auto f) { pool.post(std::move(f)); },
     search_engine
   );
-
-  // TODO: Prompt user for first-run setup instead of doing it automatically
-  bool first_run = false;
-  {
-    auto txn = db->open_read_txn();
-    if (!txn.get_setting_int(SettingsKey::setup_done)) first_run = true;
-  }
-  if (first_run) {
-    spdlog::info("Doing automatic first-run setup (debug mode!)");
-    instance_c->first_run_setup({});
-  }
 
   struct sigaction sigint_handler { .sa_flags = 0 }, sigterm_handler { .sa_flags = 0 };
   sigint_handler.sa_handler = signal_handler;

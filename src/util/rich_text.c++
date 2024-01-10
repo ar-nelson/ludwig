@@ -515,6 +515,7 @@ namespace Ludwig {
     const Vector<Offset<void>>* values,
     const ToHtmlOptions& opts
   ) -> string {
+    if (!types || !values) return "";
     string out;
     for (unsigned i = 0; i < min(types->size(), values->size()); i++) {
       const auto ptr = values->GetAsString(i);
@@ -582,6 +583,7 @@ namespace Ludwig {
     const Vector<TextSpan>* types,
     const Vector<Offset<void>>* values
   ) -> void {
+    if (!types || !values) return;
     const auto type = types->Get(i);
     switch (type) {
       case TextSpan::Plain:
@@ -684,6 +686,7 @@ namespace Ludwig {
     const Vector<TextBlock>* types,
     const Vector<Offset<void>>* values
   ) -> void {
+    if (!types || !values) return;
     const auto type = types->Get(i);
     switch (type) {
       case TextBlock::P:
@@ -773,6 +776,7 @@ namespace Ludwig {
     const Vector<Offset<void>>* values,
     const ToHtmlOptions& opts
   ) -> string {
+    if (!types || !values) return "";
     string out;
     for (unsigned i = 0; i < min(types->size(), values->size()); i++) {
       write_block(out, opts, i, types, values);
@@ -785,6 +789,7 @@ namespace Ludwig {
     const Vector<Offset<void>>* values,
     string& out
   ) -> void {
+    if (!types || !values) return;
     for (unsigned i = 0; i < min(types->size(), values->size()); i++) {
       switch (types->Get(i)) {
         case TextSpan::Plain:
@@ -830,6 +835,7 @@ namespace Ludwig {
     const Vector<TextBlock>* types,
     const Vector<Offset<void>>* values
   ) -> string {
+    if (!types || !values) return "";
     string out;
     for (unsigned i = 0; i < min(types->size(), values->size()); i++) {
       if (i) out.push_back(' ');
@@ -891,6 +897,7 @@ namespace Ludwig {
     const Vector<PlainTextWithEmojis>* types,
     const Vector<Offset<void>>* values
   ) -> string {
+    if (!types || !values) return "";
     string out;
     for (unsigned i = 0; i < min(types->size(), values->size()); i++) {
       switch (types->Get(i)) {

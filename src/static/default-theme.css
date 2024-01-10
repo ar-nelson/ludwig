@@ -16,6 +16,7 @@ body {
   --color-accent-hover: cornflowerblue;
   --color-accent-fg: #fff;
   --color-translucent: rgba(255,255,255,0.25);
+  --color-error: red;
   --color-upvote: orangered;
   --color-downvote: steelblue;
 
@@ -125,6 +126,17 @@ textarea:focus,
 select:focus {
   border: 1px solid var(--color-accent-hover);
   outline: 0;
+}
+input[type="email"]:invalid,
+input[type="number"]:invalid,
+input[type="search"]:invalid,
+input[type="text"]:invalid,
+input[type="tel"]:invalid,
+input[type="url"]:invalid,
+input[type="password"]:invalid,
+textarea:invalid,
+select:invalid {
+  border: 1px solid var(--color-error);
 }
 label, legend {
   display: block;
@@ -261,7 +273,7 @@ a:link.big-button, a:visited.big-button {
 }
 
 .toast-error {
-  background-color: red;
+  background-color: var(--color-error);
   color: white;
 }
 
@@ -380,6 +392,15 @@ ol.thread-list, ol.comment-list, ol.board-list {
   list-style-type: none;
   margin: 0;
   padding: 0;
+}
+
+.thread-list > .no-entries,
+.comment-list > .no-entries,
+.board-list > .no-entries {
+  display: block;
+  text-align: center;
+  padding: 1rem;
+  color: var(--color-fg-dim);
 }
 
 .pagination {
@@ -767,12 +788,24 @@ body:not(.has-js) .js {
   margin-top: 0;
 }
 
-.form label > span, .form legend {
+.form label > span {
   display: block;
   margin-bottom: 0.5rem;
   font-size: 0.8rem;
   font-weight: bold;
   color: var(--color-fg);
+}
+
+.form legend {
+  display: block;
+  padding: 0;
+  margin: 0;
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 1.25rem;
+  font-weight: bold;
+  color: var(--color-fg);
+  border-bottom: 1px dotted var(--color-fg-dim);
 }
 
 .form input[type=submit] {
@@ -864,7 +897,7 @@ input:checked + .toggle-button {
 }
 
 .error-message {
-  color: red;
+  color: var(--color-error);
   border: 1px solid red;
   padding: 0.5rem;
   border-radius: 0.5rem;

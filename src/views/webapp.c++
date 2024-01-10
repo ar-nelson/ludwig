@@ -163,21 +163,27 @@ namespace Ludwig {
       const SiteDetail* site;
       optional<LocalUserDetail> login;
 
-      auto populate(shared_ptr<Webapp<SSL>> self, ReadTxnBase& txn) {
-        site = self->controller->site_detail();
+      auto populate(ReadTxnBase& txn) {
         if (logged_in_user_id) {
-          login.emplace(LocalUserDetail::get(txn, *logged_in_user_id));
+          if (*logged_in_user_id) login.emplace(LocalUserDetail::get_login(txn, *logged_in_user_id));
+          else if (!site->setup_done) {
+            spdlog::warn("Using temporary admin user");
+            login.emplace(LocalUserDetail::temp_admin());
+          }
         }
       }
 
       auto require_login() {
         if (!logged_in_user_id) throw ApiError("Login is required", 401);
-        return *logged_in_user_id;
+        const auto id = *logged_in_user_id;
+        if (!id && site->setup_done) throw ApiError("Site is set up, temporary login is no longer valid", 401);
+        return id;
       }
 
-      auto require_login(shared_ptr<Webapp<SSL>> self, ReadTxnBase& txn) -> const LocalUserDetail& {
+      auto require_login(ReadTxnBase& txn) -> const LocalUserDetail& {
         if (!logged_in_user_id) throw ApiError("Login is required", 401);
-        if (site == nullptr) populate(self, txn);
+        if (!login) populate(txn);
+        if (!login) throw ApiError("Site is set up, temporary login is no longer valid", 401);
         return *login;
       }
 
@@ -191,6 +197,32 @@ namespace Ludwig {
       }
     };
 
+    auto get_auth_cookie(Request req, const std::string& ip) -> std::pair<optional<LoginResponse>, optional<string>> {
+      const auto cookies = req->getHeader("cookie");
+      match_results<string_view::const_iterator> match;
+      if (!regex_search(cookies.begin(), cookies.end(), match, cookie_regex)) return {{}, {}};
+      try {
+        auto txn = controller->open_read_txn();
+        const auto old_session = stoull(match[1], nullptr, 16);
+        auto new_session = controller->validate_or_regenerate_session(
+          txn, old_session, ip, req->getHeader("user-agent")
+        );
+        if (!new_session) throw std::runtime_error("expired session");
+        if (new_session->session_id != old_session) {
+          spdlog::debug("Regenerated session {:x} as {:x}", old_session, new_session->session_id);
+          return {
+            new_session,
+            fmt::format(COOKIE_NAME "={:x}; path=/; expires={:%a, %d %b %Y %T %Z}",
+              new_session->session_id, fmt::gmtime(new_session->expiration))
+          };
+        }
+        return {new_session, {}};
+      } catch (...) {
+        spdlog::debug("Auth cookie is invalid; requesting deletion");
+        return {{}, COOKIE_NAME "=deleted; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT"};
+      }
+    }
+
     auto middleware(Response rsp, Request req) -> Meta {
       using namespace chrono;
       const auto start = steady_clock::now();
@@ -200,40 +232,33 @@ namespace Ludwig {
         throw ApiError("Rate limited, try again later", 429);
       }
 
-      optional<string> session_cookie;
-      optional<LoginResponse> new_session;
-      const auto cookies = req->getHeader("cookie");
-      match_results<string_view::const_iterator> match;
-      if (regex_search(cookies.begin(), cookies.end(), match, cookie_regex)) {
-        try {
-          auto txn = controller->open_read_txn();
-          const auto old_session = stoull(match[1], nullptr, 16);
-          new_session = controller->validate_or_regenerate_session(
-            txn, old_session, ip, req->getHeader("user-agent")
-          );
-          if (!new_session) throw std::runtime_error("expired session");
-          if (new_session->session_id != old_session) {
-            spdlog::debug("Regenerated session {:x} as {:x}", old_session, new_session->session_id);
-            session_cookie =
-              fmt::format(COOKIE_NAME "={:x}; path=/; expires={:%a, %d %b %Y %T %Z}",
-                new_session->session_id, fmt::gmtime(new_session->expiration));
-          }
-        } catch (...) {
-          spdlog::debug("Auth cookie is invalid; requesting deletion");
-          session_cookie = COOKIE_NAME "=deleted; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+      const auto [new_session, session_cookie] = get_auth_cookie(req, ip);
+      auto site = controller->site_detail();
+      if (!new_session) {
+        if (site->require_login_to_view && req->getUrl() != "/login") {
+          throw ApiError("Login is required to view this page", 401);
+        }
+        if (!site->setup_done && req->getUrl() != "/login") {
+          throw ApiError("First-run setup is not complete. Log in as an admin user to complete site setup. If no admin user exists, check console output for a randomly-generated password.", 401);
+        }
+      } else if (!site->setup_done) {
+        if (req->getUrl() != "/" && req->getUrl() != "/login" && req->getUrl() != "/logout" && req->getUrl() != "/site_admin/first_run_setup") {
+          throw ApiError("First-run setup is not complete. This page is not yet accessible.", 403);
         }
       }
+
       return {
         .start = start,
         .logged_in_user_id = new_session.transform(λx(x.user_id)),
         .session_cookie = session_cookie,
         .ip = ip,
         .is_htmx = !req->getHeader("hx-request").empty() && req->getHeader("hx-boosted").empty(),
+        .site = site
       };
     }
 
     static auto display_name_as_text(const User& user) -> string {
-      if (user.display_name_type()->size()) {
+      if (user.display_name_type() && user.display_name_type()->size()) {
         return RichTextParser::plain_text_with_emojis_to_text_content(user.display_name_type(), user.display_name());
       }
       const auto name = user.name()->string_view();
@@ -241,11 +266,15 @@ namespace Ludwig {
     }
 
     static auto display_name_as_text(const Board& board) -> string {
-      if (board.display_name_type()->size()) {
+      if (board.display_name_type() && board.display_name_type()->size()) {
         return RichTextParser::plain_text_with_emojis_to_text_content(board.display_name_type(), board.display_name());
       }
       const auto name = board.name()->string_view();
       return string(name.substr(0, name.find('@')));
+    }
+
+    static auto display_name_as_text(const Thread& thread) -> string {
+      return RichTextParser::plain_text_with_emojis_to_text_content(thread.title_type(), thread.title());
     }
 
     struct ResponseWriter {
@@ -274,7 +303,7 @@ namespace Ludwig {
 
       auto write_qualified_display_name(const User* user) noexcept -> ResponseWriter& {
         const auto name = user->name()->string_view();
-        if (user->display_name_type()->size()) {
+        if (user->display_name_type() && user->display_name_type()->size()) {
           write(RichTextParser::plain_text_with_emojis_to_html(user->display_name_type(), user->display_name(), {}));
           const auto at_index = name.find('@');
           if (at_index != string_view::npos) write(name.substr(at_index));
@@ -286,7 +315,7 @@ namespace Ludwig {
 
       auto write_qualified_display_name(const Board* board) noexcept -> ResponseWriter& {
         const auto name = board->name()->string_view();
-        if (board->display_name_type()->size()) {
+        if (board->display_name_type() && board->display_name_type()->size()) {
           write(RichTextParser::plain_text_with_emojis_to_html(board->display_name_type(), board->display_name(), {}));
           const auto at_index = name.find('@');
           if (at_index != string_view::npos) write(name.substr(at_index));
@@ -297,7 +326,7 @@ namespace Ludwig {
       }
 
       auto display_name_as_html(const User& user) -> string {
-        if (user.display_name_type()->size()) {
+        if (user.display_name_type() && user.display_name_type()->size()) {
           return rt.plain_text_with_emojis_to_html(user.display_name_type(), user.display_name(), {});
         }
         const auto name = user.name()->string_view();
@@ -305,7 +334,7 @@ namespace Ludwig {
       }
 
       auto display_name_as_html(const Board& board) -> string {
-        if (board.display_name_type()->size()) {
+        if (board.display_name_type() && board.display_name_type()->size()) {
           return rt.plain_text_with_emojis_to_html(board.display_name_type(), board.display_name(), {});
         }
         const auto name = board.name()->string_view();
@@ -313,7 +342,8 @@ namespace Ludwig {
       }
 
       struct HtmlHeaderOptions {
-        optional<string_view> canonical_path, banner_title, banner_link, banner_image, page_title, card_image;
+        optional<string_view> canonical_path, banner_link, page_title;
+        optional<string> banner_title, banner_image, card_image;
       };
 
       auto write_html_header(const Meta& m, HtmlHeaderOptions opt) noexcept -> ResponseWriter& {
@@ -779,9 +809,9 @@ namespace Ludwig {
         return *this;
       }
 
-      template <class T> auto write_vote_buttons(const T& entry, Login login) noexcept -> ResponseWriter& {
-        const auto can_upvote = entry.can_upvote(login),
-          can_downvote = entry.can_downvote(login);
+      template <class T> auto write_vote_buttons(const T& entry, const SiteDetail* site, Login login) noexcept -> ResponseWriter& {
+        const auto can_upvote = entry.can_upvote(login, site),
+          can_downvote = entry.can_downvote(login, site);
         if (can_upvote || can_downvote) {
           write_fmt(
             R"(<form class="vote-buttons" id="votes-{0:x}" method="post" action="/{1}/{0:x}/vote" hx-post="/{1}/{0:x}/vote" hx-swap="outerHTML">)"
@@ -965,6 +995,7 @@ namespace Ludwig {
 
       auto write_thread_entry(
         const ThreadDetail& thread,
+        const SiteDetail* site,
         Login login,
         bool is_list_item,
         bool show_user,
@@ -1021,7 +1052,7 @@ namespace Ludwig {
           write_board_link(thread._board);
         }
         write("</span></div>");
-        write_vote_buttons(thread, login);
+        write_vote_buttons(thread, site, login);
         if (is_list_item) {
           write_fmt(R"(<div class="controls"><a id="comment-link-{0:x}" href="/thread/{0:x}#comments">{1:d}{2}</a>)",
             thread.id,
@@ -1037,6 +1068,7 @@ namespace Ludwig {
 
       auto write_comment_entry(
         const CommentDetail& comment,
+        const SiteDetail* site,
         Login login,
         bool is_list_item,
         bool is_tree_item,
@@ -1082,7 +1114,7 @@ namespace Ludwig {
             content
           );
         }
-        write_vote_buttons(comment, login);
+        write_vote_buttons(comment, site, login);
         write(R"(<div class="controls">)");
         if (is_list_item) {
           write_fmt(R"(<a id="comment-link-{0:x}" href="/comment/{0:x}#replies">{1:d}{2}</a>)",
@@ -1101,6 +1133,7 @@ namespace Ludwig {
 
       auto write_search_result_list(
         std::vector<InstanceController::SearchResultDetail> list,
+        const SiteDetail* site,
         Login login,
         bool include_ol
       ) noexcept -> ResponseWriter& {
@@ -1116,10 +1149,10 @@ namespace Ludwig {
               write_board_link(board.board());
             },
             [&](const ThreadDetail& thread) {
-              write_thread_entry(thread, login, true, true, true, true);
+              write_thread_entry(thread, site, login, true, true, true, true);
             },
             [&](const CommentDetail& comment) {
-              write_comment_entry(comment, login, true, false, true, true, true);
+              write_comment_entry(comment, site, login, true, false, true, true, true);
             },
           }, entry);
         }
@@ -1153,7 +1186,7 @@ namespace Ludwig {
             R"(<li><article class="comment-with-comments{}">)",
             is_alt ? " odd-depth" : "", comment.id
           );
-          write_comment_entry(comment, login, false, true, true, false, show_images);
+          write_comment_entry(comment, site, login, false, true, true, false, show_images);
           const auto cont = comments.continued.find(comment.id);
           if (cont != comments.continued.end() && !cont->second) {
             write_fmt(
@@ -1233,7 +1266,7 @@ namespace Ludwig {
         bool show_images = false
       ) noexcept -> ResponseWriter& {
         write(R"(<article class="thread-with-comments">)");
-        write_thread_entry(thread, login, false, true, true, show_images);
+        write_thread_entry(thread, site, login, false, true, true, show_images);
         if (thread.thread().content_text_type()->size()) {
           const auto content = rt.blocks_to_html(
             thread.thread().content_text_type(),
@@ -1267,7 +1300,7 @@ namespace Ludwig {
       ) noexcept -> ResponseWriter& {
         write(R"(<article class="comment-with-comments">)");
         write_comment_entry(
-          comment, login,
+          comment, site, login,
           false, false,
           true, true, show_images
         );
@@ -1312,28 +1345,27 @@ namespace Ludwig {
       }
 
       auto write_create_board_form(
-        const LocalUserDetail& login,
+        const SiteDetail* site,
         optional<string_view> error = {}
       ) noexcept -> ResponseWriter& {
         return write_fmt(
-          R"(<main><form class="form form-page" method="post" action="/create_board"><h2>Create Board</h2>{})"
-          HTML_FIELD("name", "Name", "text", R"( autocomplete="off" required)")
-          HTML_FIELD("display_name", "Display name", "text", R"( autocomplete="off")")
+          R"(<main><form class="form form-page" method="post" action="/create_board"><h2>Create Board</h2>{})",
+          error_banner(error)
+        ).write(
+          HTML_FIELD("name", "Name", "text", R"( autocomplete="off" placeholder="my_cool_board" pattern=")" USERNAME_REGEX_SRC R"(" required)")
+          HTML_FIELD("display_name", "Display name", "text", R"( autocomplete="off" placeholder="My Cool Board")")
           HTML_FIELD("content_warning", "Content warning (optional)", "text", R"( autocomplete="off")")
           HTML_CHECKBOX("private", "Private (only visible to members)", "")
           HTML_CHECKBOX("restricted_posting", "Restrict posting to moderators", "")
           HTML_CHECKBOX("approve_subscribe", "Approval required to join", "")
           //HTML_CHECKBOX("invite_required", "Invite code required to join", "")
           //HTML_CHECKBOX("invite_mod_only", "Only moderators can invite new members", "")
-          R"(<fieldset><legend>Voting</legend>)"
-            R"(<label for="vote_both"><input type="radio" id="vote_both" name="voting" value="2" checked> Allow voting</label>)"
-            R"(<label for="vote_up"><input type="radio" id="vote_up" name="voting" value="1"> Only upvotes allowed</label>)"
-            R"(<label for="vote_none"><input type="radio" id="vote_none" name="voting" value="0"> No voting or karma</label>)"
-          R"(</fieldset>)"
-          R"(<input type="submit" value="Submit">)"
-          "</form></main>",
-          error_banner(error)
-        );
+        ).write_voting_select(
+          site->votes_enabled,
+          site->downvotes_enabled,
+          site->votes_enabled,
+          site->downvotes_enabled
+        ).write(R"(<input type="submit" value="Submit"></form></main>)");
       }
 
       auto write_create_thread_form(
@@ -1379,7 +1411,7 @@ namespace Ludwig {
           "</span></p><br>"
           HTML_FIELD("title", "Title", "text", R"( value="{}" autocomplete="off" required)")
           HTML_TEXTAREA("text_content", "Text content", "{}", "{}"),
-          Escape(RichTextParser::plain_text_with_emojis_to_text_content(thread.thread().title_type(), thread.thread().title())),
+          Escape(display_name_as_text(thread.thread())),
           thread.thread().content_url() ? "" : " required",
           Escape(thread.thread().content_text_raw())
         );
@@ -1402,28 +1434,74 @@ namespace Ludwig {
         return write("</ul>");
       }
 
+      auto write_home_page_type_select(HomePageType selected = HomePageType::Subscribed) noexcept -> ResponseWriter& {
+        return write_fmt(R"(<label for="home_page_type"><span>Home page type{}</span>)"
+            R"(<select name="home_page_type" id="home_page_type" autocomplete="off">)"
+            R"(<option value="Subscribed"{}>Subscribed - Display the user's subscribed boards, or Local boards if not logged in)"
+            R"(<option value="Local"{}>Local - Display top content from all boards on this site)"
+            R"(<option value="All" disabled{}>All - Display top content from all federated sites (not yet supported))"
+            R"(<option value="BoardList"{}>Board List - Display a curated list of boards, like a classic forum)"
+            R"(<option value="SingleBoard"{}>Single Board - The site has only one board, which is always the homepage)"
+          "</select></label>",
+          selected == HomePageType::SingleBoard ? "<br><strong>Important: Once you select an option other than Single Board, you can never select Single Board again!</strong>" : "",
+          selected == HomePageType::Subscribed ? " selected" : "",
+          selected == HomePageType::Local ? " selected" : "",
+          selected == HomePageType::All ? " selected" : "",
+          selected == HomePageType::BoardList ? " selected" : "",
+          selected == HomePageType::SingleBoard ? " selected" : " disabled"
+        );
+      }
+
+      auto write_voting_select(
+        bool voting_enabled = true,
+        bool downvotes_enabled = true,
+        bool sitewide_voting_enabled = true,
+        bool sitewide_downvotes_enabled = true
+      ) noexcept -> ResponseWriter& {
+        if (!sitewide_voting_enabled) return write(R"(<input type="hidden" name="voting" value="0">)");
+        return write_fmt(R"(<label for="voting"><span>Voting</span><select name="voting" autocomplete="off">)"
+            R"(<option value="2"{}{}>Rank posts using upvotes and downvotes)"
+            R"(<option value="1"{}>Rank posts using only upvotes)"
+            R"(<option value="0"{}>No voting, posts can only be ranked by age and comments)"
+          R"(</select></label>)",
+          sitewide_downvotes_enabled ? "" : " disabled",
+          voting_enabled && downvotes_enabled ? " selected" : "",
+          voting_enabled && !downvotes_enabled ? " selected" : "",
+          voting_enabled ? "" : " selected"
+        );
+      }
+
       auto write_site_admin_form(const SiteDetail* site, optional<string_view> error = {}) noexcept -> ResponseWriter& {
         return write_fmt(
           R"(<form class="form form-page" method="post" action="/site_admin"><h2>Site settings</h2>{})"
-          HTML_FIELD("name", "Site name", "text", R"( value="{}")")
+          HTML_FIELD("name", "Site name", "text", R"( value="{}" autocomplete="off" required)")
           HTML_TEXTAREA("description", "Sidebar description", "", "{}")
-          HTML_FIELD("icon_url", "Icon URL", "text", R"( value="{}")")
-          HTML_FIELD("banner_url", "Banner URL", "text", R"( value="{}")")
-          HTML_FIELD("max_post_length", "Max post length (bytes)", "number", R"( min="512" value="{:d}")")
-          HTML_CHECKBOX("javascript_enabled", "JavaScript enabled", "{}")
-          HTML_CHECKBOX("board_creation_admin_only", "Only admins can create boards", "{}")
-          HTML_CHECKBOX("registration_enabled", "Registration enabled", "{}")
-          HTML_CHECKBOX("registration_application_required", "Application required for registration", "{}")
-          HTML_CHECKBOX("registration_invite_required", "Invite code required for registration", "{}")
-          HTML_CHECKBOX("invite_admin_only", "Only admins can invite new users", "{}")
-          R"(<input type="submit" value="Submit"></form>)",
+          HTML_FIELD("icon_url", "Icon URL", "text", R"( value="{}" autocomplete="off")")
+          HTML_FIELD("banner_url", "Banner URL", "text", R"( value="{}" autocomplete="off")"),
           error_banner(error),
           Escape{site->name}, Escape{site->description},
-          Escape{site->icon_url.value_or("")}, Escape{site->banner_url.value_or("")},
-          site->post_max_length,
-          site->javascript_enabled ? " checked" : "", site->board_creation_admin_only ? " checked" : "",
-          site->registration_enabled ? " checked" : "", site->registration_application_required ? " checked" : "",
-          site->registration_invite_required ? " checked" : "", site->invite_admin_only ? " checked" : ""
+          Escape{site->icon_url.value_or("")}, Escape{site->banner_url.value_or("")}
+        )
+        .write_home_page_type_select(site->home_page_type)
+        .write_voting_select(site->votes_enabled, site->downvotes_enabled)
+        .write_fmt(
+          HTML_CHECKBOX("cws_enabled", "Allow posts with content warnings (also known as NSFW posts)?", R"( {} autocomplete="off")")
+          HTML_CHECKBOX("not_board_creation_admin_only", "Allow non-admin users to create boards?", R"( {} autocomplete="off")")
+          HTML_CHECKBOX("registation_enabled", "Allow new users to register?", R"( {} autocomplete="off")")
+          HTML_CHECKBOX("registation_application_required", "Require admin approval for registration?", R"( {} autocomplete="off")")
+          HTML_TEXTAREA("application_question", "Application question", "", "{}")
+          HTML_CHECKBOX("registation_invite_required", "Require invite codes for registration?", R"( {} autocomplete="off")")
+          HTML_CHECKBOX("not_invite_admin_only", "Allow non-admin users to generate invite codes?", R"( {} autocomplete="off")")
+          R"(<details><summary>Advanced</summary><fieldset><legend class="a11y">Advanced</legend>)"
+            HTML_FIELD("max_post_length", "Max post length (bytes)", "number", R"( min="512" value="{:d}" autocomplete="off")")
+            HTML_CHECKBOX("javascript_enabled", "Enable JavaScript?", R"( {} autocomplete="off")")
+            HTML_CHECKBOX("infinite_scroll_enabled", "Enable infinite scroll?", R"( {} autocomplete="off")")
+          R"(</fieldset></details><input type="submit" value="Submit"></form>)",
+          site->cws_enabled ? "checked" : "", site->board_creation_admin_only ? "" : "checked",
+          site->registration_enabled ? "checked" : "", site->registration_application_required ? "checked" : "",
+          Escape{site->application_question.value_or("")},
+          site->registration_invite_required ? "checked" : "", site->invite_admin_only ? "" : "checked",
+          site->post_max_length, site->javascript_enabled ? "checked" : "", site->infinite_scroll_enabled ? "checked" : ""
         );
       }
 
@@ -1435,6 +1513,46 @@ namespace Ludwig {
           R"(<p>The exported file can later be imported using the <code>--import</code> command-line option.</p>)"
           R"(<p>⚠️ <strong>Warning: This is a huge file, and it can take a long time to download!</strong> ⚠️</p>)"
           R"(<input type="submit" value="Download All The Things"></form>)"
+        );
+      }
+
+      auto write_first_run_setup_form(
+        const FirstRunSetupOptions& options,
+        optional<string_view> error = {}
+      ) noexcept -> ResponseWriter& {
+        write_fmt(
+          R"(<form class="form form-page" method="post" action="/site_admin/first_run_setup">{})"
+          HTML_FIELD("name", "What is this server's name?", "text", R"( required value="Ludwig" autocomplete="off")")
+          "{}",
+          error_banner(error),
+          options.base_url_set ? "" : HTML_FIELD("base_url",
+            "What domain will this server be accessed at?<br><strong>Important: This cannot be changed later!</strong>",
+            "text",
+            R"( required placeholder="https://ludwig.example" pattern="https?://[a-zA-Z0-9_\-]+([.][a-zA-Z0-9_\-]+)*(:\d{1,5})?" autocomplete="off")"
+          )
+        );
+        if (!options.home_page_type_set) write_home_page_type_select();
+        write_voting_select();
+        return write_fmt(
+          HTML_CHECKBOX("cws_enabled", "Allow posts with content warnings (also known as NSFW posts)?", R"( checked autocomplete="off")")
+          HTML_CHECKBOX("not_board_creation_admin_only", "Allow non-admin users to create boards?", R"( checked autocomplete="off")")
+          HTML_CHECKBOX("registation_enabled", "Allow new users to register?", R"( checked autocomplete="off")")
+          HTML_CHECKBOX("registation_application_required", "Require admin approval for registration?", R"( checked autocomplete="off")")
+          HTML_TEXTAREA("application_question", "Application question", "", "Why do you want to join?")
+          HTML_CHECKBOX("registation_invite_required", "Require invite codes for registration?", R"( autocomplete="off")")
+          HTML_CHECKBOX("not_invite_admin_only", "Allow non-admin users to generate invite codes?", R"( autocomplete="off")")
+          R"(<details><summary>Advanced</summary><fieldset><legend class="a11y">Advanced</legend><blockquote>)"
+            HTML_FIELD("max_post_length", "Max post length (bytes)", "number", R"( min="512" value="1048576" autocomplete="off")")
+            HTML_CHECKBOX("javascript_enabled", "Enable JavaScript?", R"( checked autocomplete="off")")
+            HTML_CHECKBOX("infinite_scroll_enabled", "Enable infinite scroll?", R"( checked autocomplete="off")")
+          R"(</blockquote></fieldset></details>{}{}<input type="submit" value="Submit"></form>)",
+          options.admin_exists ? "" : "<fieldset><legend>Create Admin Account</legend>"
+            HTML_FIELD("admin_username", "Admin Username", "text", R"( required pattern=")" USERNAME_REGEX_SRC R"(" placeholder="admin")")
+            HTML_FIELD("admin_password", "Admin Password", "password", " required")
+            "</fieldset>",
+          options.default_board_exists ? "" : "<fieldset><legend>Create Default Board</legend>"
+            HTML_FIELD("default_board_name", "Board Name", "text", R"( required pattern=")" USERNAME_REGEX_SRC R"(" placeholder="home")")
+            "</fieldset>"
         );
       }
 
@@ -1464,23 +1582,31 @@ namespace Ludwig {
           HTML_CHECKBOX("show_avatars", "Show avatars", "{}")
           HTML_CHECKBOX("show_images_threads", "Show images on threads by default", "{}")
           HTML_CHECKBOX("show_images_comments", "Show inline images in comments by default", "{}")
-          HTML_CHECKBOX("show_bot_accounts", "Show bot accounts", "{}")
-          HTML_CHECKBOX("show_karma", "Show karma", "{}")
-          R"(<fieldset><legend>Content warnings</legend>)"
-            R"(<label for="cw_hide"><input type="radio" id="cw_hide" name="content_warnings" value="0"{}> Hide posts with content warnings completely</label>)"
-            R"(<label for="cw_default"><input type="radio" id="cw_default" name="content_warnings" value="1"{}> Collapse posts with content warnings (default)</label>)"
-            R"(<label for="cw_show"><input type="radio" id="cw_show" name="content_warnings" value="2"{}> Expand text content of posts with content warnings but hide images</label>)"
-            R"(<label for="cw_show_images"><input type="radio" id="cw_show_images" name="content_warnings" value="3"{}> Always expand text and images with content warnings</label>)"
-          R"(</fieldset>)",
+          HTML_CHECKBOX("show_bot_accounts", "Show bot accounts", "{}"),
           error_banner(error),
           login.local_user().open_links_in_new_tab() ? " checked" : "",
           login.local_user().show_avatars() ? " checked" : "",
           login.local_user().show_images_threads() ? " checked" : "",
           login.local_user().show_images_comments() ? " checked" : "",
-          login.local_user().show_bot_accounts() ? " checked" : "",
-          login.local_user().show_karma() ? " checked" : "",
-          cw_mode == 0 ? " checked" : "", cw_mode == 1 ? " checked" : "", cw_mode == 2 ? " checked" : "", cw_mode == 3 ? " checked" : ""
+          login.local_user().show_bot_accounts() ? " checked" : ""
         );
+        if (site->votes_enabled) {
+          write_fmt(
+            HTML_CHECKBOX("show_karma", "Show karma", "{}"),
+            login.local_user().show_karma() ? " checked" : ""
+          );
+        }
+        if (site->cws_enabled) {
+          write_fmt(
+            R"(<label><span>Content warnings</span><select name="content_warnings" autocomplete="off">)"
+              R"(<option value="0"{}> Hide posts with content warnings completely)"
+              R"(<option value="1"{}> Collapse posts with content warnings (default))"
+              R"(<option value="2"{}> Expand text content of posts with content warnings but hide images)"
+              R"(<option value="3"{}> Always expand text and images with content warnings)"
+            R"(</select></label>)",
+            cw_mode == 0 ? " selected" : "", cw_mode == 1 ? " selected" : "", cw_mode == 2 ? " selected" : "", cw_mode == 3 ? " selected" : ""
+          );
+        }
         if (site->javascript_enabled) {
           write_fmt(
             HTML_CHECKBOX("javascript_enabled", "JavaScript enabled", "{}"),
@@ -1543,6 +1669,7 @@ namespace Ludwig {
       }
 
       auto write_board_settings_form(
+        const SiteDetail* site,
         const LocalBoardDetail& board,
         optional<string_view> error = {}
       ) noexcept -> ResponseWriter& {
@@ -1558,12 +1685,7 @@ namespace Ludwig {
           HTML_CHECKBOX("approve_subscribe", "Approval required to join", "{}")
           //HTML_CHECKBOX("invite_required", "Invite code required to join", "{}")
           //HTML_CHECKBOX("invite_mod_only", "Only moderators can invite new members", "{}")
-          R"(<fieldset><legend>Voting</legend>)"
-            R"(<label for="vote_both"><input type="radio" id="vote_both" name="voting" value="2"{}> Allow voting</label>)"
-            R"(<label for="vote_up"><input type="radio" id="vote_up" name="voting" value="1"{}> Only upvotes allowed</label>)"
-            R"(<label for="vote_none"><input type="radio" id="vote_none" name="voting" value="0"{}> No voting or karma</label>)"
-          R"(</fieldset>)"
-          R"(<input type="submit" value="Submit"></form>)",
+          ,
           Escape(board.board().name()), error_banner(error),
           Escape(rt.plain_text_with_emojis_to_text_content(board.board().display_name_type(), board.board().display_name())),
           Escape(board.board().description_raw()),
@@ -1572,11 +1694,9 @@ namespace Ludwig {
           Escape(board.board().banner_url()),
           board.local_board().private_() ? " checked" : "",
           board.board().restricted_posting() ? " checked" : "",
-          board.board().approve_subscribe() ? " checked" : "",
-          board.board().can_downvote() ? " checked" : "",
-          board.board().can_upvote() ? " checked" : "",
-          !board.board().can_downvote() && !board.board().can_upvote() ? " checked" : ""
-        );
+          board.board().approve_subscribe() ? " checked" : ""
+        ) .write_voting_select(board.board().can_upvote(), board.board().can_downvote(), site->votes_enabled, site->downvotes_enabled)
+          .write(R"(<input type="submit" value="Submit"></form>)");
       }
     };
 
@@ -1588,18 +1708,29 @@ namespace Ludwig {
           rsp->writeStatus(http_status(200))
             ->writeHeader("Content-Type", TYPE_HTML)
             ->writeHeader("HX-Retarget", "#toasts")
-            ->writeHeader("HX-Reswap", "afterbegin"))
-          .write_toast(e.message, " toast-error")
+            ->writeHeader("HX-Reswap", "afterbegin")
+        ) .write_toast(e.message, " toast-error")
           .finish();
       } else if (e.http_status == 401) {
         rsp->writeStatus(http_status(303))
+          ->writeHeader("Set-Cookie", COOKIE_NAME "=deleted; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT")
           ->writeHeader("Location", "/login")
           ->end();
-      } else {
+      } else try {
+        Meta m { .start = chrono::steady_clock::now(), .is_htmx = false, .site = controller->site_detail() };
+        auto txn = controller->open_read_txn();
+        m.populate(txn);
+        writer(rsp->writeStatus(http_status(e.http_status)))
+          .write_html_header(m, {})
+          .write_fmt(R"(<main><div class="error-page"><h2>Error {}</h2><p>{}</p></div></main>)", http_status(e.http_status), e.message)
+          .write_html_footer(m)
+          .finish();
+      } catch (...) {
+        spdlog::warn("Error when rendering error page");
         writer(
           rsp->writeStatus(http_status(e.http_status))
-            ->writeHeader("Content-Type", TYPE_HTML))
-          .write_fmt("Error {:d}: {}", e.http_status, Escape(e.message))
+            ->writeHeader("Content-Type", TYPE_HTML)
+        ) .write_fmt("Error {:d}: {}", e.http_status, Escape(e.message))
           .finish();
       }
     }
@@ -1646,18 +1777,19 @@ namespace Ludwig {
     static inline auto user_name_param(ReadTxnBase& txn, Request req, uint16_t param) {
       const auto name = req->getParameter(param);
       const auto user_id = txn.get_user_id_by_name(name);
-      if (!user_id) throw ApiError(fmt::format("User \"{}\" does not exist", name), 404);
+      if (!user_id) throw ApiError(fmt::format("User \"{}\" does not exist", name), 410);
       return *user_id;
     }
 
     static inline auto board_name_param(ReadTxnBase& txn, Request req, uint16_t param) {
       const auto name = req->getParameter(param);
       const auto board_id = txn.get_board_id_by_name(name);
-      if (!board_id) throw ApiError(fmt::format("Board \"{}\" does not exist", name), 404);
+      if (!board_id) throw ApiError(fmt::format("Board \"{}\" does not exist", name), 410);
       return *board_id;
     }
 
-    template <class T> auto do_submenu_action(SubmenuAction action, uint64_t user, uint64_t id) -> optional<string> {
+    template <class T>
+    auto do_submenu_action(SubmenuAction action, uint64_t user, uint64_t id) -> optional<string> {
       switch (action) {
         case SubmenuAction::Reply:
           return fmt::format("/{}/{:x}#reply", T::noun, id);
@@ -1683,25 +1815,25 @@ namespace Ludwig {
           throw ApiError("Report is not yet implemented", 500);
         case SubmenuAction::MuteUser: {
           auto txn = controller->open_read_txn();
-          auto e = T::get(txn, id, LocalUserDetail::get(txn, id));
+          auto e = T::get(txn, id, LocalUserDetail::get_login(txn, id));
           controller->hide_user(user, e.author_id(), true);
           break;
         }
         case SubmenuAction::UnmuteUser: {
           auto txn = controller->open_read_txn();
-          auto e = T::get(txn, id, LocalUserDetail::get(txn, id));
+          auto e = T::get(txn, id, LocalUserDetail::get_login(txn, id));
           controller->hide_user(user, e.author_id(), false);
           break;
         }
         case SubmenuAction::MuteBoard: {
           auto txn = controller->open_read_txn();
-          auto e = T::get(txn, id, LocalUserDetail::get(txn, id));
+          auto e = T::get(txn, id, LocalUserDetail::get_login(txn, id));
           controller->hide_board(user, e.thread().board(), true);
           break;
         }
         case SubmenuAction::UnmuteBoard:{
           auto txn = controller->open_read_txn();
-          auto e = T::get(txn, id, LocalUserDetail::get(txn, id));
+          auto e = T::get(txn, id, LocalUserDetail::get_login(txn, id));
           controller->hide_board(user, e.thread().board(), false);
           break;
         }
@@ -1721,7 +1853,7 @@ namespace Ludwig {
 
     auto feed_route(uint64_t feed_id, Response rsp, Request req, Meta& m) -> void {
       auto txn = controller->open_read_txn();
-      m.populate(this->shared_from_this(), txn);
+      m.populate(txn);
       const auto sort = parse_sort_type(req->getQuery("sort"), m.login);
       const auto show_threads = req->getQuery("type") != "comments",
         show_images = req->getQuery("images") == "1" || (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_threads() : false);
@@ -1736,10 +1868,18 @@ namespace Ludwig {
         rsp->writeHeader("Content-Type", TYPE_HTML);
         m.write_cookie(rsp);
       } else {
+        string title;
+        switch (feed_id) {
+          case InstanceController::FEED_ALL: title = "All"; break;
+          case InstanceController::FEED_LOCAL: title = m.site->name; break;
+          case InstanceController::FEED_HOME: title = "Subscribed"; break;
+          default: title = "Unknown Feed";
+        }
         r.write_html_header(m, {
             .canonical_path = req->getUrl(),
-            .banner_title = m.site->name,
-            .banner_link = req->getUrl()
+            .banner_link = req->getUrl(),
+            .page_title = feed_id == InstanceController::FEED_LOCAL ? "Local" : title,
+            .banner_title = title
           })
           .write("<div>")
           .write_sidebar(m.login, m.site)
@@ -1749,32 +1889,69 @@ namespace Ludwig {
       }
       r.write_fmt(R"(<ol class="{}-list" id="top-level-list">)", show_threads ? "thread" : "comment");
       const auto from = req->getQuery("from");
+      bool any_entries = false;
       const auto next = show_threads ?
         controller->list_feed_threads(
-          [&](auto& e){r.write_thread_entry(e, m.login, true, true, true, show_images);},
+          [&](auto& e){r.write_thread_entry(e, m.site, m.login, true, true, true, show_images); any_entries = true;},
           txn, feed_id, sort, m.login, from
         ) :
         controller->list_feed_comments(
-          [&](auto& e){r.write_comment_entry(e, m.login, true, false, true, true, show_images);},
+          [&](auto& e){r.write_comment_entry(e, m.site, m.login, true, false, true, true, show_images); any_entries = true;},
           txn, feed_id, sort, m.login, from
         );
+      if (!m.is_htmx && !any_entries) r.write(R"(<li class="no-entries">There's nothing here.)");
       r.write("</ol>").write_pagination(base_url, from.empty(), next);
       if (!m.is_htmx) r.write("</main></div>").write_html_footer(m);
       r.finish();
     }
 
+    static inline auto board_header_options(Request req, const Board& board, optional<string_view> title = {}) -> ResponseWriter::HtmlHeaderOptions {
+      return {
+        .canonical_path = req->getUrl(),
+        .banner_link = req->getUrl(),
+        .page_title = title,
+        .banner_title = display_name_as_text(board),
+        .banner_image = board.banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board.name()->string_view())) : nullopt,
+        .card_image = board.icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board.name()->string_view())) : nullopt
+      };
+    }
+
+    static inline auto form_to_site_update(QueryString<string_view> body) -> SiteUpdate {
+      const auto voting = body.optional_uint("voting");
+      return {
+        .name = body.optional_string("name"),
+        .description = body.optional_string("description"),
+        .icon_url = body.optional_string("icon_url"),
+        .banner_url = body.optional_string("banner_url"),
+        .application_question = body.optional_string("application_question"),
+        .max_post_length = body.optional_uint("max_post_length"),
+        .home_page_type = body.optional_string("home_page_type").transform(parse_home_page_type),
+        .javascript_enabled = body.optional_bool("javascript_enabled"),
+        .infinite_scroll_enabled = body.optional_bool("infinite_scroll_enabled"),
+        .votes_enabled = voting.transform(λx(x > 0)),
+        .downvotes_enabled = voting.transform(λx(x > 1)),
+        .cws_enabled = body.optional_bool("cws_enabled"),
+        .require_login_to_view = body.optional_bool("require_login_to_view"),
+        .board_creation_admin_only = !body.optional_bool("not_board_creation_admin_only"),
+        .registration_enabled = body.optional_bool("registation_enabled"),
+        .registration_application_required = body.optional_bool("registation_application_required"),
+        .registration_invite_required = body.optional_bool("registation_invite_required"),
+        .invite_admin_only = !body.optional_bool("not_invite_admin_only")
+      };
+    }
+
     auto register_routes(App& app) -> void {
 
-      // -----------------------------------------------------------------------
-      // STATIC FILES
-      // -----------------------------------------------------------------------
+      // Static Files
+      /////////////////////////////////////////////////////
+
       serve_static(app, "default-theme.css", TYPE_CSS, default_theme_css_str());
       serve_static(app, "htmx.min.js", TYPE_JS, htmx_min_js_str());
       serve_static(app, "feather-sprite.svg", TYPE_SVG, feather_sprite_svg_str());
 
-      // -----------------------------------------------------------------------
-      // PAGES
-      // -----------------------------------------------------------------------
+      // Pages
+      /////////////////////////////////////////////////////
+
       auto self = this->shared_from_this();
       Router<SSL, Meta, ErrorMeta>(app,
         bind(&Webapp::middleware, self, _1, _2),
@@ -1782,7 +1959,24 @@ namespace Ludwig {
         bind(&Webapp::error_page, self, _1, _2, _3)
       )
       .get("/", [self](auto* rsp, auto* req, Meta& m) {
-        self->feed_route(m.logged_in_user_id ? InstanceController::FEED_HOME : InstanceController::FEED_LOCAL, rsp, req, m);
+        if (m.site->setup_done) {
+          self->feed_route(m.logged_in_user_id ? InstanceController::FEED_HOME : InstanceController::FEED_LOCAL, rsp, req, m);
+        } else {
+          auto txn = self->controller->open_read_txn();
+          if (!m.require_login(txn).local_user().admin()) {
+            throw ApiError("Only an admin user can perform first-run setup.", 403);
+          }
+          self->writer(rsp)
+            .write_html_header(m, {
+              .canonical_path = "/",
+              .banner_title = "First-Run Setup",
+            })
+            .write("<main>")
+            .write_first_run_setup_form(self->controller->first_run_setup_options(txn))
+            .write("</main>")
+            .write_html_footer(m)
+            .finish();
+        }
       })
       .get("/all", [self](auto* rsp, auto* req, Meta& m) {
         self->feed_route(InstanceController::FEED_ALL, rsp, req, m);
@@ -1792,7 +1986,7 @@ namespace Ludwig {
       })
       .get("/boards", [self](auto* rsp, auto* req, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        m.populate(self, txn);
+        m.populate(txn);
         const auto local = req->getQuery("local") == "1";
         const auto sort = parse_board_sort_type(req->getQuery("sort"));
         const auto sub = req->getQuery("sub") == "1";
@@ -1807,8 +2001,8 @@ namespace Ludwig {
         } else {
           r.write_html_header(m, {
               .canonical_path = "/boards",
-              .banner_title = "Boards",
               .banner_link = "/boards",
+              .banner_title = "Boards",
             })
             .write("<div>")
             .write_sidebar(m.login, m.site)
@@ -1827,7 +2021,7 @@ namespace Ludwig {
       })
       .get("/users", [self](auto* rsp, auto* req, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        m.populate(self, txn);
+        m.populate(txn);
         const auto local = req->getQuery("local") == "1";
         const auto sort = parse_user_sort_type(req->getQuery("sort"));
         const auto base_url = fmt::format("/users?local={}&sort={}",
@@ -1841,8 +2035,8 @@ namespace Ludwig {
         } else {
           r.write_html_header(m, {
               .canonical_path = "/users",
-              .banner_title = "Users",
               .banner_link = "/users",
+              .banner_title = "Users",
             })
             .write("<div>")
             .write_sidebar(m.login, m.site)
@@ -1859,9 +2053,14 @@ namespace Ludwig {
         if (!m.is_htmx) r.write("</main></div>").write_html_footer(m);
         r.finish();
       })
+      .get("/c/:name", [self](auto* rsp, auto* req, Meta& m) {
+        // Compatibility alias for Lemmy community URLs
+        // Needed because some Lemmy apps expect URLs in exactly this format
+        write_redirect_to(rsp, m, fmt::format("/b/{}", req->getParameter(0)));
+      })
       .get("/b/:name", [self](auto* rsp, auto* req, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        m.populate(self, txn);
+        m.populate(txn);
         const auto board_id = board_name_param(txn, req, 0);
         const auto board = self->controller->board_detail(txn, board_id, m.login);
         const auto sort = parse_sort_type(req->getQuery("sort"), m.login);
@@ -1878,13 +2077,7 @@ namespace Ludwig {
           rsp->writeHeader("Content-Type", TYPE_HTML);
           m.write_cookie(rsp);
         } else {
-          r.write_html_header(m, {
-              .canonical_path = req->getUrl(),
-              .banner_title = display_name_as_text(board.board()),
-              .banner_link = req->getUrl(),
-              .banner_image = board.board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board.board().name()->string_view())) : nullopt,
-              .card_image = board.board().icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board.board().name()->string_view())) : nullopt
-            })
+          r.write_html_header(m, board_header_options(req, board.board()))
             .write("<div>")
             .write_sidebar(m.login, board)
             .write(R"(<section><h2 class="a11y">Sort and filter</h2>)")
@@ -1892,16 +2085,18 @@ namespace Ludwig {
             .write(R"(</section><main>)");
         }
         r.write_fmt(R"(<ol class="{}-list" id="top-level-list">)", show_threads ? "thread" : "comment");
+        bool any_entries = false;
         const auto from = req->getQuery("from");
         const auto next = show_threads ?
           self->controller->list_board_threads(
-            [&](auto& e){r.write_thread_entry(e, m.login, true, true, false, show_images);},
+            [&](auto& e){r.write_thread_entry(e, m.site, m.login, true, true, false, show_images); any_entries = true;},
             txn, board_id, sort, m.login, from
           ) :
           self->controller->list_board_comments(
-            [&](auto& e){r.write_comment_entry(e, m.login, true, false, true, true, show_images);},
+            [&](auto& e){r.write_comment_entry(e, m.site, m.login, true, false, true, true, show_images); any_entries = true;},
             txn, board_id, sort, m.login, from
           );
+        if (!m.is_htmx && !any_entries) r.write(R"(<li class="no-entries">There's nothing here.)");
         r.write("</ol>").write_pagination(base_url, from.empty(), next);
         if (!m.is_htmx) r.write("</main></div>").write_html_footer(m);
         r.finish();
@@ -1910,25 +2105,17 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         const auto board_id = board_name_param(txn, req, 0);
         const auto show_url = req->getQuery("text") != "1";
-        const auto login = m.require_login(self, txn);
+        const auto login = m.require_login(txn);
         const auto board = self->controller->board_detail(txn, board_id, m.login);
-        // ---
         self->writer(rsp)
-          .write_html_header(m, {
-            .canonical_path = fmt::format("/b/{}/create_thread", board.board().name()->string_view()),
-            .banner_title = display_name_as_text(board.board()),
-            .banner_link = fmt::format("/b/{}", board.board().name()->string_view()),
-            .banner_image = board.board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board.board().name()->string_view())) : nullopt,
-            .page_title = "Create Thread",
-            .card_image = board.board().icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board.board().name()->string_view())) : nullopt
-          })
+          .write_html_header(m, board_header_options(req, board.board(), "Create Thread"))
           .write_create_thread_form(show_url, board, login)
           .write_html_footer(m)
           .finish();
       })
       .get("/u/:name", [self](auto* rsp, auto* req, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        m.populate(self, txn);
+        m.populate(txn);
         const auto user_id = user_name_param(txn, req, 0);
         const auto user = self->controller->user_detail(txn, user_id, m.login);
         const auto sort = parse_user_post_sort_type(req->getQuery("sort"));
@@ -1947,8 +2134,8 @@ namespace Ludwig {
         } else {
           r.write_html_header(m, {
               .canonical_path = req->getUrl(),
-              .banner_title = display_name_as_text(user.user()),
               .banner_link = req->getUrl(),
+              .banner_title = display_name_as_text(user.user()),
               .banner_image = user.user().banner_url() ? optional(fmt::format("/media/user/{}/banner.webp", user.user().name()->string_view())) : nullopt,
               .card_image = user.user().avatar_url() ? optional(fmt::format("/media/user/{}/avatar.webp", user.user().name()->string_view())) : nullopt
             })
@@ -1959,45 +2146,40 @@ namespace Ludwig {
             .write(R"(</section><main>)");
         }
         r.write_fmt(R"(<ol class="{}-list" id="top-level-list">)", show_threads ? "thread" : "comment");
+        bool any_entries = false;
         const auto from = req->getQuery("from");
         const auto next = show_threads ?
           self->controller->list_user_threads(
-            [&](auto& e){r.write_thread_entry(e, m.login, true, false, false, show_images);},
+            [&](auto& e){r.write_thread_entry(e, m.site, m.login, true, false, false, show_images); any_entries = true;},
             txn, user_id, sort, m.login, from
           ) :
           self->controller->list_user_comments(
-            [&](auto& e){r.write_comment_entry(e, m.login, true, false, false, true, show_images);},
+            [&](auto& e){r.write_comment_entry(e, m.site, m.login, true, false, false, true, show_images); any_entries = true;},
             txn, user_id, sort, m.login, from
           );
+        if (!m.is_htmx && !any_entries) r.write(R"(<li class="no-entries">There's nothing here.)");
         r.write("</ol>").write_pagination(base_url, from.empty(), next);
         if (!m.is_htmx) r.write("</main></div>").write_html_footer(m);
         r.finish();
       })
       .get("/thread/:id", [self](auto* rsp, auto* req, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        m.populate(self, txn);
+        m.populate(txn);
         const auto id = hex_id_param(req, 0);
         const auto sort = parse_comment_sort_type(req->getQuery("sort"), m.login);
         const auto show_images = req->getQuery("images") == "1" ||
           (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_comments() : false);
         const auto [detail, comments] = self->controller->thread_detail(txn, id, sort, m.login, req->getQuery("from"));
-        const auto board = self->controller->board_detail(txn, detail.thread().board(), m.login);
-        // ---
         auto r = self->writer(rsp);
         if (m.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
           m.write_cookie(rsp);
           r.write_comment_tree(comments, detail.id, sort, m.site, m.login, show_images, true, false);
         } else {
-          r.write_html_header(m, {
-              .canonical_path = req->getUrl(),
-              .banner_title = display_name_as_text(board.board()),
-              .banner_link = fmt::format("/b/{}", board.board().name()->string_view()),
-              .banner_image = board.board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board.board().name()->string_view())) : nullopt,
-              .card_image = board.board().icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board.board().name()->string_view())) : nullopt
-            })
+          r.write_html_header(m, board_header_options(req, detail.board(),
+              fmt::format("{} - {}", display_name_as_text(detail.board()), display_name_as_text(detail.thread()))))
             .write("<div>")
-            .write_sidebar(m.login, board)
+            .write_sidebar(m.login, self->controller->board_detail(txn, detail.thread().board(), m.login))
             .write("<main>")
             .write_thread_view(detail, comments, m.site, m.login, sort, show_images)
             .write("</main></div>")
@@ -2008,46 +2190,36 @@ namespace Ludwig {
       .get("/thread/:id/edit", [self](auto* rsp, auto* req, Meta& m) {
         auto txn = self->controller->open_read_txn();
         const auto id = hex_id_param(req, 0);
-        const auto login = m.require_login(self, txn);
+        const auto login = m.require_login(txn);
         const auto thread = ThreadDetail::get(txn, id, login);
         if (!thread.can_edit(login)) throw ApiError("Cannot edit this post", 403);
-        // ---
         self->writer(rsp)
-          .write_html_header(m, {
-            .canonical_path = req->getUrl(),
-            .banner_title = display_name_as_text(thread.board()),
-            .banner_link = fmt::format("/b/{}", thread.board().name()->string_view()),
-            .banner_image = thread.board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", thread.board().name()->string_view())) : nullopt,
-          })
+          .write_html_header(m, board_header_options(req, thread.board(), "Edit Thread"))
           .write_edit_thread_form(thread, login)
           .write_html_footer(m)
           .finish();
       })
       .get("/comment/:id", [self](auto* rsp, auto* req, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        m.populate(self, txn);
+        m.populate(txn);
         const auto id = hex_id_param(req, 0);
         const auto sort = parse_comment_sort_type(req->getQuery("sort"), m.login);
         const auto show_images = req->getQuery("images") == "1" ||
           (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_comments() : false);
         const auto [detail, comments] = self->controller->comment_detail(txn, id, sort, m.login, req->getQuery("from"));
-        const auto board = self->controller->board_detail(txn, detail.thread().board(), m.login);
-        // ----
         auto r = self->writer(rsp);
         if (m.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
           m.write_cookie(rsp);
           r.write_comment_tree(comments, detail.id, sort, m.site, m.login, show_images, false, false);
         } else {
-          r.write_html_header(m, {
-              .canonical_path = req->getUrl(),
-              .banner_title = display_name_as_text(board.board()),
-              .banner_link = fmt::format("/b/{}", board.board().name()->string_view()),
-              .banner_image = board.board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board.board().name()->string_view())) : nullopt,
-              .card_image = board.board().icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board.board().name()->string_view())) : nullopt
-            })
+          r.write_html_header(m, board_header_options(req, detail.board(),
+              fmt::format("{} - {}'s comment on “{}”",
+                display_name_as_text(detail.board()),
+                display_name_as_text(detail.author()),
+                display_name_as_text(detail.thread()))))
             .write("<div>")
-            .write_sidebar(m.login, board)
+            .write_sidebar(m.login, self->controller->board_detail(txn, detail.thread().board(), m.login))
             .write("<main>")
             .write_comment_view(detail, comments, m.site, m.login, sort, show_images)
             .write("</main></div>")
@@ -2065,7 +2237,7 @@ namespace Ludwig {
         self->controller->search_step_1(query, [self, rsp, m = std::move(m), resume = std::move(resume)](auto results) mutable {
           resume([self, rsp, results, m = std::move(m)] {
             auto txn = self->controller->open_read_txn();
-            m->populate(self, txn);
+            m->populate(txn);
             const auto results_detail = self->controller->search_step_2(txn, results, ITEMS_PER_PAGE, m->login);
             self->writer(rsp)
               .write_html_header(*m, {
@@ -2075,7 +2247,7 @@ namespace Ludwig {
               .write("<div>")
               .write_sidebar(m->login, m->site)
               .write("<main>")
-              .write_search_result_list(results_detail, m->login, true)
+              .write_search_result_list(results_detail, m->site, m->login, true)
               .write("</main></div>")
               .write_html_footer(*m)
               .finish();
@@ -2084,7 +2256,7 @@ namespace Ludwig {
       })
       .get("/create_board", [self](auto* rsp, auto*, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        const auto& login = m.require_login(self, txn);
+        const auto& login = m.require_login(txn);
         if (!self->controller->can_create_board(login)) {
           throw ApiError("User cannot create boards", 403);
         }
@@ -2094,14 +2266,14 @@ namespace Ludwig {
             .banner_title = "Create Board",
           })
           .write("<main>")
-          .write_create_board_form(login)
+          .write_create_board_form(m.site)
           .write("</main>")
           .write_html_footer(m)
           .finish();
       })
       .get("/login", [self](auto* rsp, auto*, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        m.populate(self, txn);
+        m.populate(txn);
         if (m.login) {
           rsp->writeStatus(http_status(303))
             ->writeHeader("Location", "/")
@@ -2112,14 +2284,19 @@ namespace Ludwig {
               .canonical_path = "/login",
               .banner_title = "Login",
             })
-            .write_login_form()
+            .write_login_form(
+              m.site->setup_done ? nullopt : optional(
+                txn.get_admin_list().empty()
+                  ? "This server is not yet set up. A username and random password should be"
+                    " displayed in the server's console log. Log in as this user to continue."
+                  : "This server is not yet set up. Log in as an admin user to continue."))
             .write_html_footer(m)
             .finish();
         }
       })
       .get("/register", [self](auto* rsp, auto*, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        m.populate(self, txn);
+        m.populate(txn);
         if (m.login) {
           rsp->writeStatus(http_status(303))
             ->writeHeader("Location", "/")
@@ -2137,7 +2314,7 @@ namespace Ludwig {
       })
       .get("/settings", [self](auto* rsp, auto*, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        const auto login = m.require_login(self, txn);
+        const auto login = m.require_login(txn);
         self->writer(rsp)
           .write_html_header(m, {
             .canonical_path = "/settings",
@@ -2152,7 +2329,7 @@ namespace Ludwig {
       })
       .get("/settings/profile", [self](auto* rsp, auto*, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        const auto login = m.require_login(self, txn);
+        const auto login = m.require_login(txn);
         self->writer(rsp)
           .write_html_header(m, {
             .canonical_path = "/settings/profile",
@@ -2167,7 +2344,7 @@ namespace Ludwig {
       })
       .get("/settings/account", [self](auto* rsp, auto*, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        const auto login = m.require_login(self, txn);
+        const auto login = m.require_login(txn);
         self->writer(rsp)
           .write_html_header(m, {
             .canonical_path = "/settings/account",
@@ -2183,34 +2360,25 @@ namespace Ludwig {
       .get("/b/:name/settings", [self](auto* rsp, auto* req, Meta& m) {
         auto txn = self->controller->open_read_txn();
         const auto board_id = board_name_param(txn, req, 0);
-        const auto login = m.require_login(self, txn);
+        const auto login = m.require_login(txn);
         const auto board = self->controller->local_board_detail(txn, board_id, m.login);
         if (!login.local_user().admin() && login.id != board.local_board().owner()) {
           throw ApiError("Must be admin or board owner to view this page", 403);
         }
-        // --
         self->writer(rsp)
-          .write_html_header(m, {
-            .canonical_path = fmt::format("/b/{}/settings", board.board().name()->string_view()),
-            .banner_title = display_name_as_text(board.board()),
-            .banner_link = fmt::format("/b/{}", board.board().name()->string_view()),
-            .banner_image = board.board().banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board.board().name()->string_view())) : nullopt,
-            .page_title = "Board Settings",
-            .card_image = board.board().icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board.board().name()->string_view())) : nullopt
-          })
+          .write_html_header(m, board_header_options(req, board.board(), "Board Settings"))
           .write("<main>")
-          .write_board_settings_form(board)
+          .write_board_settings_form(m.site, board)
           .write("</main>")
           .write_html_footer(m)
           .finish();
       })
       .get("/site_admin", [self](auto* rsp, auto*, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        const auto login = m.require_login(self, txn);
+        const auto login = m.require_login(txn);
         if (!InstanceController::can_change_site_settings(login)) {
           throw ApiError("Admin login required to view this page", 403);
         }
-        // --
         self->writer(rsp)
           .write_html_header(m, {
             .canonical_path = "/site_admin",
@@ -2225,11 +2393,10 @@ namespace Ludwig {
       })
       .get("/site_admin/import_export", [self](auto* rsp, auto*, Meta& m) {
         auto txn = self->controller->open_read_txn();
-        const auto login = m.require_login(self, txn);
+        const auto login = m.require_login(txn);
         if (!InstanceController::can_change_site_settings(login)) {
           throw ApiError("Admin login required to view this page", 403);
         }
-        // --
         self->writer(rsp)
           .write_html_header(m, {
             .canonical_path = "/site_admin",
@@ -2243,9 +2410,9 @@ namespace Ludwig {
           .finish();
       })
 
-      // -----------------------------------------------------------------------
-      // API ACTIONS
-      // -----------------------------------------------------------------------
+      // API Actions
+      //////////////////////////////////////////////////////
+
       .get("/logout", [self](auto* rsp, auto* req, Meta&) {
         rsp->writeStatus(http_status(303))
           ->writeHeader("Set-Cookie", COOKIE_NAME "=deleted; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT");
@@ -2274,18 +2441,17 @@ namespace Ludwig {
               m->ip,
               user_agent,
               remember
-            )](auto* rsp) {
+            )](auto* rsp) mutable {
               rsp->writeStatus(http_status(303))
                 ->writeHeader("Set-Cookie",
                   fmt::format(COOKIE_NAME "={:x}; path=/; expires={:%a, %d %b %Y %T %Z}",
                     login.session_id, fmt::gmtime(login.expiration)))
-                ->writeHeader("Location", referer.empty() || referer == "/login" ? "/" : referer)
+                ->writeHeader("Location", (referer.empty() || referer == "/login" || !self->controller->site_detail()->setup_done) ? "/" : referer)
                 ->end();
             });
           } catch (ApiError e) {
-            write([=, m = std::move(m)](auto* rsp) mutable {
+            write([=, m=std::move(m)](auto* rsp) mutable {
               rsp->writeStatus(http_status(e.http_status));
-              m->site = self->controller->site_detail();
               self->writer(rsp)
                 .write_html_header(*m, {
                   .canonical_path = "/login",
@@ -2312,7 +2478,6 @@ namespace Ludwig {
               rsp->writeStatus(http_status(418));
               return;
             }
-            m->site = self->controller->site_detail();
             try {
               SecretString password = body.required_string("password"),
                 confirm_password = body.required_string("confirm_password");
@@ -2411,12 +2576,12 @@ namespace Ludwig {
           write([=, m = std::move(m)] (auto* rsp) mutable {
             if (m->is_htmx) {
               auto txn = self->controller->open_read_txn();
-              m->populate(self, txn);
+              m->populate(txn);
               const auto comment = CommentDetail::get(txn, id, m->login);
               rsp->writeHeader("Content-Type", TYPE_HTML);
               m->write_cookie(rsp);
               self->writer(rsp)
-                .write_comment_entry(comment, m->login, false, true, true, false, true)
+                .write_comment_entry(comment, m->site, m->login, false, true, true, false, true)
                 .write_toast("Reply submitted")
                 .finish();
             } else {
@@ -2443,12 +2608,12 @@ namespace Ludwig {
           write([=, m = std::move(m)] (auto* rsp) mutable {
             if (m->is_htmx) {
               auto txn = self->controller->open_read_txn();
-              m->populate(self, txn);
+              m->populate(txn);
               const auto comment = CommentDetail::get(txn, id, m->login);
               rsp->writeHeader("Content-Type", TYPE_HTML);
               m->write_cookie(rsp);
               self->writer(rsp)
-                .write_comment_entry(comment, m->login, false, true, true, false, true)
+                .write_comment_entry(comment, m->site, m->login, false, true, true, false, true)
                 .write_toast("Reply submitted")
                 .finish();
             } else {
@@ -2476,7 +2641,7 @@ namespace Ludwig {
               const auto show_user = body.optional_bool("show_user"),
                 show_board = body.optional_bool("show_board");
               auto txn = self->controller->open_read_txn();
-              const auto login = LocalUserDetail::get(txn, user);
+              const auto login = LocalUserDetail::get_login(txn, user);
               const auto thread = ThreadDetail::get(txn, id, login);
               rsp->writeHeader("Content-Type", TYPE_HTML);
               m->write_cookie(rsp);
@@ -2505,7 +2670,7 @@ namespace Ludwig {
               const auto show_user = body.optional_bool("show_user"),
                 show_board = body.optional_bool("show_board");
               auto txn = self->controller->open_read_txn();
-              const auto login = LocalUserDetail::get(txn, user);
+              const auto login = LocalUserDetail::get_login(txn, user);
               const auto comment = CommentDetail::get(txn, id, login);
               rsp->writeHeader("Content-Type", TYPE_HTML);
               m->write_cookie(rsp);
@@ -2521,6 +2686,7 @@ namespace Ludwig {
       .post_form("/thread/:id/vote", [self](auto* req, auto m) {
         return [self,
           user = m->require_login(),
+          site = m->site,
           post_id = hex_id_param(req, 0),
           referer = string(req->getHeader("referer")),
           is_htmx = m->is_htmx
@@ -2530,10 +2696,10 @@ namespace Ludwig {
           write([=](auto* rsp) {
             if (is_htmx) {
               auto txn = self->controller->open_read_txn();
-              const auto login = LocalUserDetail::get(txn, user);
+              const auto login = LocalUserDetail::get_login(txn, user);
               const auto thread = ThreadDetail::get(txn, post_id, login);
               rsp->writeHeader("Content-Type", TYPE_HTML);
-              self->writer(rsp).write_vote_buttons(thread, login).finish();
+              self->writer(rsp).write_vote_buttons(thread, site, login).finish();
             } else {
               write_redirect_back(rsp, referer);
             }
@@ -2543,6 +2709,7 @@ namespace Ludwig {
       .post_form("/comment/:id/vote", [self](auto* req, auto m) {
         return [self,
           user = m->require_login(),
+          site = m->site,
           post_id = hex_id_param(req, 0),
           referer = string(req->getHeader("referer")),
           is_htmx = m->is_htmx
@@ -2552,10 +2719,10 @@ namespace Ludwig {
           write([=](auto* rsp) {
             if (is_htmx) {
               auto txn = self->controller->open_read_txn();
-              const auto login = LocalUserDetail::get(txn, user);
+              const auto login = LocalUserDetail::get_login(txn, user);
               const auto comment = CommentDetail::get(txn, post_id, login);
               rsp->writeHeader("Content-Type", TYPE_HTML);
-              self->writer(rsp).write_vote_buttons(comment, login).finish();
+              self->writer(rsp).write_vote_buttons(comment, site, login).finish();
             } else {
               write_redirect_back(rsp, referer);
             }
@@ -2582,12 +2749,80 @@ namespace Ludwig {
           });
         };
       })
+      .post_form("/site_admin", [self](auto*, auto m) {
+        {
+          auto txn = self->controller->open_read_txn();
+          const auto login = m->require_login(txn);
+          if (!InstanceController::can_change_site_settings(login)) {
+            throw ApiError("Admin login required to perform this action", 403);
+          }
+        }
+        return [self, m=std::move(m)](QueryString<string_view> body, auto&& write) mutable {
+          try {
+            self->controller->update_site(form_to_site_update(body), m->logged_in_user_id);
+            write([=](auto* rsp) {
+              write_redirect_back(rsp, "/site_admin");
+            });
+          } catch (const ApiError& e) {
+            write([=, m=std::move(m)](auto* rsp) mutable {
+              self->writer(rsp)
+                .write_html_header(*m, {
+                  .canonical_path = "/site_admin",
+                  .banner_title = "Site Admin",
+                })
+                .write("<main>")
+                .write_site_admin_tabs(m->site, SiteAdminTab::Settings)
+                .write_site_admin_form(m->site, {e.message})
+                .write("</main>")
+                .write_html_footer(*m)
+                .finish();
+            });
+          }
+        };
+      })
+      .post_form("/site_admin/first_run_setup", [self](auto*, auto m) {
+        {
+          auto txn = self->controller->open_read_txn();
+          const auto login = m->require_login(txn);
+          if (!InstanceController::can_change_site_settings(login)) {
+            throw ApiError("Admin login required to perform this action", 403);
+          }
+        }
+        return [self, m=std::move(m)](QueryString<string_view> body, auto&& write) mutable {
+          try {
+            self->controller->first_run_setup({
+              form_to_site_update(body),
+              body.optional_string("base_url"),
+              body.optional_string("default_board_name"),
+              body.optional_string("admin_username"),
+              body.optional_string("admin_password").transform(λx(SecretString(x)))
+            });
+            write([=](auto* rsp) {
+              write_redirect_back(rsp, "/");
+            });
+          } catch (const ApiError& e) {
+            write([=, m=std::move(m)](auto* rsp) mutable {
+              auto txn = self->controller->open_read_txn();
+              self->writer(rsp)
+                .write_html_header(*m, {
+                  .canonical_path = "/",
+                  .banner_title = "First-Run Setup",
+                })
+                .write("<main>")
+                .write_first_run_setup_form(self->controller->first_run_setup_options(txn))
+                .write("</main>")
+                .write_html_footer(*m)
+                .finish();
+            });
+          }
+        };
+      })
       .post("/site_admin/export", [self](auto*, auto m) {
         {
           auto txn = self->controller->open_read_txn();
-          const auto login = m->require_login(self, txn);
+          const auto login = m->require_login(txn);
           if (!InstanceController::can_change_site_settings(login)) {
-            throw ApiError("Admin login required to view this page", 403);
+            throw ApiError("Admin login required to perform this action", 403);
           }
         }
         return [self](string, auto&& write) {
@@ -2617,6 +2852,9 @@ namespace Ludwig {
             write([](auto rsp) { rsp->end(); });
           }).detach();
         };
+      })
+      .any("/*", [](auto*, auto*, auto&) {
+        throw ApiError("Page not found", 404);
       });
     }
   };

@@ -14,7 +14,6 @@ export { EmojiShortcode } from './ludwig/emoji-shortcode.ts';
 export { EmojiTable } from './ludwig/emoji-table.ts';
 export { FbVoid } from './ludwig/fb-void.ts';
 export { Hash } from './ludwig/hash.ts';
-export { HomePageType } from './ludwig/home-page-type.ts';
 export { Invite } from './ludwig/invite.ts';
 export { LinkCard } from './ludwig/link-card.ts';
 export { LocalBoard } from './ludwig/local-board.ts';

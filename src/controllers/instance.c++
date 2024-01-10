@@ -16,23 +16,14 @@ using std::function, std::max, std::min, std::nullopt, std::optional, std::pair,
     flatbuffers::Vector;
 namespace chrono = std::chrono;
 
+#define SECONDS(N) chrono::system_clock::time_point(chrono::seconds(N))
+
 namespace Ludwig {
   // PBKDF2-HMAC-SHA256 iteration count, as suggested by
   // https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#pbkdf2
   static constexpr uint32_t PASSWORD_HASH_ITERATIONS = 600'000;
 
   static constexpr double RANK_GRAVITY = 1.8;
-
-  static const regex username_regex(R"([a-z0-9_]{1,64})", regex::ECMAScript);
-  static const regex email_regex(
-    R"((?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|")"
-    R"((?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@)"
-    R"((?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|)"
-    R"(\[(?:(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9]))\.){3})"
-    R"((?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9])|[a-z0-9-]*[a-z0-9]:)"
-    R"((?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\]))",
-    regex::ECMAScript | regex::icase
-  );
 
   static inline auto rank_numerator(int64_t karma) -> double {
     return std::log(max<int64_t>(1, 3 + karma));
@@ -81,20 +72,19 @@ namespace Ludwig {
     double max_rank = INFINITY,
     uint16_t limit = ITEMS_PER_PAGE
   ) -> PageCursor {
-    using namespace chrono;
     int64_t max_possible_karma;
     if (limit == 0 || iter_by_top.is_done() || iter_by_new.is_done()) return {};
     if (auto top_stats = txn.get_post_stats(*iter_by_top)) {
       max_possible_karma = top_stats->get().karma();
     } else return {};
     const auto max_possible_numerator = rank_numerator(max_possible_karma);
-    const auto now = system_clock::now();
+    const auto now = chrono::system_clock::now();
     double last_rank;
     RankedQueue queue(ranked_id_cmp);
     for (auto id : iter_by_new) {
       const auto stats = txn.get_post_stats(id);
       if (!stats) continue;
-      const system_clock::time_point timestamp(seconds(stats->get().latest_comment()));
+      const auto timestamp = SECONDS(stats->get().latest_comment());
       const auto denominator = rank_denominator(now - timestamp);
       const auto rank = rank_numerator(stats->get().karma()) / denominator;
       if (rank >= max_rank) continue;
@@ -103,7 +93,7 @@ namespace Ludwig {
       const auto [top_id, top_rank] = queue.top();
       const double
         min_possible_denominator =
-          rank_denominator(latest_possible_timestamp < now ? now - latest_possible_timestamp : seconds::zero()),
+          rank_denominator(latest_possible_timestamp < now ? now - latest_possible_timestamp : chrono::seconds::zero()),
         max_possible_rank = max_possible_numerator / min_possible_denominator;
       if (max_possible_rank > top_rank) continue;
       queue.pop();
@@ -126,14 +116,13 @@ namespace Ludwig {
     double max_rank = INFINITY,
     uint16_t limit = ITEMS_PER_PAGE
   ) -> PageCursor {
-    using namespace chrono;
     int64_t max_possible_karma;
     if (limit == 0 || iter_by_top.is_done() || iter_by_new.is_done()) return {};
     if (auto top_stats = txn.get_post_stats(*iter_by_top)) {
       max_possible_karma = top_stats->get().karma();
     } else return {};
     const auto max_possible_numerator = rank_numerator(max_possible_karma);
-    const auto now = system_clock::now();
+    const auto now = chrono::system_clock::now();
     double last_rank;
     RankedQueue queue(ranked_id_cmp);
     for (auto id : iter_by_new) {
@@ -166,17 +155,16 @@ namespace Ludwig {
     optional<chrono::system_clock::time_point> from = {},
     uint16_t limit = ITEMS_PER_PAGE
   ) -> PageCursor {
-    using namespace chrono;
-    using IdTime = pair<uint64_t, system_clock::time_point>;
+    using IdTime = pair<uint64_t, chrono::system_clock::time_point>;
     static constexpr auto id_time_cmp = [](const IdTime& a, const IdTime& b) -> bool { return a.second < b.second; };
-    const auto now = system_clock::now();
+    const auto now = chrono::system_clock::now();
     const auto max_time = from.value_or(now);
     uint64_t last_time;
     priority_queue<IdTime, vector<IdTime>, decltype(id_time_cmp)> queue;
     for (uint64_t id : iter_by_new) {
       const auto stats = txn.get_post_stats(id);
       if (!stats) continue;
-      const system_clock::time_point timestamp(seconds(stats->get().latest_comment()));
+      const auto timestamp = SECONDS(stats->get().latest_comment());
       if (timestamp >= max_time) continue;
       queue.emplace(id, timestamp);
       const auto [top_id, top_time] = queue.top();
@@ -308,7 +296,8 @@ namespace Ludwig {
     shared_ptr<HttpClient> http_client,
     shared_ptr<RichTextParser> rich_text,
     shared_ptr<EventBus> event_bus,
-    optional<shared_ptr<SearchEngine>> search_engine
+    optional<shared_ptr<SearchEngine>> search_engine,
+    optional<pair<Hash, Salt>> first_run_admin_password
   ) : db(db),
       http_client(http_client),
       rich_text(rich_text),
@@ -320,7 +309,8 @@ namespace Ludwig {
         auto ptr = cached_site_detail.exchange(detail);
         if (ptr) delete ptr;
       })),
-      search_engine(search_engine) {
+      search_engine(search_engine),
+      first_run_admin_password(first_run_admin_password) {
     auto txn = db->open_read_txn();
     auto detail = new SiteDetail;
     *detail = SiteDetail::get(txn);
@@ -363,7 +353,16 @@ namespace Ludwig {
     if (!session_opt) return {};
     const auto& session = session_opt->get();
     const auto user = session.user();
-    if (session.remember() && system_clock::now() - system_clock::time_point(seconds(session.created_at())) >= hours(24)) {
+
+    // Don't allow logins as the temp admin user after setup is done
+    if (!user && site_detail()->setup_done) {
+      auto txn = db->open_write_txn();
+      txn.delete_session(session_id);
+      txn.commit();
+      return {};
+    }
+
+    if (session.remember() && system_clock::now() - SECONDS(session.created_at()) >= hours(24)) {
       auto txn = db->open_write_txn();
       const auto [id, expiration] = txn.create_session(
         user,
@@ -374,9 +373,9 @@ namespace Ludwig {
       );
       txn.delete_session(session_id);
       txn.commit();
-      return { { .user_id = user, .session_id = id, .expiration = system_clock::time_point(seconds(expiration))} };
+      return { { .user_id = user, .session_id = id, .expiration = SECONDS(expiration)} };
     }
-    return { { .user_id = user, .session_id = session_id, .expiration = system_clock::time_point(seconds(session.expires_at())) } };
+    return { { .user_id = user, .session_id = session_id, .expiration = SECONDS(session.expires_at()) } };
   }
   auto InstanceController::login(
     string_view username_or_email,
@@ -387,27 +386,47 @@ namespace Ludwig {
   ) -> LoginResponse {
     using namespace chrono;
     uint8_t hash[32];
+    const Hash* target_hash;
+    const Salt* salt;
+    uint64_t user_id = 0;
+
     auto txn = db->open_write_txn();
-    const auto user_id_opt = username_or_email.find('@') == string_view::npos
-      ? txn.get_user_id_by_name(username_or_email)
-      : txn.get_user_id_by_email(username_or_email);
-    if (!user_id_opt) {
-      spdlog::debug("Tried to log in as nonexistent user {}", username_or_email);
-      throw ApiError("Invalid username or password", 400);
+    const bool is_first_run_admin =
+      first_run_admin_password &&
+      !site_detail()->setup_done &&
+      txn.get_admin_list().empty() &&
+      username_or_email == FIRST_RUN_ADMIN_USERNAME;
+    if (is_first_run_admin) {
+      target_hash = &first_run_admin_password->first;
+      salt = &first_run_admin_password->second;
+    } else {
+      const auto user_id_opt = username_or_email.find('@') == string_view::npos
+        ? txn.get_user_id_by_name(username_or_email)
+        : txn.get_user_id_by_email(username_or_email);
+      if (!user_id_opt && !is_first_run_admin) {
+        throw ApiError("Invalid username or password", 400,
+          fmt::format("Tried to log in as nonexistent user {}", username_or_email)
+        );
+      }
+      user_id = *user_id_opt;
+      const auto local_user = txn.get_local_user(user_id);
+      if (!local_user) {
+        throw ApiError("Invalid username or password", 400,
+          fmt::format("Tried to log in as non-local user {}", username_or_email)
+        );
+      }
+      target_hash = local_user->get().password_hash();
+      salt = local_user->get().password_salt();
     }
-    const auto user_id = *user_id_opt;
-    const auto local_user = txn.get_local_user(user_id);
-    if (!local_user) {
-      spdlog::debug("Tried to log in as non-local user {}", username_or_email);
-      throw ApiError("Invalid username or password", 400);
-    }
-    hash_password(std::move(password), local_user->get().password_salt()->bytes()->Data(), hash);
+
+    hash_password(std::move(password), salt->bytes()->Data(), hash);
 
     // Note that this returns 0 on success, 1 on failure!
-    if (CRYPTO_memcmp(hash, local_user->get().password_hash()->bytes()->Data(), 32)) {
+    if (CRYPTO_memcmp(hash, target_hash->bytes()->Data(), 32)) {
       // TODO: Lock users out after repeated failures
-      spdlog::debug("Tried to login with wrong password for user {}", username_or_email);
-      throw ApiError("Invalid username or password", 400);
+      throw ApiError("Invalid username or password", 400,
+        fmt::format("Tried to login with wrong password for user {}", username_or_email)
+      );
     }
     const auto [session_id, expiration] = txn.create_session(
       user_id,
@@ -418,7 +437,7 @@ namespace Ludwig {
         : duration_cast<seconds>(days{1}).count()
     );
     txn.commit();
-    return { .user_id = user_id, .session_id = session_id, .expiration = system_clock::time_point(seconds(expiration)) };
+    return { .user_id = user_id, .session_id = session_id, .expiration = SECONDS(expiration) };
   }
   auto InstanceController::thread_detail(
     ReadTxnBase& txn,
@@ -560,7 +579,7 @@ namespace Ludwig {
     if (iter->is_done()) return {};
     return PageCursor(iter->get_cursor()->int_field_0(), **iter);
   }
-  static inline auto earliest_time(SortType sort) -> chrono::time_point<chrono::system_clock> {
+  static inline auto earliest_time(SortType sort) -> chrono::system_clock::time_point {
     using namespace chrono;
     const auto now = system_clock::now();
     switch (sort) {
@@ -573,14 +592,14 @@ namespace Ludwig {
       case SortType::TopTwelveHour: return now - 12h;
       case SortType::TopSixHour: return now - 6h;
       case SortType::TopHour: return now - 1h;
-      default: return time_point<system_clock>::min();
+      default: return system_clock::time_point::min();
     }
   }
   static inline auto new_comments_cursor(PageCursor& from, optional<uint64_t> first_k = {}) -> optional<pair<Cursor, uint64_t>> {
     using namespace chrono;
     if (!from) return {};
     const auto time = (uint64_t)duration_cast<seconds>(
-      (system_clock::time_point(seconds(from.k)) - ACTIVE_COMMENT_MAX_AGE).time_since_epoch()
+      (SECONDS(from.k) - ACTIVE_COMMENT_MAX_AGE).time_since_epoch()
     ).count();
     return pair(first_k ? Cursor(*first_k, time) : Cursor(time), from.v);
   }
@@ -595,7 +614,7 @@ namespace Ludwig {
   ) -> PageCursor {
     using namespace chrono;
     const auto board = txn.get_board(board_id);
-    if (!board) throw ApiError("Board does not exist", 404);
+    if (!board) throw ApiError("Board does not exist", 410);
     const auto out_with_card = [&](const ThreadDetail& thread) {
       if (thread.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, thread.id);
       out(thread);
@@ -634,7 +653,7 @@ namespace Ludwig {
           txn,
           txn.list_threads_of_board_new(board_id, new_comments_cursor(from, board_id)),
           get_entry,
-          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt,
+          from ? optional(SECONDS(from.k)) : nullopt,
           limit
         );
       case SortType::New:
@@ -664,7 +683,7 @@ namespace Ludwig {
     for (uint64_t thread_id : *iter) {
       try {
         const auto entry = ThreadDetail::get(txn, thread_id, login, {}, false, board, false);
-        const system_clock::time_point time(seconds(entry.thread().created_at()));
+        const auto time = SECONDS(entry.thread().created_at());
         if (time < earliest || !entry.should_show(login)) continue;
         out_with_card(entry);
       } catch (const ApiError& e) {
@@ -684,9 +703,8 @@ namespace Ludwig {
     PageCursor from,
     uint16_t limit
   ) -> PageCursor {
-    using namespace chrono;
     const auto board = txn.get_board(board_id);
-    if (!board) throw ApiError("Board does not exist", 404);
+    if (!board) throw ApiError("Board does not exist", 410);
     const auto get_entry = [&](uint64_t id) -> optional<CommentDetail> {
       if (from && id == from.v) return {};
       const auto e = optional(CommentDetail::get(txn, id, login, {}, false, {}, false, board, false));
@@ -720,7 +738,7 @@ namespace Ludwig {
           txn,
           txn.list_comments_of_board_new(board_id, new_comments_cursor(from, board_id)),
           get_entry,
-          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt,
+          from ? optional(SECONDS(from.k)) : nullopt,
           limit
         );
       case SortType::New:
@@ -750,7 +768,7 @@ namespace Ludwig {
     for (uint64_t comment_id : *iter) {
       try {
         const auto entry = CommentDetail::get(txn, comment_id, login, {}, false, {}, false, board, false);
-        const system_clock::time_point time(seconds(entry.comment().created_at()));
+        const auto time = SECONDS(entry.comment().created_at());
         if (time < earliest || !entry.should_show(login)) continue;
         out(entry);
       } catch (const ApiError& e) {
@@ -770,7 +788,6 @@ namespace Ludwig {
     PageCursor from,
     uint16_t limit
   ) -> PageCursor {
-    using namespace chrono;
     function<bool (const ThreadDetail&)> filter_thread;
     switch (feed_id) {
       case FEED_ALL:
@@ -789,7 +806,7 @@ namespace Ludwig {
         break;
       }
       default:
-        throw ApiError(fmt::format("No feed with ID {:x}", feed_id), 404);
+        throw ApiError(fmt::format("No feed with ID {:x}", feed_id), 410);
     }
     const auto out_with_card = [&](const ThreadDetail& thread) {
       if (thread.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, thread.id);
@@ -828,7 +845,7 @@ namespace Ludwig {
           txn,
           txn.list_threads_new(new_comments_cursor(from)),
           get_entry,
-          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt,
+          from ? optional(SECONDS(from.k)) : nullopt,
           limit
         );
       case SortType::New:
@@ -858,7 +875,7 @@ namespace Ludwig {
     for (uint64_t thread_id : *iter) {
       try {
         const auto entry = ThreadDetail::get(txn, thread_id, login);
-        const system_clock::time_point time(seconds(entry.thread().created_at()));
+        const auto time = SECONDS(entry.thread().created_at());
         if (time < earliest || !entry.should_show(login)) continue;
         out_with_card(entry);
       } catch (const ApiError& e) {
@@ -878,7 +895,6 @@ namespace Ludwig {
     PageCursor from,
     uint16_t limit
   ) -> PageCursor {
-    using namespace chrono;
     function<bool (const CommentDetail&)> filter_comment;
     switch (feed_id) {
       case FEED_ALL:
@@ -897,7 +913,7 @@ namespace Ludwig {
         break;
       }
       default:
-        throw ApiError(fmt::format("No feed with ID {:x}", feed_id), 404);
+        throw ApiError(fmt::format("No feed with ID {:x}", feed_id), 410);
     }
     const auto get_entry = [&](uint64_t id) -> optional<CommentDetail> {
       if (from && id == from.v) return {};
@@ -932,7 +948,7 @@ namespace Ludwig {
           txn,
           txn.list_comments_new(new_comments_cursor(from)),
           get_entry,
-          from ? optional(system_clock::time_point(seconds(from.k))) : nullopt,
+          from ? optional(SECONDS(from.k)) : nullopt,
           limit
         );
       case SortType::New:
@@ -962,7 +978,7 @@ namespace Ludwig {
     for (uint64_t comment_id : *iter) {
       try {
         const auto entry = CommentDetail::get(txn, comment_id, login);
-        const system_clock::time_point time(seconds(entry.comment().created_at()));
+        const auto time = SECONDS(entry.comment().created_at());
         if (time < earliest || !entry.should_show(login)) continue;
         out(entry);
       } catch (const ApiError& e) {
@@ -983,7 +999,7 @@ namespace Ludwig {
     uint16_t limit
   ) -> PageCursor {
     const auto user = txn.get_user(user_id);
-    if (!user) throw ApiError("User does not exist", 404);
+    if (!user) throw ApiError("User does not exist", 410);
     optional<DBIter> iter;
     switch (sort) {
       case UserPostSortType::New:
@@ -1094,7 +1110,7 @@ namespace Ludwig {
     return out;
   }
 
-  auto InstanceController::first_run_setup(const FirstRunSetup& update) -> void {
+  auto InstanceController::first_run_setup(FirstRunSetup&& update) -> void {
     const auto now = now_s();
     auto txn = db->open_write_txn();
     if (!txn.get_setting_int(SettingsKey::setup_done)) {
@@ -1102,9 +1118,7 @@ namespace Ludwig {
 
       // JWT secret
       uint8_t jwt_secret[JWT_SECRET_SIZE];
-      if (!RAND_bytes(jwt_secret, JWT_SECRET_SIZE)) {
-        throw ApiError("Not enough randomness to generate JWT secret", 500);
-      }
+      RAND_bytes(jwt_secret, JWT_SECRET_SIZE);
       txn.set_setting(SettingsKey::jwt_secret, string_view{(const char*)jwt_secret, JWT_SECRET_SIZE});
       OPENSSL_cleanse(jwt_secret, JWT_SECRET_SIZE);
 
@@ -1150,14 +1164,49 @@ namespace Ludwig {
       txn.set_setting(SettingsKey::setup_done, 1);
       txn.set_setting(SettingsKey::created_at, now);
     }
-    // TODO: Create admin account
-    // TODO: Create default board
+    if (update.admin_name && update.admin_password) {
+      create_local_user_internal(
+        txn, *update.admin_name, {}, std::move(*update.admin_password), false, IsApproved::Yes, IsAdmin::Yes, {}
+      );
+    }
+    if (update.default_board_name) {
+      if (!regex_match(update.default_board_name->begin(), update.default_board_name->end(), username_regex)) {
+        throw ApiError("Invalid board name (only letters, numbers, and underscores allowed; max 64 characters)", 400);
+      }
+      if (txn.get_board_id_by_name(*update.default_board_name)) {
+        throw ApiError("A board with this name already exists on this instance", 409);
+      }
+      FlatBufferBuilder fbb;
+      {
+        const auto name_s = fbb.CreateString(*update.default_board_name);
+        BoardBuilder b(fbb);
+        b.add_created_at(now_s());
+        b.add_name(name_s);
+        fbb.Finish(b.Finish());
+      }
+      const auto board_id = txn.create_board(fbb.GetBufferSpan());
+      if (search_engine) {
+        (*search_engine)->index(board_id, *GetRoot<Board>(fbb.GetBufferPointer()));
+      }
+      fbb.Clear();
+      {
+        LocalBoardBuilder b(fbb);
+        b.add_owner(txn.get_admin_list()[0]);
+        fbb.Finish(b.Finish());
+      }
+      txn.set_local_board(board_id, fbb.GetBufferSpan());
+    }
     txn.set_setting(SettingsKey::name, update.name.value_or("Ludwig"));
     txn.set_setting(SettingsKey::description, update.description.value_or("A new Ludwig server"));
     txn.set_setting(SettingsKey::icon_url, update.icon_url.value_or("").value_or(""));
     txn.set_setting(SettingsKey::banner_url, update.banner_url.value_or("").value_or(""));
+    txn.set_setting(SettingsKey::application_question, update.application_question.value_or("").value_or(""));
     txn.set_setting(SettingsKey::post_max_length, update.max_post_length.value_or(MiB));
+    txn.set_setting(SettingsKey::home_page_type, (uint64_t)update.home_page_type.value_or(HomePageType::Local));
+    txn.set_setting(SettingsKey::votes_enabled, update.votes_enabled.value_or(false));
+    txn.set_setting(SettingsKey::downvotes_enabled, update.downvotes_enabled.value_or(false));
     txn.set_setting(SettingsKey::javascript_enabled, update.javascript_enabled.value_or(false));
+    txn.set_setting(SettingsKey::infinite_scroll_enabled, update.infinite_scroll_enabled.value_or(false));
     txn.set_setting(SettingsKey::board_creation_admin_only, update.board_creation_admin_only.value_or(true));
     txn.set_setting(SettingsKey::registration_enabled, update.registration_enabled.value_or(false));
     txn.set_setting(SettingsKey::registration_application_required, update.registration_application_required.value_or(false));
@@ -1167,18 +1216,31 @@ namespace Ludwig {
     txn.commit();
     event_bus->dispatch(Event::SiteUpdate);
   }
+  auto InstanceController::first_run_setup_options(ReadTxnBase& txn) -> FirstRunSetupOptions {
+    return {
+      .admin_exists = !txn.get_admin_list().empty(),
+      .default_board_exists = !!txn.get_setting_int(SettingsKey::default_board_id),
+      .base_url_set = !txn.get_setting_str(SettingsKey::base_url).empty(),
+      .home_page_type_set = !!txn.get_setting_int(SettingsKey::home_page_type),
+    };
+  }
   auto InstanceController::update_site(const SiteUpdate& update, optional<uint64_t> as_user) -> void {
     {
       auto txn = db->open_write_txn();
-      if (as_user && !can_change_site_settings(LocalUserDetail::get(txn, *as_user))) {
+      if (as_user && !can_change_site_settings(LocalUserDetail::get_login(txn, *as_user))) {
         throw ApiError("User does not have permission to change site settings", 403);
       }
       if (const auto v = update.name) txn.set_setting(SettingsKey::name, *v);
       if (const auto v = update.description) txn.set_setting(SettingsKey::description, *v);
       if (const auto v = update.icon_url) txn.set_setting(SettingsKey::icon_url, v->value_or(""));
       if (const auto v = update.banner_url) txn.set_setting(SettingsKey::banner_url, v->value_or(""));
+      if (const auto v = update.application_question) txn.set_setting(SettingsKey::application_question, v->value_or(""));
       if (const auto v = update.max_post_length) txn.set_setting(SettingsKey::post_max_length, *v);
+      if (const auto v = update.home_page_type) txn.set_setting(SettingsKey::home_page_type, (uint64_t)*v);
+      if (const auto v = update.votes_enabled) txn.set_setting(SettingsKey::votes_enabled, *v);
+      if (const auto v = update.downvotes_enabled) txn.set_setting(SettingsKey::downvotes_enabled, *v);
       if (const auto v = update.javascript_enabled) txn.set_setting(SettingsKey::javascript_enabled, *v);
+      if (const auto v = update.infinite_scroll_enabled) txn.set_setting(SettingsKey::infinite_scroll_enabled, *v);
       if (const auto v = update.board_creation_admin_only) txn.set_setting(SettingsKey::board_creation_admin_only, *v);
       if (const auto v = update.registration_enabled) txn.set_setting(SettingsKey::registration_enabled, *v);
       if (const auto v = update.registration_application_required) txn.set_setting(SettingsKey::registration_application_required, *v);
@@ -1202,8 +1264,9 @@ namespace Ludwig {
     string_view username,
     optional<string_view> email,
     SecretString&& password,
-    bool is_approved,
     bool is_bot,
+    IsApproved is_approved,
+    IsAdmin is_admin,
     optional<uint64_t> invite
   ) -> uint64_t {
     if (!regex_match(username.begin(), username.end(), username_regex)) {
@@ -1248,7 +1311,8 @@ namespace Ludwig {
       if (email_s) b.add_email(*email_s);
       b.add_password_hash(&hash_struct);
       b.add_password_salt(&salt_struct);
-      b.add_approved(is_approved);
+      b.add_approved(is_approved == IsApproved::Yes);
+      b.add_admin(is_admin == IsAdmin::Yes);
       if (invite) b.add_invite(*invite);
       fbb.Finish(b.Finish());
     }
@@ -1279,24 +1343,20 @@ namespace Ludwig {
     auto txn = db->open_write_txn();
     const bool approved = !site->registration_application_required;
     const auto user_id = create_local_user_internal(
-      txn, username, email, std::move(password), approved, false, invite_id
+      txn, username, email, std::move(password), false, approved ? IsApproved::Yes : IsApproved::No, IsAdmin::No, invite_id
     );
     if (invite_id) {
       const auto invite_opt = txn.get_invite(*invite_id);
-      if (!invite_opt) {
-        throw ApiError("Invalid invite code", 400);
-      }
+      if (!invite_opt) throw ApiError("Invalid invite code", 410);
       const auto& invite = invite_opt->get();
       if (invite.accepted_at()) {
         spdlog::warn("Attempt to use already-used invite code {} (for username {}, email {}, ip {}, user agent {})",
           invite_id_to_code(*invite_id), username, email, ip, user_agent
         );
-        throw ApiError("Expired invite code", 400);
+        throw ApiError("Expired invite code", 410);
       }
       const auto now = now_s();
-      if (invite.expires_at() <= now) {
-        throw ApiError("Expired invite code", 400);
-      }
+      if (invite.expires_at() <= now) throw ApiError("Expired invite code", 410);
       FlatBufferBuilder fbb;
       InviteBuilder b(fbb);
       b.add_from(invite.from());
@@ -1331,7 +1391,7 @@ namespace Ludwig {
   ) -> uint64_t {
     auto txn = db->open_write_txn();
     auto user_id = create_local_user_internal(
-      txn, username, email, std::move(password), true, is_bot, invite
+      txn, username, email, std::move(password), is_bot, IsApproved::Yes, IsAdmin::No, invite
     );
     txn.commit();
     return user_id;
@@ -1339,8 +1399,8 @@ namespace Ludwig {
 
   auto InstanceController::update_local_user(uint64_t id, optional<uint64_t> as_user, const LocalUserUpdate& update) -> void {
     auto txn = db->open_write_txn();
-    const auto detail = LocalUserDetail::get(txn, id);
-    const auto login = as_user.transform([&](auto id){return LocalUserDetail::get(txn, id);});
+    const auto login = LocalUserDetail::get_login(txn, as_user);
+    const auto detail = LocalUserDetail::get(txn, id, login);
     if (login && !detail.can_change_settings(login)) {
       throw ApiError("User does not have permission to modify this user", 403);
     }
@@ -1394,14 +1454,14 @@ namespace Ludwig {
     FlatBufferBuilder fbb;
     LocalUserPatch patch { .accepted_application = true };
     auto txn = db->open_write_txn();
-    if (as_user && !LocalUserDetail::get(txn, *as_user).local_user().admin()) {
+    if (as_user && !LocalUserDetail::get_login(txn, *as_user).local_user().admin()) {
       throw ApiError("Only admins can approve user applications", 403);
     }
     const auto old_opt = txn.get_local_user(user_id);
-    if (!old_opt) throw ApiError("User does not exist", 404);
+    if (!old_opt) throw ApiError("User does not exist", 410);
     const auto& old = old_opt->get();
     if (old.accepted_application()) throw ApiError("User's application has already been accepted", 409);
-    if (!txn.get_application(user_id)) throw ApiError("User does not have an application to approve", 404);
+    if (!txn.get_application(user_id)) throw ApiError("User does not have an application to approve", 410);
     fbb.Finish(patch_local_user(fbb, old, {
       .approved = old.approved() || site_detail()->registration_application_required,
       .accepted_application = true
@@ -1415,7 +1475,7 @@ namespace Ludwig {
   }
   auto InstanceController::change_password(uint64_t user_id, SecretString&& new_password) -> void {
     auto txn = db->open_write_txn();
-    auto user = LocalUserDetail::get(txn, user_id);
+    const auto user = LocalUserDetail::get_login(txn, user_id);
     FlatBufferBuilder fbb;
     fbb.Finish(patch_local_user(fbb, user.local_user(), { .password = std::move(new_password) }));
     txn.set_local_user(user_id, fbb.GetBufferSpan());
@@ -1426,7 +1486,7 @@ namespace Ludwig {
   }
   auto InstanceController::change_password(uint64_t user_id, SecretString&& old_password, SecretString&& new_password) -> void {
     auto txn = db->open_write_txn();
-    auto user = LocalUserDetail::get(txn, user_id);
+    const auto user = LocalUserDetail::get_login(txn, user_id);
     uint8_t hash[32];
     hash_password(std::move(old_password), user.local_user().password_salt()->bytes()->Data(), hash);
     // Note that this returns 0 on success, 1 on failure!
@@ -1440,8 +1500,7 @@ namespace Ludwig {
   auto InstanceController::create_site_invite(optional<uint64_t> as_user) -> uint64_t {
     using namespace chrono;
     auto txn = db->open_write_txn();
-    const auto user = as_user.transform([&](auto id){return LocalUserDetail::get(txn, id);});
-    if (user) {
+    if (const auto user = LocalUserDetail::get_login(txn, as_user)) {
       if (site_detail()->invite_admin_only && !user->local_user().admin()) {
         throw ApiError("Only admins can create invite codes", 403);
       }
@@ -1472,7 +1531,7 @@ namespace Ludwig {
     if (txn.get_board_id_by_name(name)) {
       throw ApiError("A board with this name already exists on this instance", 409);
     }
-    if (!can_create_board(LocalUserDetail::get(txn, owner))) {
+    if (!can_create_board(LocalUserDetail::get_login(txn, owner))) {
       throw ApiError("User does not have permission to create boards", 403);
     }
     FlatBufferBuilder fbb;
@@ -1510,7 +1569,7 @@ namespace Ludwig {
   }
   auto InstanceController::update_local_board(uint64_t id, optional<uint64_t> as_user, const LocalBoardUpdate& update) -> void {
     auto txn = db->open_write_txn();
-    const auto login = as_user.transform([&](auto id){return LocalUserDetail::get(txn, id);});
+    const auto login = LocalUserDetail::get_login(txn, as_user);
     const auto detail = LocalBoardDetail::get(txn, id, login);
     if (login && !detail.can_change_settings(login)) {
       throw ApiError("User does not have permission to modify this board", 403);
@@ -1567,17 +1626,12 @@ namespace Ludwig {
       throw ApiError("Post must contain either a submission URL or text content", 400);
     }
     auto len = title.length();
-    if (len > 1024) {
-      throw ApiError("Post title cannot be longer than 1024 bytes", 400);
-    } else if (len < 1) {
-      throw ApiError("Post title cannot be blank", 400);
-    }
+    if (len > 1024) throw ApiError("Post title cannot be longer than 1024 bytes", 400);
+    else if (len < 1) throw ApiError("Post title cannot be blank", 400);
     uint64_t thread_id;
     {
       auto txn = db->open_write_txn();
-      optional<LocalUserDetail> user;
-      try { user = LocalUserDetail::get(txn, author); }
-      catch (const ApiError&) { throw ApiError("User does not exist", 403); }
+      const auto user = LocalUserDetail::get_login(txn, author);
       if (!BoardDetail::get(txn, board, user).can_create_thread(user)) {
         throw ApiError("User cannot create a thread in this board", 403);
       }
@@ -1615,7 +1669,7 @@ namespace Ludwig {
   }
   auto InstanceController::update_local_thread(uint64_t id, optional<uint64_t> as_user, const ThreadUpdate& update) -> void {
     auto txn = db->open_write_txn();
-    const auto login = as_user.transform([&](auto id){return LocalUserDetail::get(txn, id);});
+    const auto login = LocalUserDetail::get_login(txn, as_user);
     const auto detail = ThreadDetail::get(txn, id, login);
     if (detail.thread().instance()) {
       throw ApiError("Cannot edit a thread from a different instance", 403);
@@ -1643,13 +1697,10 @@ namespace Ludwig {
     optional<string_view> content_warning
   ) -> uint64_t {
     auto len = text_content_markdown.length();
-    if (len > MiB) {
-      throw ApiError("Comment text content cannot be larger than 1MiB", 400);
-    } else if (len < 1) {
-      throw ApiError("Comment text content cannot be blank", 400);
-    }
+    if (len > MiB) throw ApiError("Comment text content cannot be larger than 1MiB", 400);
+    else if (len < 1) throw ApiError("Comment text content cannot be blank", 400);
     auto txn = db->open_write_txn();
-    const auto login = LocalUserDetail::get(txn, author);
+    const auto login = LocalUserDetail::get_login(txn, author);
     optional<ThreadDetail> parent_thread;
     optional<CommentDetail> parent_comment;
     try {
@@ -1690,7 +1741,7 @@ namespace Ludwig {
   }
   auto InstanceController::update_local_comment(uint64_t id, optional<uint64_t> as_user, const CommentUpdate& update) -> void {
     auto txn = db->open_write_txn();
-    const auto login = as_user.transform([&](auto id){return LocalUserDetail::get(txn, id);});
+    const auto login = LocalUserDetail::get_login(txn, as_user);
     const auto detail = CommentDetail::get(txn, id, login);
     if (detail.comment().instance()) {
       throw ApiError("Cannot edit a comment from a different instance", 403);
@@ -1712,14 +1763,10 @@ namespace Ludwig {
   }
   auto InstanceController::vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void {
     auto txn = db->open_write_txn();
-    if (!txn.get_user(user_id)) {
-      throw ApiError("User does not exist", 400);
-    }
+    if (!txn.get_user(user_id)) throw ApiError("User does not exist", 410);
     const auto thread = txn.get_thread(post_id);
     const auto comment = !thread ? txn.get_comment(post_id) : nullopt;
-    if (!thread && !comment) {
-      throw ApiError("Post does not exist", 400);
-    }
+    if (!thread && !comment) throw ApiError("Post does not exist", 410);
     const auto op = thread ? thread->get().author() : comment->get().author();
     txn.set_vote(user_id, post_id, vote);
     txn.commit();
@@ -1729,12 +1776,8 @@ namespace Ludwig {
   }
   auto InstanceController::subscribe(uint64_t user_id, uint64_t board_id, bool subscribed) -> void {
     auto txn = db->open_write_txn();
-    if (!txn.get_user(user_id)) {
-      throw ApiError("User does not exist", 400);
-    }
-    if (!txn.get_board(board_id)) {
-      throw ApiError("Board does not exist", 400);
-    }
+    if (!txn.get_user(user_id)) throw ApiError("User does not exist", 410);
+    if (!txn.get_board(board_id)) throw ApiError("Board does not exist", 410);
     txn.set_subscription(user_id, board_id, subscribed);
     txn.commit();
 
@@ -1743,42 +1786,30 @@ namespace Ludwig {
   }
   auto InstanceController::save_post(uint64_t user_id, uint64_t post_id, bool saved) -> void {
     auto txn = db->open_write_txn();
-    if (!txn.get_local_user(user_id)) {
-      throw ApiError("User does not exist", 400);
-    }
-    if (!txn.get_post_stats(post_id)) {
-      throw ApiError("Post does not exist", 400);
-    }
+    if (!txn.get_local_user(user_id)) throw ApiError("User does not exist", 410);
+    if (!txn.get_post_stats(post_id)) throw ApiError("Post does not exist", 410);
     txn.set_save(user_id, post_id, saved);
     txn.commit();
   }
   auto InstanceController::hide_post(uint64_t user_id, uint64_t post_id, bool hidden) -> void {
     auto txn = db->open_write_txn();
-    if (!txn.get_local_user(user_id)) {
-      throw ApiError("User does not exist", 400);
-    }
-    if (!txn.get_post_stats(post_id)) {
-      throw ApiError("Post does not exist", 400);
-    }
+    if (!txn.get_local_user(user_id)) throw ApiError("User does not exist", 410);
+    if (!txn.get_post_stats(post_id)) throw ApiError("Post does not exist", 410);
     txn.set_hide_post(user_id, post_id, hidden);
     txn.commit();
   }
   auto InstanceController::hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden) -> void {
     auto txn = db->open_write_txn();
     if (!txn.get_local_user(user_id) || !txn.get_user(hidden_user_id)) {
-      throw ApiError("User does not exist", 400);
+      throw ApiError("User does not exist", 410);
     }
     txn.set_hide_user(user_id, hidden_user_id, hidden);
     txn.commit();
   }
   auto InstanceController::hide_board(uint64_t user_id, uint64_t board_id, bool hidden) -> void {
     auto txn = db->open_write_txn();
-    if (!txn.get_local_user(user_id)) {
-      throw ApiError("User does not exist", 400);
-    }
-    if (!txn.get_post_stats(board_id)) {
-      throw ApiError("Board does not exist", 400);
-    }
+    if (!txn.get_local_user(user_id)) throw ApiError("User does not exist", 410);
+    if (!txn.get_post_stats(board_id)) throw ApiError("Board does not exist", 410);
     txn.set_hide_post(user_id, board_id, hidden);
     txn.commit();
   }

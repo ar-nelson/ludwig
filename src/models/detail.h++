@@ -4,6 +4,14 @@
 
 namespace Ludwig {
 
+  enum class HomePageType : uint8_t {
+    Subscribed = 1,
+    Local,
+    All,
+    BoardList,
+    SingleBoard
+  };
+
   struct SiteDetail {
     std::string name, base_url, description, public_key_pem;
     std::optional<std::string> icon_url, banner_url, application_question;
@@ -69,13 +77,14 @@ namespace Ludwig {
   };
 
   struct ThreadDetail {
-  private:
-    static const flatbuffers::FlatBufferBuilder null_user, null_board, null_link_card;
-  public:
+    static const LinkCard* const null_link_card;
+    static const User* const null_user;
+    static const Board* const null_board;
+
     uint64_t id;
     double rank;
     Vote your_vote;
-    bool saved, hidden, user_hidden, board_hidden;
+    bool saved, hidden, user_hidden, board_hidden, board_subscribed;
     std::reference_wrapper<const Thread> _thread;
     std::reference_wrapper<const PostStats> _stats;
     OptRef<LinkCard> _link_card;
@@ -85,13 +94,13 @@ namespace Ludwig {
     auto thread() const noexcept -> const Thread& { return _thread; }
     auto stats() const noexcept -> const PostStats& { return _stats; }
     auto link_card() const noexcept -> const LinkCard& {
-      return _link_card ? _link_card->get() : *flatbuffers::GetRoot<LinkCard>(null_link_card.GetBufferPointer());
+      return _link_card ? _link_card->get() : *null_link_card;
     }
     auto author() const noexcept -> const User& {
-      return _author ? _author->get() : *flatbuffers::GetRoot<User>(null_user.GetBufferPointer());
+      return _author ? _author->get() : *null_user;
     }
     auto board() const noexcept -> const Board& {
-      return _board ? _board->get() : *flatbuffers::GetRoot<Board>(null_board.GetBufferPointer());
+      return _board ? _board->get() : *null_board;
     }
     auto mod_state() const noexcept -> ModState { return thread().mod_state(); }
     auto created_at() const noexcept -> std::chrono::system_clock::time_point {
@@ -104,8 +113,8 @@ namespace Ludwig {
     auto can_reply_to(Login login) const noexcept -> bool;
     auto can_edit(Login login) const noexcept -> bool;
     auto can_delete(Login login) const noexcept -> bool;
-    auto can_upvote(Login login) const noexcept -> bool;
-    auto can_downvote(Login login) const noexcept -> bool;
+    auto can_upvote(Login login, const SiteDetail* site) const noexcept -> bool;
+    auto can_downvote(Login login, const SiteDetail* site) const noexcept -> bool;
     auto should_fetch_card() const noexcept -> bool;
 
     static constexpr std::string_view noun = "thread";
@@ -130,29 +139,31 @@ namespace Ludwig {
   };
 
   struct CommentDetail {
-  private:
-    static const flatbuffers::FlatBufferBuilder null_user, null_thread, null_board;
-  public:
+    static const User* const null_user;
+    static const Thread* const null_thread;
+    static const Board* const null_board;
+
     uint64_t id;
     double rank;
     Vote your_vote;
-    bool saved, hidden, thread_hidden, user_hidden, board_hidden;
+    bool saved, hidden, thread_hidden, user_hidden, board_hidden, board_subscribed;
     std::reference_wrapper<const Comment> _comment;
     std::reference_wrapper<const PostStats> _stats;
     OptRef<User> _author;
     OptRef<Thread> _thread;
     OptRef<Board> _board;
+    std::vector<uint64_t> path;
 
     auto comment() const noexcept -> const Comment& { return _comment; }
     auto stats() const noexcept -> const PostStats& { return _stats; }
     auto author() const noexcept -> const User& {
-      return _author ? _author->get() : *flatbuffers::GetRoot<User>(null_user.GetBufferPointer());
+      return _author ? _author->get() : *null_user;
     }
     auto thread() const noexcept -> const Thread& {
-      return _thread ? _thread->get() : *flatbuffers::GetRoot<Thread>(null_thread.GetBufferPointer());
+      return _thread ? _thread->get() : *null_thread;
     }
     auto board() const noexcept -> const Board& {
-      return _board ? _board->get() : *flatbuffers::GetRoot<Board>(null_board.GetBufferPointer());
+      return _board ? _board->get() : *null_board;
     }
     auto mod_state() const noexcept -> ModState { return comment().mod_state(); }
     auto created_at() const noexcept -> std::chrono::system_clock::time_point {
@@ -165,8 +176,8 @@ namespace Ludwig {
     auto can_reply_to(Login login) const noexcept -> bool;
     auto can_edit(Login login) const noexcept -> bool;
     auto can_delete(Login login) const noexcept -> bool;
-    auto can_upvote(Login login) const noexcept -> bool;
-    auto can_downvote(Login login) const noexcept -> bool;
+    auto can_upvote(Login login, const SiteDetail* site) const noexcept -> bool;
+    auto can_downvote(Login login, const SiteDetail* site) const noexcept -> bool;
 
     static constexpr std::string_view noun = "comment";
     static auto get(
@@ -192,9 +203,20 @@ namespace Ludwig {
   };
 
   struct LocalUserDetail : UserDetail {
+    static const User* const temp_admin_user;
+    static const LocalUser* const temp_admin_local_user;
+    static const UserStats* const temp_admin_stats;
+    static auto temp_admin() -> LocalUserDetail {
+      return {{ 0, *temp_admin_user, std::reference_wrapper(*temp_admin_local_user), *temp_admin_stats, false }};
+    }
+
     inline auto local_user() const -> const LocalUser& { return _local_user->get(); }
 
-    static auto get(ReadTxnBase& txn, uint64_t id, Login login = {}) -> LocalUserDetail;
+    static auto get(ReadTxnBase& txn, uint64_t id, Login login) -> LocalUserDetail;
+    static auto get_login(ReadTxnBase& txn, uint64_t id) -> LocalUserDetail;
+    static auto get_login(ReadTxnBase& txn, std::optional<uint64_t> id) -> std::optional<LocalUserDetail> {
+      return id.transform([&](auto id){return get_login(txn, id);});
+    }
   };
 
   struct LocalBoardDetail : BoardDetail {

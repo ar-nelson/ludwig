@@ -115,6 +115,25 @@ namespace Ludwig {
     throw ApiError("Bad board sort type", 400);
   }
 
+  constexpr auto to_string(HomePageType type) -> std::string_view {
+    switch (type) {
+      case HomePageType::All: return "All";
+      case HomePageType::Local: return "Local";
+      case HomePageType::Subscribed: return "Subscribed";
+      case HomePageType::BoardList: return "BoardList";
+      case HomePageType::SingleBoard: return "SingleBoard";
+    }
+  }
+
+  static inline auto parse_home_page_type(std::string_view str) -> HomePageType {
+    if (str == "All") return HomePageType::All;
+    if (str == "Local") return HomePageType::Local;
+    if (str == "Subscribed") return HomePageType::Subscribed;
+    if (str == "BoardList") return HomePageType::BoardList;
+    if (str == "SingleBoard") return HomePageType::SingleBoard;
+    throw ApiError("Bad home page type", 400);
+  }
+
   enum class SubscribedType : uint8_t {
     NotSubscribed,
     Subscribed,

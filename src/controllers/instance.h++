@@ -16,6 +16,19 @@
 namespace Ludwig {
   constexpr size_t ITEMS_PER_PAGE = 20;
 
+# define USERNAME_REGEX_SRC R"([a-zA-Z][a-zA-Z0-9_]{0,63})"
+  static const std::regex
+    username_regex(USERNAME_REGEX_SRC),
+    email_regex(
+      R"((?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|")"
+      R"((?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@)"
+      R"((?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|)"
+      R"(\[(?:(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9]))\.){3})"
+      R"((?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9])|[a-z0-9-]*[a-z0-9]:)"
+      R"((?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\]))",
+      std::regex::ECMAScript | std::regex::icase
+    );
+
   struct LoginResponse {
     uint64_t user_id, session_id;
     std::chrono::system_clock::time_point expiration;
@@ -160,6 +173,9 @@ namespace Ludwig {
     catch (...) { throw ApiError("Bad hexadecimal ID", 400); }
   }
 
+  enum class IsApproved : bool { No, Yes };
+  enum class IsAdmin : bool { No, Yes };
+
   class InstanceController : public std::enable_shared_from_this<InstanceController> {
   private:
     std::shared_ptr<DB> db;
@@ -168,6 +184,7 @@ namespace Ludwig {
     std::shared_ptr<EventBus> event_bus;
     EventBus::Subscription site_detail_sub;
     std::optional<std::shared_ptr<SearchEngine>> search_engine;
+    std::optional<std::pair<Hash, Salt>> first_run_admin_password;
     std::atomic<const SiteDetail*> cached_site_detail;
     std::map<uint64_t, std::pair<uint64_t, std::chrono::system_clock::time_point>> password_reset_tokens;
     std::mutex password_reset_tokens_mutex;
@@ -177,8 +194,9 @@ namespace Ludwig {
       std::string_view username,
       std::optional<std::string_view> email,
       SecretString&& password,
-      bool is_approved,
       bool is_bot,
+      IsApproved is_approved,
+      IsAdmin is_admin,
       std::optional<uint64_t> invite
     ) -> uint64_t;
 
@@ -191,7 +209,8 @@ namespace Ludwig {
       std::shared_ptr<HttpClient> http_client,
       std::shared_ptr<RichTextParser> rich_text,
       std::shared_ptr<EventBus> event_bus = std::make_shared<DummyEventBus>(),
-      std::optional<std::shared_ptr<SearchEngine>> search_engine = {}
+      std::optional<std::shared_ptr<SearchEngine>> search_engine = {},
+      std::optional<std::pair<Hash, Salt>> first_run_admin_password = {}
     );
     ~InstanceController();
 
@@ -333,7 +352,7 @@ namespace Ludwig {
     ) -> std::vector<SearchResultDetail>;
     auto first_run_setup_options(ReadTxnBase& txn) -> FirstRunSetupOptions;
 
-    auto first_run_setup(const FirstRunSetup& update) -> void;
+    auto first_run_setup(FirstRunSetup&& update) -> void;
     auto update_site(const SiteUpdate& update, std::optional<uint64_t> as_user) -> void;
     auto register_local_user(
       std::string_view username,

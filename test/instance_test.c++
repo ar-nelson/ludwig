@@ -379,19 +379,19 @@ TEST_CASE_METHOD(PopulatedInstance, "list users", "[instance]") {
 
   // New, logged in as admin, local only
   vec.clear();
-  next = controller->list_users(add_name, txn, UserSortType::New, true, LocalUserDetail::get(txn, users[0]));
+  next = controller->list_users(add_name, txn, UserSortType::New, true, LocalUserDetail::get_login(txn, users[0]));
   CHECK(vec == vector<string>{"unapproved", "robot", "troll", "rando", "admin"});
   CHECK_FALSE(next);
 
   // New, logged in as rando (excludes bots), local only
   vec.clear();
-  next = controller->list_users(add_name, txn, UserSortType::New, true, LocalUserDetail::get(txn, users[1]));
+  next = controller->list_users(add_name, txn, UserSortType::New, true, LocalUserDetail::get_login(txn, users[1]));
   CHECK(vec == vector<string>{"rando", "admin"});
   CHECK_FALSE(next);
 
   // New, logged in as troll (includes self, hides admin), local only
   vec.clear();
-  next = controller->list_users(add_name, txn, UserSortType::New, true, LocalUserDetail::get(txn, users[2]));
+  next = controller->list_users(add_name, txn, UserSortType::New, true, LocalUserDetail::get_login(txn, users[2]));
   CHECK(vec == vector<string>{"robot", "troll", "rando"});
   CHECK_FALSE(next);
 }
@@ -432,7 +432,7 @@ TEST_CASE_METHOD(Instance, "register and login", "[instance]") {
   // get created user
   {
     auto txn = controller->open_read_txn();
-    const auto u = LocalUserDetail::get(txn, id);
+    const auto u = LocalUserDetail::get_login(txn, id);
     REQUIRE(u.id == id);
     CHECK(u.user().name()->string_view() == "somebody");
     CHECK(u.local_user().email()->string_view() == "somebody@example.test");
@@ -515,7 +515,7 @@ TEST_CASE_METHOD(Instance, "register with application", "[instance]") {
 
   {
     auto txn = controller->open_read_txn();
-    const auto u = LocalUserDetail::get(txn, id);
+    const auto u = LocalUserDetail::get_login(txn, id);
     REQUIRE(u.id == id);
     CHECK(u.user().name()->string_view() == "somebody");
     CHECK(u.local_user().email()->string_view() == "somebody@example.test");
@@ -536,7 +536,7 @@ TEST_CASE_METHOD(Instance, "register with application", "[instance]") {
 
   {
     auto txn = controller->open_read_txn();
-    const auto u = LocalUserDetail::get(txn, id);
+    const auto u = LocalUserDetail::get_login(txn, id);
     CHECK(u.user().name()->string_view() == "somebody");
     CHECK(u.local_user().email()->string_view() == "somebody@example.test");
     CHECK(u.local_user().approved());
@@ -583,7 +583,7 @@ TEST_CASE_METHOD(PopulatedInstance, "register with invite", "[instance]") {
   CHECK(approved);
 
   auto txn = controller->open_read_txn();
-  const auto u = LocalUserDetail::get(txn, id);
+  const auto u = LocalUserDetail::get_login(txn, id);
   REQUIRE(u.id == id);
   CHECK(u.user().name()->string_view() == "somebody");
   CHECK(u.local_user().email()->string_view() == "somebody@example.test");

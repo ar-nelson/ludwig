@@ -137,6 +137,7 @@ set (ludwig_common_src
   src/util/jwt.c++
   src/util/rate_limiter.c++
   src/util/rich_text.c++
+  src/util/setup.c++
   src/util/thumbnailer.c++
   src/util/zstd_db_dump.c++
   src/services/asio_event_bus.c++

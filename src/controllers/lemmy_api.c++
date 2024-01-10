@@ -122,7 +122,7 @@ namespace Ludwig::Lemmy {
   auto ApiController::to_comment(
     uint64_t id,
     const Ludwig::Comment& comment,
-    Ludwig::Login login
+    string path
   ) -> Comment {
     const auto* site = instance->site_detail();
     return {
@@ -133,10 +133,8 @@ namespace Ludwig::Lemmy {
       .ap_id = comment.activity_url()
         ? comment.activity_url()->str()
         : fmt::format("{}/ap/activity/{:x}", site->base_url, id),
-      .content = rich_text->blocks_to_html(comment.content_type(), comment.content(), {
-          .open_links_in_new_tab = login ? login->local_user().open_links_in_new_tab() : false
-        }),
-      .path = "", // TODO: What is Comment.path?
+      .content = comment.content_raw()->str(),
+      .path = path.empty() ? fmt::format("0.{}", id) : path,
       .published = chrono::system_clock::time_point(chrono::seconds(comment.created_at())),
       .updated = comment.updated_at().transform(λx(chrono::system_clock::time_point(chrono::seconds(x)))),
       .deleted = !!comment.deleted_at(),
@@ -146,21 +144,20 @@ namespace Ludwig::Lemmy {
     };
   }
 
-  auto ApiController::to_community(
-    uint64_t id,
-    const Board& board,
-    bool hidden,
-    Ludwig::Login login
-  ) -> Community {
+  auto ApiController::to_community(uint64_t id, const Board& board, bool hidden) -> Community {
     const auto* site = instance->site_detail();
+    const auto full_name = board.name()->string_view();
+    const string name(full_name.substr(0, full_name.find('@')));
     return {
       .id = id,
       .instance_id = board.instance(),
-      .name = board.name()->str(),
-      .title = board.name()->str(),
+      .name = name,
+      .title = name,
+      // Some Lemmy apps (Sync) expect URLs with *exactly* the format
+      // "https://domain.example/c/name", and will do weird things otherwise.
       .actor_id = board.actor_id()
         ? board.actor_id()->str()
-        : fmt::format("{}/ap/actor/{:x}", site->base_url, id),
+        : fmt::format("{}/c/{}", site->base_url, name),
       .followers_url = board.followers_url()
         ? board.followers_url()->str()
         : fmt::format("{}/ap/actor/{:x}/followers", site->base_url, id),
@@ -175,9 +172,7 @@ namespace Ludwig::Lemmy {
       .banner = board.banner_url()
         ? optional(fmt::format("{}/media/board/{}/banner.webp", site->base_url, board.name()->string_view()))
         : nullopt,
-      .description = rich_text->blocks_to_html(board.description_type(), board.description(), {
-          .open_links_in_new_tab = login ? login->local_user().open_links_in_new_tab() : false
-        }),
+      .description = opt_str(board.description_raw()),
       .display_name = board.display_name()->size()
         ? optional(RichTextParser::plain_text_with_emojis_to_text_content(board.display_name_type(), board.display_name()))
         : nullopt,
@@ -190,12 +185,7 @@ namespace Ludwig::Lemmy {
     };
   }
 
-  auto ApiController::to_post(
-    uint64_t id,
-    const Thread& thread,
-    OptRef<const LinkCard> link_card,
-    Ludwig::Login login
-  ) -> Post {
+  auto ApiController::to_post(uint64_t id, const Thread& thread, OptRef<LinkCard> link_card) -> Post {
     const auto* site = instance->site_detail();
     return {
       .id = id,
@@ -208,10 +198,7 @@ namespace Ludwig::Lemmy {
         : fmt::format("{}/ap/activity/{:x}", site->base_url, id),
       .published = chrono::system_clock::time_point(chrono::seconds(thread.created_at())),
       .updated = thread.updated_at().transform(λx(chrono::system_clock::time_point(chrono::seconds(x)))),
-      .body = thread.content_text()->size() ? optional(
-        rich_text->blocks_to_html(thread.content_text_type(), thread.content_text(), {
-          .open_links_in_new_tab = login ? login->local_user().open_links_in_new_tab() : false
-        })) : nullopt,
+      .body = opt_str(thread.content_text_raw()),
       .embed_description = link_card.and_then(λx(opt_str(x.get().description()))),
       .embed_title = link_card.and_then(λx(opt_str(x.get().title()))),
       .embed_video_url = nullopt, // TODO: Embed videos
@@ -232,17 +219,18 @@ namespace Ludwig::Lemmy {
   auto ApiController::to_person(
     uint64_t id,
     const User& user,
-    OptRef<const Ludwig::LocalUser> local_user,
-    Ludwig::Login login
+    OptRef<Ludwig::LocalUser> local_user
   ) -> Person {
     const auto* site = instance->site_detail();
+    const auto full_name = user.name()->string_view();
+    const string name(full_name.substr(0, full_name.find('@')));
     return {
       .id = id,
       .instance_id = user.instance(),
-      .name = user.name()->str(),
+      .name = name,
       .actor_id = user.actor_id()
         ? user.actor_id()->str()
-        : fmt::format("{}/ap/actor/{:x}", site->base_url, id),
+        : fmt::format("{}/u/{}", site->base_url, name),
       .inbox_url = user.inbox_url()
         ? user.inbox_url()->str()
         : fmt::format("{}/ap/actor/{:x}/inbox", site->base_url, id),
@@ -255,10 +243,7 @@ namespace Ludwig::Lemmy {
       .banner = user.banner_url()
         ? optional(fmt::format("{}/media/user/{}/banner.webp", site->base_url, user.name()->string_view()))
         : nullopt,
-      .bio = user.bio()->size() ? optional(
-        rich_text->blocks_to_html(user.bio_type(), user.bio(), {
-          .open_links_in_new_tab = login ? login->local_user().open_links_in_new_tab() : false
-        })) : nullopt,
+      .bio = opt_str(user.bio_raw()),
       .display_name = user.display_name()->size()
           ? optional(RichTextParser::plain_text_with_emojis_to_text_content(user.display_name_type(), user.display_name()))
           : nullopt,
@@ -286,8 +271,8 @@ namespace Ludwig::Lemmy {
       .last_refreshed_at = updated,
       .icon = site->icon_url,
       .banner = site->banner_url,
-      .actor_id = fmt::format("{}/ap/actor/_site", site->base_url),
-      .inbox_url = fmt::format("{}/ap/actor/_site/inbox", site->base_url),
+      .actor_id = site->base_url,
+      .inbox_url = fmt::format("{}/inbox", site->base_url),
       .public_key = site->public_key_pem,
       .instance_id = 0
     };
@@ -349,30 +334,26 @@ namespace Ludwig::Lemmy {
     };
   }
 
-  auto ApiController::to_community_view(
-    const BoardDetail& detail,
-    Ludwig::Login login
-  ) -> CommunityView {
+  auto ApiController::to_community_view(const BoardDetail& detail) -> CommunityView {
     return {
-      .community = to_community(detail.id, detail.board(), detail.hidden, login),
+      .community = to_community(detail.id, detail.board(), detail.hidden),
       .counts = to_community_aggregates(detail),
       .blocked = detail.hidden,
       .subscribed = write_subscribed_type(detail.subscribed)
     };
   }
 
-  auto ApiController::to_comment_view(
-    ReadTxnBase& txn,
-    const CommentDetail& detail,
-    Ludwig::Login login
-  ) -> CommentView {
+  auto ApiController::to_comment_view(ReadTxnBase& txn, const CommentDetail& detail) -> CommentView {
+    string path = "0.";
+    for (uint64_t n : detail.path) fmt::format_to(std::back_inserter(path), "{}.", n);
+    path += std::to_string(detail.id);
     return {
-      .comment = to_comment(detail.id, detail.comment(), login),
-      .community = to_community(detail.thread().board(), detail.board(), detail.board_hidden, login),
+      .comment = to_comment(detail.id, detail.comment(), path),
+      .community = to_community(detail.thread().board(), detail.board(), detail.board_hidden),
       .counts = to_comment_aggregates(detail),
-      .creator = to_person(detail.author_id(), detail.author(), txn.get_local_user(detail.author_id()), login),
-      .post = to_post(detail.comment().thread(), detail.thread(), {}, login),
-      .subscribed = write_subscribed_type(false), // TODO: Get subscribed status of board
+      .creator = to_person(detail.author_id(), detail.author(), txn.get_local_user(detail.author_id())),
+      .post = to_post(detail.comment().thread(), detail.thread(), {}),
+      .subscribed = write_subscribed_type(detail.board_subscribed),
       .creator_banned_from_community = false, // TODO: creator_banned_from_community
       .creator_blocked = detail.user_hidden,
       .saved = detail.saved,
@@ -380,22 +361,18 @@ namespace Ludwig::Lemmy {
     };
   }
 
-  auto ApiController::to_post_view(
-    ReadTxnBase& txn,
-    const ThreadDetail& detail,
-    Ludwig::Login login
-  ) -> PostView {
+  auto ApiController::to_post_view(ReadTxnBase& txn, const ThreadDetail& detail) -> PostView {
     return {
-      .community = to_community(detail.thread().board(), detail.board(), detail.board_hidden, login),
+      .community = to_community(detail.thread().board(), detail.board(), detail.board_hidden),
       .counts = to_post_aggregates(detail),
-      .creator = to_person(detail.author_id(), detail.author(), txn.get_local_user(detail.author_id()), login),
-      .post = to_post(detail.id, detail.thread(), detail.link_card(), login),
+      .creator = to_person(detail.author_id(), detail.author(), txn.get_local_user(detail.author_id())),
+      .post = to_post(detail.id, detail.thread(), detail.link_card()),
       .unread_comments = 0, // TODO: track read/unread
       .creator_banned_from_community = false, // TODO: creator_banned_from_community
       .creator_blocked = detail.user_hidden,
       .read = 0, // TODO: track read/unread
       .saved = detail.saved,
-      .subscribed = write_subscribed_type(false), // TODO: Get subscribed status of board
+      .subscribed = write_subscribed_type(detail.board_subscribed),
       .my_vote = detail.your_vote == Vote::NoVote ? nullopt : optional((int8_t)detail.your_vote)
     };
   }
@@ -646,47 +623,53 @@ namespace Ludwig::Lemmy {
     const uint64_t offset = limit * form.page, final_total = offset + limit;
     if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
-    const auto login = login_id.transform([&txn](auto id){return LocalUserDetail::get(txn, id);});
-    if (!form.type + !form.parent_id + form.community_name.empty() != 2) {
-      throw ApiError(R"(get_comments requires exactly one of "type", "parent_id", or "community_name")", 400);
+    const auto login = LocalUserDetail::get_login(txn, login_id);
+    if ((int)!form.type + (int)!form.parent_id + (int)!form.post_id + (int)form.community_name.empty() < 3) {
+      throw ApiError(R"(get_comments requires at most one of "type", "parent_id", "post_id", or "community_name")", 400);
     }
     PageCursor next;
     vector<CommentView> entries;
-    if (form.parent_id) {
-      const bool is_thread = !!txn.get_thread(form.parent_id);
+    if (form.parent_id || form.post_id) {
+      const uint64_t parent_id = form.parent_id ? form.parent_id : form.post_id;
+      spdlog::debug("Listing comments on {:x}, offset {}, limit {}", parent_id, offset, limit);
+      const bool is_thread = !!txn.get_thread(parent_id);
       const auto sort = parse_comment_sort_type(form.sort, login);
       auto tree = is_thread ?
-        instance->thread_detail(txn, form.parent_id, sort, login, {}, (uint16_t)final_total).second :
-        instance->comment_detail(txn, form.parent_id, sort, login, {}, (uint16_t)final_total).second;
+        instance->thread_detail(txn, parent_id, sort, login, {}, (uint16_t)final_total).second :
+        instance->comment_detail(txn, parent_id, sort, login, {}, (uint16_t)final_total).second;
       using Iter = std::multimap<uint64_t, CommentDetail>::iterator;
       stlpb::static_vector<std::pair<Iter, Iter>, 256> stack_vec;
       std::stack stack(stack_vec);
-      stack.push(tree.comments.equal_range(form.parent_id));
+      stack.push(tree.comments.equal_range(parent_id));
       for (uint16_t i = 0; i < final_total && !stack.empty(); i++) {
-        auto iters = stack.top();
+        auto& iters = stack.top();
         if (iters.first == iters.second) {
           stack.pop();
           continue;
         }
         const auto& detail = iters.first->second;
-        if (i >= offset) entries.push_back(to_comment_view(txn, detail, login));
+        if (i >= offset) entries.push_back(to_comment_view(txn, detail));
         if (tree.comments.contains(detail.id)) stack.push(tree.comments.equal_range(detail.id));
         iters.first++;
       }
     } else {
       uint16_t i = 0;
       const auto add_entry = [&](auto& e) {
-        if (i++ >= offset) entries.push_back(to_comment_view(txn, e, login));
+        if (i++ >= offset) entries.push_back(to_comment_view(txn, e));
       };
       const auto sort = parse_sort_type(form.sort, login);
-      if (form.type) {
-        instance->list_feed_comments(add_entry, txn, listing_type_to_feed(*form.type), sort, login, {}, (uint16_t)final_total);
-      } else if (auto board_id = txn.get_board_id_by_name(form.community_name)) {
-        instance->list_board_comments(add_entry, txn, *board_id, sort, login, {}, (uint16_t)final_total);
+      if (!form.community_name.empty()) {
+        if (auto board_id = txn.get_board_id_by_name(form.community_name)) {
+          instance->list_board_comments(add_entry, txn, *board_id, sort, login, {}, (uint16_t)final_total);
+        } else {
+          throw ApiError(fmt::format("No community named \"{}\" exists", form.community_name), 410);
+        }
       } else {
-        throw ApiError(fmt::format("No community named \"{}\" exists", form.community_name), 404);
+        const auto feed = form.type ? listing_type_to_feed(*form.type) : InstanceController::FEED_ALL;
+        instance->list_feed_comments(add_entry, txn, feed, sort, login, {}, (uint16_t)final_total);
       }
     }
+    spdlog::debug("Entries: {}", entries.size());
     return { entries };
   }
 
@@ -702,7 +685,7 @@ namespace Ludwig::Lemmy {
     } else if (auto name_id = txn.get_board_id_by_name(form.name)) {
       id = *name_id;
     } else {
-      throw ApiError(fmt::format("No community named \"{}\" exists", form.name), 404);
+      throw ApiError(fmt::format("No community named \"{}\" exists", form.name), 410);
     }
     return {
       .community_view = get_community_view(txn, id, login_id),
@@ -722,8 +705,8 @@ namespace Ludwig::Lemmy {
     const uint64_t offset = limit * form.page, final_total = offset + limit;
     if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
-    const auto login = login_id.transform([&txn](auto id){return LocalUserDetail::get(txn, id);});
-    if ((form.person_id == 0) == !form.username.empty()) {
+    const auto login = LocalUserDetail::get_login(txn, login_id);
+    if ((form.person_id == 0) == form.username.empty()) {
       throw ApiError("get_person_details requires exactly one of \"person_id\" or \"username\"", 400);
     }
     uint64_t id;
@@ -732,17 +715,17 @@ namespace Ludwig::Lemmy {
     } else if (auto name_id = txn.get_user_id_by_name(form.username)) {
       id = *name_id;
     } else {
-      throw ApiError(fmt::format("No user named \"{}\" exists", form.username), 404);
+      throw ApiError(fmt::format("No user named \"{}\" exists", form.username), 410);
     }
     vector<PostView> posts;
     vector<CommentView> comments;
     uint16_t i = 0;
     instance->list_user_threads([&](auto& e) {
-      if (i++ >= offset) posts.push_back(to_post_view(txn, e, login));
+      if (i++ >= offset) posts.push_back(to_post_view(txn, e));
     }, txn, id, form.sort, login, {}, (uint16_t)final_total);
     i = 0;
     instance->list_user_comments([&](auto& e) {
-      if (i++ >= offset) comments.push_back(to_comment_view(txn, e, login));
+      if (i++ >= offset) comments.push_back(to_comment_view(txn, e));
     }, txn, id, form.sort, login, {}, (uint16_t)final_total);
     return {
       .person_view = get_person_view(txn, id, login_id),
@@ -768,7 +751,7 @@ namespace Ludwig::Lemmy {
     if (form.id) {
       id = form.id;
     } else {
-      const auto login = user_id.transform([&txn](auto id){return LocalUserDetail::get(txn, id);});
+      const auto login = LocalUserDetail::get_login(txn, user_id);
       id = CommentDetail::get(txn, form.comment_id, login).comment().thread();
     }
     const auto post_view = get_post_view(txn, id, user_id);
@@ -787,29 +770,31 @@ namespace Ludwig::Lemmy {
     const uint64_t offset = limit * form.page, final_total = offset + limit;
     if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
-    const auto login = login_id.transform([&txn](auto id){return LocalUserDetail::get(txn, id);});
-    const int missing = (int)!form.type + (int)!form.community_id + (int)form.community_name.empty();
-    if (missing != 2) {
-      throw ApiError(R"(get_posts requires exactly one of "type", "community_id", or "community_name" (missing = )" + std::to_string(missing), 400);
+    const auto login = LocalUserDetail::get_login(txn, login_id);
+    if (((int)!form.type + (int)!form.community_id + (int)form.community_name.empty()) < 2) {
+      throw ApiError(R"(get_posts requires at most one of "type", "community_id", or "community_name")", 400);
     }
     const auto sort = parse_sort_type(form.sort, login);
     vector<PostView> entries;
     uint16_t i = 0;
     const auto add_entry = [&](auto& e) {
-      if (i++ >= offset) entries.push_back(to_post_view(txn, e, login));
+      if (i++ >= offset) entries.push_back(to_post_view(txn, e));
     };
-    if (form.type) {
-      instance->list_feed_threads(add_entry, txn, listing_type_to_feed(*form.type), sort, login, {}, (uint16_t)final_total);
-    } else {
-      uint64_t board_id = 0;
-      if (form.community_id) {
-        board_id = form.community_id;
-      } else if (auto name_id = txn.get_board_id_by_name(form.community_name)) {
+    uint64_t board_id = 0;
+    if (form.community_id) {
+      board_id = form.community_id;
+    } else if (!form.community_name.empty()) {
+      if (auto name_id = txn.get_board_id_by_name(form.community_name)) {
         board_id = *name_id;
       } else {
-        throw ApiError(fmt::format("No community named \"{}\" exists", form.community_name), 404);
+        throw ApiError(fmt::format("No community named \"{}\" exists", form.community_name), 410);
       }
+    }
+    if (board_id) {
       instance->list_board_threads(add_entry, txn, board_id, sort, login, {}, (uint16_t)final_total);
+    } else {
+      auto feed = form.type ? listing_type_to_feed(*form.type) : InstanceController::FEED_ALL;
+      instance->list_feed_threads(add_entry, txn, feed, sort, login, {}, (uint16_t)final_total);
     }
     return { entries };
   }
@@ -827,7 +812,7 @@ namespace Ludwig::Lemmy {
   auto ApiController::get_site(optional<SecretString>&& auth) -> GetSiteResponse {
     auto txn = instance->open_read_txn();
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
-    const auto login = login_id.transform([&txn](auto id){return LocalUserDetail::get(txn, id);});
+    const auto login = LocalUserDetail::get_login(txn, login_id);
     vector<PersonView> admins;
     for (auto id : txn.get_admin_list()) {
       admins.push_back(get_person_view(txn, id, login_id));
@@ -843,7 +828,7 @@ namespace Ludwig::Lemmy {
               .id = l.id,
               .person_id = l.id,
               .interface_language = "en",
-              .theme = l.local_user().lemmy_theme()->str(),
+              .theme = opt_str(l.local_user().lemmy_theme()).value_or("browser"),
               .validator_time = chrono::system_clock::now(),
               .email = opt_str(l.local_user().email()),
               .accepted_application = l.local_user().accepted_application(),
@@ -859,7 +844,7 @@ namespace Ludwig::Lemmy {
               .default_listing_type = "Subscribed",
               .default_sort_type = "Active"
             },
-            .person = to_person(l.id, l.user(), l.maybe_local_user(), l),
+            .person = to_person(l.id, l.user(), l.maybe_local_user()),
             .counts = to_person_aggregates(l)
           },
           .discussion_languages = vector<uint64_t>{1}
@@ -902,13 +887,13 @@ namespace Ludwig::Lemmy {
     const uint64_t offset = limit * form.page, final_total = offset + limit;
     if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
-    const auto login = login_id.transform([&txn](auto id){return LocalUserDetail::get(txn, id);});
+    const auto login = LocalUserDetail::get_login(txn, login_id);
     vector<CommunityView> entries;
     uint16_t i = 0;
     // TODO: hide nsfw
     instance->list_boards(
       [&](auto& e) {
-        if (i++ >= offset) entries.push_back(to_community_view(e, login));
+        if (i++ >= offset) entries.push_back(to_community_view(e));
       },
       txn, form.sort,
       form.type == optional(ListingType::Local),
@@ -926,7 +911,9 @@ namespace Ludwig::Lemmy {
 
   auto ApiController::login(Login& form, string_view ip, string_view user_agent) -> LoginResponse {
     // TODO: Specific error messages from API
-    if (form.totp_2fa_token) throw ApiError("TOTP 2FA is not supported", 400);
+    if (!form.totp_2fa_token.value_or("").empty()) {
+      throw ApiError("TOTP 2FA is not supported", 400);
+    }
     return {
       login_and_get_jwt(form.username_or_email, std::move(form.password), ip, user_agent),
       false, false
@@ -963,9 +950,9 @@ namespace Ludwig::Lemmy {
   }
 
   auto ApiController::mark_post_as_read(MarkPostAsRead& form, optional<SecretString>&& auth) -> PostResponse {
-    auto txn = instance->open_read_txn();
     const auto user_id = require_auth(form, std::move(auth));
     // TODO: Support mark as read (this does nothing)
+    auto txn = instance->open_read_txn();
     return { get_post_view(txn, form.post_id, user_id) };
   }
 
@@ -1066,14 +1053,14 @@ namespace Ludwig::Lemmy {
       .limit = limit
     }, [&, limit, user_id](auto&& results){
       auto txn = instance->open_read_txn();
-      const auto login = user_id.transform([&txn](auto id){return LocalUserDetail::get(txn, id);});
+      const auto login = LocalUserDetail::get_login(txn, user_id);
       SearchResponse response;
       for (const auto detail : instance->search_step_2(txn, results, limit, login)) {
         std::visit(overload{
-          [&](const CommentDetail& comment) { response.comments.push_back(to_comment_view(txn, comment, login)); },
-          [&](const BoardDetail& board) { response.communities.push_back(to_community_view(board, login)); },
-          [&](const ThreadDetail& thread) { response.posts.push_back(to_post_view(txn, thread, login)); },
-          [&](const UserDetail& user) { response.users.push_back(to_person_view(user, login)); }
+          [&](const CommentDetail& comment) { response.comments.push_back(to_comment_view(txn, comment)); },
+          [&](const BoardDetail& board) { response.communities.push_back(to_community_view(board)); },
+          [&](const ThreadDetail& thread) { response.posts.push_back(to_post_view(txn, thread)); },
+          [&](const UserDetail& user) { response.users.push_back(to_person_view(user)); }
         }, detail);
       }
       cb(response);

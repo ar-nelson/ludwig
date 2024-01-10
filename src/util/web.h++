@@ -132,9 +132,9 @@ namespace Ludwig {
       if (s.empty()) return {};
       return s;
     }
-    auto optional_uint(std::string_view key, uint64_t default_value = 0) -> uint64_t {
+    auto optional_uint(std::string_view key) -> std::optional<uint64_t> {
       auto s = get_query_param(query, key);
-      if (s.empty()) return default_value;
+      if (s.empty()) return {};
       try {
         return std::stoul(std::string(s));
       } catch (...) {
@@ -143,7 +143,7 @@ namespace Ludwig {
     }
     auto optional_bool(std::string_view key) -> bool {
       const auto decoded = get_query_param(query, key);
-      return decoded == "1" || decoded == "true";
+      return !(decoded.empty() || decoded == "0" || decoded == "false");
     }
   };
 
@@ -152,35 +152,10 @@ namespace Ludwig {
     uint64_t id;
     const auto res = std::from_chars(str.begin(), str.end(), id, 16);
     if (res.ec != std::errc{} || res.ptr != str.data() + str.length()) {
-      throw ApiError(fmt::format("Invalid hexadecimal ID: ", str), 404);
+      throw ApiError(fmt::format("Invalid hexadecimal ID: ", str), 400);
     }
     return id;
   }
-
-  template <bool SSL> class ResponseStream : public std::stringbuf {
-    uWS::Loop* loop;
-    uWS::HttpResponse<SSL>* rsp;
-    std::atomic<bool> canceled = false;
-  public:
-    ResponseStream(uWS::Loop* loop, uWS::HttpResponse<SSL>* rsp) : loop(loop), rsp(rsp) {}
-    virtual int sync() override {
-      if (canceled) return -1;
-      loop->defer([this, chunk = this->str()] {
-        if (!canceled) {
-          spdlog::debug("Writing chunk of {} bytes", chunk.size());
-          rsp->cork([&] { rsp->write(chunk); });
-        }
-      });
-      this->str().clear();
-      return 0;
-    }
-    void cancel() {
-      canceled = true;
-    }
-    void close() {
-      if (!canceled) loop->defer([this] { if (!canceled) rsp->end(); });
-    }
-  };
 
   template <bool SSL, typename M = std::monostate, typename E = std::monostate> class Router {
   public:
@@ -288,6 +263,20 @@ namespace Ludwig {
           spdlog::debug("[GET {}] - {} {}", url, rsp->getRemoteAddressAsText(), req->getHeader("user-agent"));
         } catch (...) {
           impl->handle_error(std::current_exception(), rsp, impl->error_middleware(rsp, req), "GET", url);
+        }
+      });
+      return std::move(*this);
+    }
+
+    Router &&any(std::string pattern, uWS::MoveOnlyFunction<void (uWS::HttpResponse<SSL>*, uWS::HttpRequest*, M&)> &&handler) {
+      app.any(pattern, [impl = impl, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
+        const auto url = req->getUrl();
+        try {
+          auto meta = impl->middleware(rsp, req);
+          handler(rsp, req, meta);
+          spdlog::debug("[{} {}] - {} {}", req->getMethod(), url, rsp->getRemoteAddressAsText(), req->getHeader("user-agent"));
+        } catch (...) {
+          impl->handle_error(std::current_exception(), rsp, impl->error_middleware(rsp, req), req->getMethod(), url);
         }
       });
       return std::move(*this);

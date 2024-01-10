@@ -14,9 +14,11 @@
 #include <spdlog/spdlog.h>
 #include <uWebSockets/MoveOnlyFunction.h>
 #include <openssl/crypto.h>
+#include <openssl/rand.h>
 #include <flatbuffers/string.h>
 
 namespace Ludwig {
+  constexpr std::string_view FIRST_RUN_ADMIN_USERNAME = "admin";
   constexpr uint64_t ID_MAX = std::numeric_limits<uint64_t>::max();
   constexpr size_t MiB = 1024 * 1024;
 
@@ -60,14 +62,14 @@ namespace Ludwig {
   // Based on https://stackoverflow.com/a/53526139/548027
   struct Url {
   private:
-    static const inline char
-      *SCHEME_REGEX   = "(?:(\\w+)://)",      // mandatory, match protocol before the ://
-      *USER_REGEX     = "(?:([^@/:\\s]+)@)?", // match anything other than @ / : or whitespace before the ending @
-      *HOST_REGEX     = "([^@/:\\s]+)",       // mandatory. match anything other than @ / : or whitespace
-      *PORT_REGEX     = "(?::([0-9]{1,5}))?", // after the : match 1 to 5 digits
-      *PATH_REGEX     = "(/[^:#?\\s]*)?",     // after the / match anything other than : # ? or whitespace
-      *QUERY_REGEX    = "(\\?(?:(?:[^?;&#=]+(?:=[^?;&#=]*)?)(?:[;|&](?:[^?;&#=]+(?:=[^?;&#=]*)?))*))?", // after the ? match any number of x=y pairs, seperated by & or ;
-      *FRAGMENT_REGEX = "(?:#([^#\\s]*))?";   // after the # match anything other than # or whitespace
+    static constexpr inline char
+      SCHEME_REGEX[]   = "(?:(\\w+)://)",      // mandatory, match protocol before the ://
+      USER_REGEX[]     = "(?:([^@/:\\s]+)@)?", // match anything other than @ / : or whitespace before the ending @
+      HOST_REGEX[]     = "([^@/:\\s]+)",       // mandatory. match anything other than @ / : or whitespace
+      PORT_REGEX[]     = "(?::([0-9]{1,5}))?", // after the : match 1 to 5 digits
+      PATH_REGEX[]     = "(/[^:#?\\s]*)?",     // after the / match anything other than : # ? or whitespace
+      QUERY_REGEX[]    = "(\\?(?:(?:[^?;&#=]+(?:=[^?;&#=]*)?)(?:[;|&](?:[^?;&#=]+(?:=[^?;&#=]*)?))*))?", // after the ? match any number of x=y pairs, seperated by & or ;
+      FRAGMENT_REGEX[] = "(?:#([^#\\s]*))?";   // after the # match anything other than # or whitespace
     static const inline auto regex = std::regex(std::string("^")
       + SCHEME_REGEX + USER_REGEX
       + HOST_REGEX + PORT_REGEX
@@ -128,6 +130,17 @@ namespace Ludwig {
   static inline auto opt_sv(const flatbuffers::String* s) -> std::optional<std::string_view> {
     if (s) return s->string_view();
     return {};
+  }
+
+  static inline auto generate_password(uint8_t length = 8) -> SecretString {
+    // 64 characters, 6 bits per char
+    static constexpr char CHARS[65] = "23456789abcdefghjkmnopqrstvwxyzABCDEFGHJKLMNPQRSTVWXYZ.+-=?!@%&*";
+    uint8_t bytes[256];
+    RAND_bytes(bytes, length);
+    std::string password;
+    password.reserve(length);
+    for (uint8_t i = 0; i < length; i++) password.push_back(CHARS[bytes[i] >> 2]);
+    return SecretString(password);
   }
 
   template<typename T, size_t Size> struct ConstArray {

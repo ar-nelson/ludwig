@@ -72,7 +72,6 @@ namespace Ludwig::Lemmy {
   class ApiController {
   private:
     std::shared_ptr<InstanceController> instance;
-    std::shared_ptr<RichTextParser> rich_text;
     auto validate_jwt(ReadTxnBase& txn, SecretString&& jwt) -> uint64_t;
     auto validate_jwt(SecretString&& jwt) -> uint64_t {
       auto txn = instance->open_read_txn();
@@ -89,7 +88,7 @@ namespace Ludwig::Lemmy {
       if (auth) id = validate_jwt(txn, std::move(*auth));
       else if (form.auth) id = validate_jwt(txn, std::move(*form.auth));
       else throw ApiError("Auth required", 401);
-      if (must_be_admin && !LocalUserDetail::get(txn, id).local_user().admin()) {
+      if (must_be_admin && !LocalUserDetail::get_login(txn, id).local_user().admin()) {
         throw ApiError("Admin privileges required", 403);
       }
       return id;
@@ -111,48 +110,47 @@ namespace Ludwig::Lemmy {
       std::string_view ip,
       std::string_view user_agent
     ) -> SecretString;
-    auto to_comment(uint64_t id, const Ludwig::Comment& comment, Ludwig::Login login) -> Comment;
-    auto to_community(uint64_t id, const Board& board, bool hidden, Ludwig::Login login) -> Community;
-    auto to_person(uint64_t id, const User& user, OptRef<const Ludwig::LocalUser> local_user, Ludwig::Login login) -> Person;
-    auto to_post(uint64_t id, const Thread& thread, OptRef<const LinkCard> link_card, Ludwig::Login login) -> Post;
+    auto to_comment(uint64_t id, const Ludwig::Comment& comment, std::string path = "") -> Comment;
+    auto to_community(uint64_t id, const Board& board, bool hidden) -> Community;
+    auto to_person(uint64_t id, const User& user, OptRef<Ludwig::LocalUser> local_user) -> Person;
+    auto to_post(uint64_t id, const Thread& thread, OptRef<LinkCard> link_card) -> Post;
     auto to_comment_aggregates(const CommentDetail& detail) -> CommentAggregates;
     auto to_community_aggregates(const BoardDetail& detail) -> CommunityAggregates;
     auto to_person_aggregates(const UserDetail& detail) -> PersonAggregates;
     auto to_post_aggregates(const ThreadDetail& detail) -> PostAggregates;
     auto get_site_object() -> Site;
     auto get_site_view(ReadTxnBase& txn) -> SiteView;
-    auto to_comment_view(ReadTxnBase& txn, const CommentDetail& detail, Ludwig::Login login) -> CommentView;
+    auto to_comment_view(ReadTxnBase& txn, const CommentDetail& detail) -> CommentView;
     auto get_comment_view(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> login_id) -> CommentView {
-      const auto login = login_id.transform([&txn](auto id){return LocalUserDetail::get(txn, id);});
+      const auto login = LocalUserDetail::get_login(txn, login_id);
       const auto detail = CommentDetail::get(txn, id, login);
-      return to_comment_view(txn, detail, login);
+      return to_comment_view(txn, detail);
     }
-    auto to_community_view(const BoardDetail& detail, Ludwig::Login login) -> CommunityView;
+    auto to_community_view(const BoardDetail& detail) -> CommunityView;
     auto get_community_view(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> login_id) -> CommunityView {
-      const auto login = login_id.transform([&txn](auto id){return LocalUserDetail::get(txn, id);});
+      const auto login = LocalUserDetail::get_login(txn, login_id);
       const auto detail = BoardDetail::get(txn, id, login);
-      return to_community_view(detail, login);
+      return to_community_view(detail);
     }
-    auto to_person_view(const UserDetail& detail, Ludwig::Login login) -> PersonView {
+    auto to_person_view(const UserDetail& detail) -> PersonView {
       return {
         .counts = to_person_aggregates(detail),
-        .person = to_person(detail.id, detail.user(), detail.maybe_local_user(), login)
+        .person = to_person(detail.id, detail.user(), detail.maybe_local_user())
       };
     }
     auto get_person_view(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> login_id) -> PersonView {
-      const auto login = login_id.transform([&txn](auto id){return LocalUserDetail::get(txn, id);});
+      const auto login = LocalUserDetail::get_login(txn, login_id);
       const auto detail = UserDetail::get(txn, id, login);
-      return to_person_view(detail, login);
+      return to_person_view(detail);
     }
-    auto to_post_view(ReadTxnBase& txn, const ThreadDetail& detail, Ludwig::Login login) -> PostView;
+    auto to_post_view(ReadTxnBase& txn, const ThreadDetail& detail) -> PostView;
     auto get_post_view(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> login_id) -> PostView {
-      const auto login = login_id.transform([&txn](auto id){return LocalUserDetail::get(txn, id);});
+      const auto login = LocalUserDetail::get_login(txn, login_id);
       const auto detail = ThreadDetail::get(txn, id, login);
-      return to_post_view(txn, detail, login);
+      return to_post_view(txn, detail);
     }
   public:
-    ApiController(std::shared_ptr<InstanceController> instance, std::shared_ptr<RichTextParser> rich_text)
-      : instance(instance), rich_text(rich_text) {}
+    ApiController(std::shared_ptr<InstanceController> instance) : instance(instance) {}
 
     /* addAdmin */
     /* addModToCommunity */
