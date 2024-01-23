@@ -184,6 +184,8 @@ namespace Ludwig {
       Middleware middleware;
       ErrorMiddleware error_middleware;
       ErrorHandler error_handler;
+      std::unordered_map<std::string, std::set<std::string_view>> options_allow_by_pattern;
+      std::optional<std::string> access_control_allow_origin;
 
       auto handle_error(
         const ApiError& e,
@@ -233,6 +235,10 @@ namespace Ludwig {
     };
 
     std::shared_ptr<Impl> impl;
+
+    auto register_route(const std::string& pattern, std::string_view method) -> void {
+      impl->options_allow_by_pattern.try_emplace({ pattern, {} }).first->second.insert(method);
+    }
   public:
     Router(
       uWS::TemplatedApp<SSL>& app,
@@ -254,6 +260,38 @@ namespace Ludwig {
     ) requires std::same_as<M, std::monostate> && std::same_as<E, std::monostate>
       : Router(app, [](auto*, auto*){return std::monostate();}, [](auto*, auto*){return std::monostate();}, error_handler) {}
 
+    ~Router() {
+      // uWebSockets doesn't provide OPTIONS or CORS preflight handlers,
+      // so we have to add those manually, after all routes have been defined.
+      for (const auto [pattern, methods] : impl->options_allow_by_pattern) {
+        std::string allow = "OPTIONS";
+        for (const auto method : methods) fmt::format_to(std::back_inserter(allow), ", {}", method);
+        app.any(pattern, [=, origin = impl->access_control_allow_origin](auto* rsp, auto* req) {
+          if (req->getMethod() == "options") {
+            if (origin && !req->getHeader("origin").empty() && !req->getHeader("access-control-request-method").empty()) {
+              rsp->writeHeader("Allow", allow)
+                ->writeHeader("Access-Control-Allow-Origin", *origin)
+                ->writeHeader("Access-Control-Allow-Methods", allow)
+                ->writeHeader("Access-Control-Allow-Headers", "authorization,content-type")
+                ->writeHeader("Access-Control-Max-Age", "86400")
+                ->end();
+            } else {
+              rsp->writeStatus(http_status(204))
+                ->writeHeader("Allow", allow)
+                ->end();
+            }
+          } else {
+            rsp->writeStatus(http_status(405))->end();
+          }
+        });
+      }
+    }
+
+    Router &&access_control_allow_origin(std::string origin) {
+      impl->access_control_allow_origin = origin;
+      return std::move(*this);
+    }
+
     Router &&get(std::string pattern, uWS::MoveOnlyFunction<void (uWS::HttpResponse<SSL>*, uWS::HttpRequest*, M&)> &&handler) {
       app.get(pattern, [impl = impl, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
         const auto url = req->getUrl();
@@ -265,6 +303,7 @@ namespace Ludwig {
           impl->handle_error(std::current_exception(), rsp, impl->error_middleware(rsp, req), "GET", url);
         }
       });
+      register_route(pattern, "GET");
       return std::move(*this);
     }
 
@@ -314,6 +353,7 @@ namespace Ludwig {
           impl->handle_error(current_exception(), rsp, *error_meta, "GET", url);
         }
       });
+      register_route(pattern, "GET");
       return std::move(*this);
     }
 
@@ -386,11 +426,13 @@ namespace Ludwig {
 
     Router &&post(std::string pattern, PostHandler<std::string>&& handler, size_t max_size = 10 * MiB) {
       app.post(pattern, post_handler<std::string>(std::move(handler), max_size, {}, "", [](auto&& s){return s;}));
+      register_route(pattern, "POST");
       return std::move(*this);
     }
 
     Router &&put(std::string pattern, PostHandler<std::string>&& handler, size_t max_size = 10 * MiB) {
       app.put(pattern, post_handler<std::string>(std::move(handler), max_size, {}, "", [](auto&& s){return s;}));
+      register_route(pattern, "PUT");
       return std::move(*this);
     }
 
@@ -399,6 +441,7 @@ namespace Ludwig {
         if (!simdjson::validate_utf8(s)) throw ApiError("POST body is not valid UTF-8", 415);
         return QueryString<std::string_view>(s);
       }));
+      register_route(pattern, "POST");
       return std::move(*this);
     }
 
@@ -413,9 +456,10 @@ namespace Ludwig {
           pad_json_string(s);
           return JsonSerialize<T>::from_json(parser->iterate(s).value());
         } catch (const simdjson::simdjson_error& e) {
-          throw ApiError(fmt::format("JSON does not match type: {}", simdjson::error_message(e.error())), 400);
+          throw ApiError(fmt::format("JSON does not match type ({})", simdjson::error_message(e.error())), 422);
         }
       }));
+      register_route(pattern, "POST");
       return std::move(*this);
     }
 
@@ -430,9 +474,10 @@ namespace Ludwig {
           pad_json_string(s);
           return JsonSerialize<T>::from_json(parser->iterate(s).value());
         } catch (const simdjson::simdjson_error& e) {
-          throw ApiError(fmt::format("JSON does not match type: {}", simdjson::error_message(e.error())), 400);
+          throw ApiError(fmt::format("JSON does not match type ({})", simdjson::error_message(e.error())), 422);
         }
       }));
+      register_route(pattern, "PUT");
       return std::move(*this);
     }
   };

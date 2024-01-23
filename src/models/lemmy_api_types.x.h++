@@ -273,7 +273,7 @@ X(discussion_languages, Vector<uint64_t>)
 XEND
 
 XBEGIN(CreateComment)
-X(id, uint64_t)
+X(id, Option<uint64_t>)
 X(auth, Option<SecretString>)
 X(content, String)
 X(post_id, uint64_t)
@@ -929,13 +929,13 @@ XEND
 XBEGIN(SaveComment)
 X(auth, Option<SecretString>)
 X(comment_id, uint64_t)
-X(save_, Option<bool>)
+X(save, Option<bool>)
 XEND
 
 XBEGIN(SavePost)
 X(auth, Option<SecretString>)
 X(post_id, uint64_t)
-X(save_, Option<bool>)
+X(save, Option<bool>)
 XEND
 
 XBEGIN(SaveUserSettings)

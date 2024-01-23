@@ -11,9 +11,9 @@ body {
   --color-bg-dim: #ddd;
   --color-fg: #222;
   --color-fg-dim: #666;
-  --color-accent: steelblue;
-  --color-accent-dim: cadetblue;
-  --color-accent-hover: cornflowerblue;
+  --color-accent: hsl(205, 85%, 41%);
+  --color-accent-dim: hsl(205, 10%, 50%);
+  --color-accent-hover: hsl(205, 90%, 32%);
   --color-accent-fg: #fff;
   --color-translucent: rgba(255,255,255,0.25);
   --color-error: red;
@@ -127,15 +127,9 @@ select:focus {
   border: 1px solid var(--color-accent-hover);
   outline: 0;
 }
-input[type="email"]:invalid,
-input[type="number"]:invalid,
-input[type="search"]:invalid,
-input[type="text"]:invalid,
-input[type="tel"]:invalid,
-input[type="url"]:invalid,
-input[type="password"]:invalid,
-textarea:invalid,
-select:invalid {
+input.error:invalid,
+textarea.error:invalid,
+select.error:invalid {
   border: 1px solid var(--color-error);
 }
 label, legend {
@@ -865,16 +859,23 @@ input:focus + .toggle-switch, input:focus + .toggle-button {
   width: 2rem;
 }
 
-.toggle-buttons {
+.toggle-buttons, .tabs {
   display: flex;
   flex-direction: row;
 }
 
-.toggle-buttons .toggle-button:not(:last-child) {
+.toggle-buttons .toggle-button:not(:last-child), .tabs li:not(:last-child) > * {
   border-right: 0;
 }
 
-.toggle-button {
+.tabs li {
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+}
+
+.toggle-button, .tabs li > * {
   cursor: pointer;
   height: 36px;
   text-align: center;
@@ -884,12 +885,13 @@ input:focus + .toggle-switch, input:focus + .toggle-button {
   color: var(--color-accent);
   background-color: var(--color-bg-dim);
   border: 1px solid var(--color-accent);
+  text-decoration: none;
 }
 
-input:checked + .toggle-button {
+input:checked + .toggle-button, .tabs li > .selected {
   cursor: default;
   background-color: var(--color-accent);
-  color: var(--color-fg);
+  color: var(--color-accent-fg);
 }
 
 #content_warning_toggle:checked ~ label[for=content_warning] {

@@ -64,7 +64,10 @@ namespace Ludwig {
       downvotes_enabled {"downvotes_enabled"},
       cws_enabled {"cws_enabled"},
       require_login_to_view {"require_login_to_view"},
-      default_board_id {"default_board_id"};
+      default_board_id {"default_board_id"},
+      color_accent {"color_accent"},
+      color_accent_dim {"color_accent_dim"},
+      color_accent_hover {"color_accent_hover"};
 
     static inline auto is_exported(std::string_view key) -> bool {
       return key != site_stats && key != admins;

@@ -93,6 +93,7 @@ namespace Ludwig::Lemmy {
           ->end(s);
       }
     );
+    router.access_control_allow_origin("*");
 
     // Site
     ///////////////////////////////////////////////////////
@@ -139,7 +140,7 @@ namespace Ludwig::Lemmy {
       write_json<SSL>(rsp, controller->list_communities({
         .sort = parse_board_sort_type(q.string("sort")),
         .limit = (uint16_t)q.optional_uint("limit").value_or(0),
-        .page = (uint16_t)q.optional_uint("page").value_or(0),
+        .page = (uint16_t)q.optional_uint("page").value_or(1),
         .show_nsfw = q.optional_bool("show_nsfw")
       }, header_or_query_auth(q, m)));
     });
@@ -174,12 +175,12 @@ namespace Ludwig::Lemmy {
     router.get("/api/v3/post/list", [controller, parser](auto* rsp, auto* req, auto& m) {
       QueryString q(req);
       write_json<SSL>(rsp, controller->get_posts({
-        .type = q.optional_string("type").transform(parse_listing_type),
+        .type = q.optional_string("type").or_else([&](){return q.optional_string("type_");}).transform(parse_listing_type),
         .sort = q.optional_string("sort").value_or(""),
         .community_name = q.optional_string("community_name").value_or(""),
         .community_id = q.optional_uint("community_id").value_or(0),
         .limit = (uint16_t)q.optional_uint("limit").value_or(0),
-        .page = (uint16_t)q.optional_uint("page").value_or(0),
+        .page = (uint16_t)q.optional_uint("page").value_or(1),
         .page_cursor = q.string("page_cursor"),
         .saved_only = q.optional_bool("saved_only"),
         .liked_only = q.optional_bool("liked_only"),
@@ -222,14 +223,14 @@ namespace Ludwig::Lemmy {
     router.get("/api/v3/comment/list", [controller, parser](auto* rsp, auto* req, auto& m) {
       QueryString q(req);
       write_json<SSL>(rsp, controller->get_comments({
-        .type = q.optional_string("type").transform(parse_listing_type),
+        .type = q.optional_string("type").or_else([&](){return q.optional_string("type_");}).transform(parse_listing_type),
         .sort = q.optional_string("sort").value_or(""),
         .community_name = q.optional_string("community_name").value_or(""),
         .post_id = q.optional_uint("post_id").value_or(0),
         .parent_id = q.optional_uint("parent_id").value_or(0),
         .limit = (uint16_t)q.optional_uint("limit").value_or(0),
         .max_depth = (uint16_t)q.optional_uint("max_depth").value_or(0),
-        .page = (uint16_t)q.optional_uint("page").value_or(0),
+        .page = (uint16_t)q.optional_uint("page").value_or(1),
         .page_cursor = q.optional_string("page_cursor").value_or(""),
         .saved_only = q.optional_bool("saved_only"),
         .liked_only = q.optional_bool("liked_only"),
@@ -269,7 +270,7 @@ namespace Ludwig::Lemmy {
         .community_id = q.optional_uint("community_id").value_or(0),
         .person_id = q.optional_uint("person_id").value_or(0),
         .limit = (uint16_t)q.optional_uint("limit").value_or(0),
-        .page = (uint16_t)q.optional_uint("page").value_or(0),
+        .page = (uint16_t)q.optional_uint("page").value_or(1),
         .sort = parse_user_post_sort_type(q.string("sort")),
         .saved_only = q.optional_bool("saved_only")
       }, header_or_query_auth(q, m)));
@@ -285,7 +286,7 @@ namespace Ludwig::Lemmy {
       write_json<SSL>(rsp,controller->get_person_mentions({
         .sort = parse_user_post_sort_type(q.optional_string("sort").value_or("")),
         .limit = (uint16_t)q.optional_uint("limit").value_or(0),
-        .page = (uint16_t)q.optional_uint("page").value_or(0),
+        .page = (uint16_t)q.optional_uint("page").value_or(1),
         .unread_only = q.optional_bool("unread_only")
       }, std::move(*auth)));
     });
@@ -299,7 +300,7 @@ namespace Ludwig::Lemmy {
       write_json<SSL>(rsp, controller->get_replies({
         .sort = parse_user_post_sort_type(q.optional_string("sort").value_or("")),
         .limit = (uint16_t)q.optional_uint("limit").value_or(0),
-        .page = (uint16_t)q.optional_uint("page").value_or(0),
+        .page = (uint16_t)q.optional_uint("page").value_or(1),
         .unread_only = q.optional_bool("unread_only")
       }, std::move(*auth)));
     });

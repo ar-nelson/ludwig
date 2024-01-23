@@ -201,6 +201,12 @@ namespace Ludwig {
       thread().mod_state() < ModState::Locked && login->user().mod_state() < ModState::Locked &&
       board().can_downvote() && (board().instance() || site->downvotes_enabled);
   }
+  auto ThreadDetail::should_show_votes(Login, const SiteDetail* site) const noexcept -> bool {
+    return board().can_upvote() && (board().instance() || site->votes_enabled);
+  }
+  auto CommentDetail::should_show_votes(Login, const SiteDetail* site) const noexcept -> bool {
+    return board().can_upvote() && (board().instance() || site->votes_enabled);
+  }
   auto UserDetail::can_change_settings(Login login) const noexcept -> bool {
     return maybe_local_user() && login && (login->local_user().admin() || login->id == id);
   }
@@ -227,10 +233,13 @@ namespace Ludwig {
     const auto name = txn.get_setting_str(SettingsKey::name),
       base_url = txn.get_setting_str(SettingsKey::base_url);
     return {
-      .name = name.empty() ? "Ludwig" : string(name),
-      .base_url = base_url.starts_with("http") ? string(base_url) : "http://localhost:2023",
+      .name = name.empty() ? DEFAULT_NAME : string(name),
+      .base_url = base_url.starts_with("http") ? string(base_url) : DEFAULT_BASE_URL,
       .description = string(txn.get_setting_str(SettingsKey::description)),
       .public_key_pem = string(txn.get_setting_str(SettingsKey::public_key)),
+      .color_accent = opt_str(txn.get_setting_str(SettingsKey::color_accent)).value_or(DEFAULT_COLOR_ACCENT),
+      .color_accent_dim = opt_str(txn.get_setting_str(SettingsKey::color_accent_dim)).value_or(DEFAULT_COLOR_ACCENT_DIM),
+      .color_accent_hover = opt_str(txn.get_setting_str(SettingsKey::color_accent_hover)).value_or(DEFAULT_COLOR_ACCENT_HOVER),
       .icon_url = opt_str(txn.get_setting_str(SettingsKey::icon_url)),
       .banner_url = opt_str(txn.get_setting_str(SettingsKey::banner_url)),
       .application_question = opt_str(txn.get_setting_str(SettingsKey::application_question)),
@@ -250,7 +259,7 @@ namespace Ludwig {
       .registration_enabled = !!txn.get_setting_int(SettingsKey::registration_enabled),
       .registration_application_required = !!txn.get_setting_int(SettingsKey::registration_application_required),
       .registration_invite_required = !!txn.get_setting_int(SettingsKey::registration_invite_required),
-      .invite_admin_only = !!txn.get_setting_int(SettingsKey::invite_admin_only)
+      .invite_admin_only = !!txn.get_setting_int(SettingsKey::invite_admin_only),
     };
   }
 

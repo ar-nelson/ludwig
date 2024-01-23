@@ -1111,6 +1111,7 @@ namespace Ludwig {
   }
 
   auto InstanceController::first_run_setup(FirstRunSetup&& update) -> void {
+    update.validate();
     const auto now = now_s();
     auto txn = db->open_write_txn();
     if (!txn.get_setting_int(SettingsKey::setup_done)) {
@@ -1212,6 +1213,9 @@ namespace Ludwig {
     txn.set_setting(SettingsKey::registration_application_required, update.registration_application_required.value_or(false));
     txn.set_setting(SettingsKey::registration_invite_required, update.registration_invite_required.value_or(false));
     txn.set_setting(SettingsKey::invite_admin_only, update.invite_admin_only.value_or(false));
+    txn.set_setting(SettingsKey::color_accent, update.color_accent.value_or(SiteDetail::DEFAULT_COLOR_ACCENT));
+    txn.set_setting(SettingsKey::color_accent_dim, update.color_accent_dim.value_or(SiteDetail::DEFAULT_COLOR_ACCENT_DIM));
+    txn.set_setting(SettingsKey::color_accent_hover, update.color_accent_hover.value_or(SiteDetail::DEFAULT_COLOR_ACCENT_HOVER));
     txn.set_setting(SettingsKey::updated_at, now);
     txn.commit();
     event_bus->dispatch(Event::SiteUpdate);
@@ -1225,6 +1229,7 @@ namespace Ludwig {
     };
   }
   auto InstanceController::update_site(const SiteUpdate& update, optional<uint64_t> as_user) -> void {
+    update.validate();
     {
       auto txn = db->open_write_txn();
       if (as_user && !can_change_site_settings(LocalUserDetail::get_login(txn, *as_user))) {
@@ -1246,6 +1251,9 @@ namespace Ludwig {
       if (const auto v = update.registration_application_required) txn.set_setting(SettingsKey::registration_application_required, *v);
       if (const auto v = update.registration_invite_required) txn.set_setting(SettingsKey::registration_invite_required, *v);
       if (const auto v = update.invite_admin_only) txn.set_setting(SettingsKey::invite_admin_only, *v);
+      if (const auto v = update.color_accent) txn.set_setting(SettingsKey::color_accent, *v);
+      if (const auto v = update.color_accent_dim) txn.set_setting(SettingsKey::color_accent_dim, *v);
+      if (const auto v = update.color_accent_hover) txn.set_setting(SettingsKey::color_accent_hover, *v);
       txn.set_setting(SettingsKey::updated_at, now_s());
       txn.commit();
     }

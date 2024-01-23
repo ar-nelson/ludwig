@@ -17,6 +17,7 @@ namespace Ludwig {
   constexpr size_t ITEMS_PER_PAGE = 20;
 
 # define USERNAME_REGEX_SRC R"([a-zA-Z][a-zA-Z0-9_]{0,63})"
+# define INVITE_CODE_REGEX_SRC R"(([0-9A-F]{5})-([0-9A-F]{3})-([0-9A-F]{3})-([0-9A-F]{5}))"
   static const std::regex
     username_regex(USERNAME_REGEX_SRC),
     email_regex(
@@ -27,7 +28,9 @@ namespace Ludwig {
       R"((?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9])|[a-z0-9-]*[a-z0-9]:)"
       R"((?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\]))",
       std::regex::ECMAScript | std::regex::icase
-    );
+    ),
+    invite_code_regex(INVITE_CODE_REGEX_SRC),
+    color_hex_regex(R"(#[0-9a-fA-F]{6})");
 
   struct LoginResponse {
     uint64_t user_id, session_id;
@@ -103,7 +106,8 @@ namespace Ludwig {
   };
 
   struct SiteUpdate {
-    std::optional<std::string_view> name, description;
+    std::optional<std::string_view> name, description, color_accent,
+        color_accent_dim, color_accent_hover;
     std::optional<std::optional<std::string_view>> icon_url, banner_url,
         application_question;
     std::optional<uint64_t> max_post_length;
@@ -113,6 +117,29 @@ namespace Ludwig {
         board_creation_admin_only, registration_enabled,
         registration_application_required, registration_invite_required,
         invite_admin_only;
+
+    auto validate() const -> void {
+      if (icon_url && *icon_url) {
+        if (const auto url = Url::parse(std::string(**icon_url))) {
+          if (!url->is_http_s()) throw ApiError("Icon URL must be HTTP(S)", 400);
+        } else throw ApiError("Icon URL is not a valid URL", 400);
+      }
+      if (banner_url && *banner_url) {
+        if (const auto url = Url::parse(std::string(**banner_url))) {
+          if (!url->is_http_s()) throw ApiError("Banner URL must be HTTP(S)", 400);
+        } else throw ApiError("Banner URL is not a valid URL", 400);
+      }
+      if (max_post_length && *max_post_length < 512) {
+        throw ApiError("Max post length cannot be less than 512", 400);
+      }
+      if (
+        (color_accent && !regex_match(color_accent->begin(), color_accent->end(), color_hex_regex)) ||
+        (color_accent_dim && !regex_match(color_accent_dim->begin(), color_accent_dim->end(), color_hex_regex)) ||
+        (color_accent_hover && !regex_match(color_accent_hover->begin(), color_accent_hover->end(), color_hex_regex))
+      ) {
+        throw ApiError("Colors must be in hex format", 400);
+      }
+    }
   };
 
   struct FirstRunSetup : SiteUpdate {
@@ -153,7 +180,6 @@ namespace Ludwig {
   };
 
   static inline auto invite_code_to_id(std::string_view invite_code) -> uint64_t {
-    static const std::regex invite_code_regex(R"(([0-9A-F]{5})-([0-9A-F]{3})-([0-9A-F]{3})-([0-9A-F]{5}))");
     std::match_results<std::string_view::const_iterator> match;
     if (std::regex_match(invite_code.begin(), invite_code.end(), match, invite_code_regex)) {
       return std::stoull(match[1].str() + match[2].str() + match[3].str() + match[4].str());

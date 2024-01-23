@@ -173,7 +173,7 @@ namespace Ludwig::Lemmy {
         ? optional(fmt::format("{}/media/board/{}/banner.webp", site->base_url, board.name()->string_view()))
         : nullopt,
       .description = opt_str(board.description_raw()),
-      .display_name = board.display_name()->size()
+      .display_name = board.display_name() && board.display_name()->size()
         ? optional(RichTextParser::plain_text_with_emojis_to_text_content(board.display_name_type(), board.display_name()))
         : nullopt,
       .deleted = !!board.deleted_at(),
@@ -244,7 +244,7 @@ namespace Ludwig::Lemmy {
         ? optional(fmt::format("{}/media/user/{}/banner.webp", site->base_url, user.name()->string_view()))
         : nullopt,
       .bio = opt_str(user.bio_raw()),
-      .display_name = user.display_name()->size()
+      .display_name = user.display_name() && user.display_name()->size()
           ? optional(RichTextParser::plain_text_with_emojis_to_text_content(user.display_name_type(), user.display_name()))
           : nullopt,
       .matrix_user_id = opt_str(user.matrix_user_id()),
@@ -443,7 +443,7 @@ namespace Ludwig::Lemmy {
   /* createCustomEmoji */
 
   auto ApiController::create_post(CreatePost& form, optional<SecretString>&& auth) -> PostResponse {
-    if (form.honeypot) throw ApiError("bots begone", 418);
+    if (form.honeypot && !form.honeypot->empty()) throw ApiError("bots begone", 418);
     const auto user_id = require_auth(form, std::move(auth));
     // TODO: Use language_id
     const auto id = instance->create_local_thread(
@@ -618,20 +618,19 @@ namespace Ludwig::Lemmy {
 
   auto ApiController::get_comments(const GetComments& form, optional<SecretString>&& auth) -> GetCommentsResponse {
     auto txn = instance->open_read_txn();
-    const auto limit = form.limit ? form.limit : ITEMS_PER_PAGE;
+    const uint16_t limit = form.limit ? form.limit : ITEMS_PER_PAGE, page = form.page ? form.page - 1 : 0;
     if (limit < 1 || limit > 256) throw ApiError("get_comments requires 0 < limit <= 256", 400);
-    const uint64_t offset = limit * form.page, final_total = offset + limit;
+    const uint64_t offset = limit * page, final_total = offset + limit;
     if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
     const auto login = LocalUserDetail::get_login(txn, login_id);
-    if ((int)!form.type + (int)!form.parent_id + (int)!form.post_id + (int)form.community_name.empty() < 3) {
-      throw ApiError(R"(get_comments requires at most one of "type", "parent_id", "post_id", or "community_name")", 400);
+    if ((int)!form.parent_id + (int)!form.post_id + (int)form.community_name.empty() < 2) {
+      throw ApiError(R"(get_comments requires at most one of "parent_id", "post_id", or "community_name")", 400);
     }
     PageCursor next;
     vector<CommentView> entries;
     if (form.parent_id || form.post_id) {
       const uint64_t parent_id = form.parent_id ? form.parent_id : form.post_id;
-      spdlog::debug("Listing comments on {:x}, offset {}, limit {}", parent_id, offset, limit);
       const bool is_thread = !!txn.get_thread(parent_id);
       const auto sort = parse_comment_sort_type(form.sort, login);
       auto tree = is_thread ?
@@ -669,7 +668,6 @@ namespace Ludwig::Lemmy {
         instance->list_feed_comments(add_entry, txn, feed, sort, login, {}, (uint16_t)final_total);
       }
     }
-    spdlog::debug("Entries: {}", entries.size());
     return { entries };
   }
 
@@ -700,9 +698,9 @@ namespace Ludwig::Lemmy {
 
   auto ApiController::get_person_details(const GetPersonDetails& form, optional<SecretString>&& auth) -> GetPersonDetailsResponse {
     auto txn = instance->open_read_txn();
-    const auto limit = form.limit ? form.limit : ITEMS_PER_PAGE;
+    const uint16_t limit = form.limit ? form.limit : ITEMS_PER_PAGE, page = form.page ? form.page - 1 : 0;
     if (limit < 1 || limit > 256) throw ApiError("get_person_details requires 0 < limit <= 256", 400);
-    const uint64_t offset = limit * form.page, final_total = offset + limit;
+    const uint64_t offset = limit * page, final_total = offset + limit;
     if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
     const auto login = LocalUserDetail::get_login(txn, login_id);
@@ -765,14 +763,14 @@ namespace Ludwig::Lemmy {
 
   auto ApiController::get_posts(const GetPosts& form, optional<SecretString>&& auth) -> GetPostsResponse {
     auto txn = instance->open_read_txn();
-    const auto limit = form.limit ? form.limit : ITEMS_PER_PAGE;
+    const uint16_t limit = form.limit ? form.limit : ITEMS_PER_PAGE, page = form.page ? form.page - 1 : 0;
     if (limit < 1 || limit > 256) throw ApiError("get_posts requires 0 < limit <= 256", 400);
-    const uint64_t offset = limit * form.page, final_total = offset + limit;
+    const uint64_t offset = limit * page, final_total = offset + limit;
     if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
     const auto login = LocalUserDetail::get_login(txn, login_id);
-    if (((int)!form.type + (int)!form.community_id + (int)form.community_name.empty()) < 2) {
-      throw ApiError(R"(get_posts requires at most one of "type", "community_id", or "community_name")", 400);
+    if (form.community_id && !form.community_name.empty()) {
+      throw ApiError(R"(get_posts requires at most one of "community_id", or "community_name")", 400);
     }
     const auto sort = parse_sort_type(form.sort, login);
     vector<PostView> entries;
@@ -882,9 +880,9 @@ namespace Ludwig::Lemmy {
 
   auto ApiController::list_communities(const ListCommunities& form, optional<SecretString>&& auth) -> ListCommunitiesResponse {
     auto txn = instance->open_read_txn();
-    const auto limit = form.limit ? form.limit : ITEMS_PER_PAGE;
+    const uint16_t limit = form.limit ? form.limit : ITEMS_PER_PAGE, page = form.page ? form.page - 1 : 0;
     if (limit < 1 || limit > 256) throw ApiError("list_communities requires 0 < limit <= 256", 400);
-    const uint64_t offset = limit * form.page, final_total = offset + limit;
+    const uint64_t offset = limit * page, final_total = offset + limit;
     if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
     const auto login = LocalUserDetail::get_login(txn, login_id);
@@ -973,7 +971,7 @@ namespace Ludwig::Lemmy {
   /* purgePost */
 
   auto ApiController::register_account(Register& form, string_view ip, string_view user_agent) -> LoginResponse {
-    if (form.honeypot) throw ApiError("bots begone", 418);
+    if (form.honeypot && !form.honeypot->empty()) throw ApiError("bots begone", 418);
     if (form.password.data != form.password_verify.data) throw ApiError("Passwords do not match", 400);
     // TODO: Use captcha
     // TODO: Use show_nsfw
@@ -1003,14 +1001,14 @@ namespace Ludwig::Lemmy {
 
   auto ApiController::save_comment(SaveComment& form, optional<SecretString>&& auth) -> CommentResponse {
     const auto user_id = require_auth(form, std::move(auth));
-    instance->save_post(user_id, form.comment_id, form.save_.value_or(true));
+    instance->save_post(user_id, form.comment_id, form.save.value_or(true));
     auto txn = instance->open_read_txn();
     return { get_comment_view(txn, form.comment_id, user_id), {}, {} };
   }
 
   auto ApiController::save_post(SavePost& form, optional<SecretString>&& auth) -> PostResponse {
     const auto user_id = require_auth(form, std::move(auth));
-    instance->save_post(user_id, form.post_id, form.save_.value_or(true));
+    instance->save_post(user_id, form.post_id, form.save.value_or(true));
     auto txn = instance->open_read_txn();
     return { get_post_view(txn, form.post_id, user_id) };
   }
@@ -1049,7 +1047,7 @@ namespace Ludwig::Lemmy {
     instance->search_step_1({
       .query = form.q,
       .board_id = form.community_id.value_or(0),
-      .offset = (size_t)(form.page.value_or(0) * limit),
+      .offset = (size_t)((form.page.value_or(1) - 1) * limit),
       .limit = limit
     }, [&, limit, user_id](auto&& results){
       auto txn = instance->open_read_txn();

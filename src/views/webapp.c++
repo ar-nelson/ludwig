@@ -4,6 +4,7 @@
 #include "models/enums.h++"
 #include "static/default-theme.css.h++"
 #include "static/htmx.min.js.h++"
+#include "static/ludwig.js.h++"
 #include "static/feather-sprite.svg.h++"
 #include <iterator>
 #include <regex>
@@ -354,16 +355,27 @@ namespace Ludwig {
           R"(<!doctype html><html lang="en"><head><meta charset="utf-8">)"
           R"(<meta name="viewport" content="width=device-width,initial-scale=1">)"
           R"(<meta name="referrer" content="same-origin"><title>{}{}{}</title>)"
-          R"(<link rel="stylesheet" href="/static/default-theme.css">)"
-          R"(<script src="/static/htmx.min.js"></script>)",
+          R"(<style type="text/css">body{}--color-accent:{}!important;--color-accent-dim:{}!important;--color-accent-hover:{}!important;{}</style>)"
+          R"(<link rel="stylesheet" href="/static/default-theme.css">)",
           Escape{m.site->name},
           (opt.page_title || opt.banner_title) ? " - " : "",
           Escape{
             opt.page_title ? *opt.page_title :
             opt.banner_title ? *opt.banner_title :
             ""
-          }
+          },
+          "{",
+          m.site->color_accent,
+          m.site->color_accent_dim,
+          m.site->color_accent_hover,
+          "}"
         );
+        if (m.site->javascript_enabled) {
+          write(
+            R"(<script src="/static/htmx.min.js"></script>)"
+            R"(<script src="/static/ludwig.js"></script>)"
+          );
+        }
         if (opt.canonical_path) {
           write_fmt(
             R"(<link rel="canonical" href="{0}{1}">)"
@@ -552,7 +564,7 @@ namespace Ludwig {
           [&](const BoardDetail& board) {
             write_fmt(R"(<section id="board-sidebar"><h2>{}</h2>)", display_name_as_html(board.board()));
             // TODO: Banner image
-            if (board.board().description_type()->size()) {
+            if (board.board().description_type() && board.board().description_type()->size()) {
               write_fmt("<p>{}</p>", rt.blocks_to_html(
                 board.board().description_type(),
                 board.board().description(),
@@ -562,7 +574,7 @@ namespace Ludwig {
           },
           [&](const UserDetail& user) {
             write_fmt(R"(<section id="user-sidebar"><h2>{}</h2>)", display_name_as_html(user.user()));
-            if (user.user().bio_type()->size()) {
+            if (user.user().bio_type() && user.user().bio_type()->size()) {
               write_fmt("<p>{}</p>", rt.blocks_to_html(
                 user.user().bio_type(),
                 user.user().bio(),
@@ -814,25 +826,27 @@ namespace Ludwig {
           can_downvote = entry.can_downvote(login, site);
         if (can_upvote || can_downvote) {
           write_fmt(
-            R"(<form class="vote-buttons" id="votes-{0:x}" method="post" action="/{1}/{0:x}/vote" hx-post="/{1}/{0:x}/vote" hx-swap="outerHTML">)"
-            R"(<output class="karma" id="karma-{0:x}">{2}</output>)"
-            R"(<label class="upvote"><button type="submit" name="vote" {3}{5}><span class="a11y">Upvote</span></button></label>)"
-            R"(<label class="downvote"><button type="submit" name="vote" {4}{6}><span class="a11y">Downvote</span></button></label>)"
-            "</form>",
-            entry.id, T::noun, Suffixed{entry.stats().karma()},
+            R"(<form class="vote-buttons" id="votes-{0:x}" method="post" action="/{1}/{0:x}/vote" hx-post="/{1}/{0:x}/vote" hx-swap="outerHTML">)",
+            entry.id, T::noun
+          );
+        } else {
+          write_fmt(R"(<div class="vote-buttons" id="votes-{:x}">)", entry.id);
+        }
+        if (entry.should_show_votes(login, site)) {
+          if (!login || login->local_user().show_karma()) {
+            write_fmt(R"(<output class="karma" id="karma-{:x}">{}</output>)", entry.id, Suffixed{entry.stats().karma()});
+          } else {
+            write(R"(<div class="karma">&nbsp;</div>)");
+          }
+          write_fmt(
+            R"(<label class="upvote"><button type="submit" name="vote" {0}{2}><span class="a11y">Upvote</span></button></label>)"
+            R"(<label class="downvote"><button type="submit" name="vote" {1}{3}><span class="a11y">Downvote</span></button></label>)",
             can_upvote ? "" : "disabled ", can_downvote ? "" : "disabled ",
             entry.your_vote == Vote::Upvote ? R"(class="voted" value="0")" : R"(value="1")",
             entry.your_vote == Vote::Downvote ? R"(class="voted" value="0")" : R"(value="-1")"
           );
-        } else {
-          write_fmt(
-            R"(<div class="vote-buttons" id="votes-{0:x}"><output class="karma" id="karma-{0:x}">{1}</output>)"
-            R"(<div class="upvote"><button type="button" disabled><span class="a11y">Upvote</span></button></div>)"
-            R"(<div class="downvote"><button type="button" disabled><span class="a11y">Downvote</span></button></div></div>)",
-            entry.id, Suffixed{entry.stats().karma()}
-          );
         }
-        return *this;
+        return write((can_upvote || can_downvote) ? "</form>" : "</div>");
       }
 
       auto write_pagination(
@@ -1035,7 +1049,7 @@ namespace Ludwig {
         }
         if (thread.thread().content_warning() || thread.thread().mod_state() > ModState::Visible) {
           write(R"(<div class="thread-warnings">)");
-          if (!is_list_item && thread.thread().content_text_type()->size()) {
+          if (!is_list_item && thread.thread().content_text_type() && thread.thread().content_text_type()->size()) {
             write_short_warnings(thread.thread());
           }
           else write_warnings(thread.thread());
@@ -1247,10 +1261,10 @@ namespace Ludwig {
 
       template <class T> auto write_reply_form(const T& parent) noexcept -> ResponseWriter& {
         write_fmt(
-          R"(<form id="reply-{1:x}" class="form reply-form" method="post" action="/{0}/{1:x}/reply" )"
+          R"(<form data-component="Form" id="reply-{1:x}" class="form reply-form" method="post" action="/{0}/{1:x}/reply" )"
           R"html(hx-post="/{0}/{1:x}/reply" hx-target="#comments-{1:x}" hx-swap="afterbegin" hx-on::after-request="this.reset()">)html"
           R"(<a name="reply"></a>)"
-          HTML_TEXTAREA("text_content", "Reply", R"( placeholder="Write your reply here")", ""),
+          HTML_TEXTAREA("text_content", "Reply", R"( required placeholder="Write your reply here")", ""),
           T::noun, parent.id
         );
         write_content_warning_field();
@@ -1267,7 +1281,7 @@ namespace Ludwig {
       ) noexcept -> ResponseWriter& {
         write(R"(<article class="thread-with-comments">)");
         write_thread_entry(thread, site, login, false, true, true, show_images);
-        if (thread.thread().content_text_type()->size()) {
+        if (thread.thread().content_text_type() && thread.thread().content_text_type()->size()) {
           const auto content = rt.blocks_to_html(
             thread.thread().content_text_type(),
             thread.thread().content_text(),
@@ -1329,19 +1343,28 @@ namespace Ludwig {
         );
       }
 
-      auto write_register_form(optional<string_view> error = {}) noexcept -> ResponseWriter& {
-        return write_fmt(
-          R"(<main><form class="form form-page" method="post" action="/register">{})"
+      auto write_register_form(const SiteDetail* site, optional<string_view> error = {}) noexcept -> ResponseWriter& {
+        write_fmt(
+          R"(<main><form data-component="Form" class="form form-page" method="post" action="/register">{})",
+          error_banner(error)
+        ).write(
           R"(<label for="username" class="a11y"><span>Don't type here unless you're a bot</span>)"
           R"(<input type="text" name="username" id="username" tabindex="-1" autocomplete="off"></label>)"
-          HTML_FIELD("actual_username", "Username", "text", "")
-          HTML_FIELD("email", "Email address", "email", "")
-          HTML_FIELD("password", "Password", "password", "")
-          HTML_FIELD("confirm_password", "Confirm password", "password", "")
-          R"(<input type="submit" value="Register">)"
-          "</form></main>",
-          error_banner(error)
+          HTML_FIELD("actual_username", "Username", "text", R"( required pattern=")" USERNAME_REGEX_SRC R"(")")
+          HTML_FIELD("email", "Email address", "email", " required")
+          HTML_FIELD("password", "Password", "password", " required")
+          HTML_FIELD("confirm_password", "Confirm password", "password", " required")
         );
+        if (site->registration_invite_required) {
+          write(HTML_FIELD("invite_code", "Invite code", "text", R"( required pattern=")" INVITE_CODE_REGEX_SRC R"(")"));
+        }
+        if (site->registration_application_required) {
+          write_fmt(
+            R"(<label for="application_reason"><span>{}</span><textarea name="application_reason" required autocomplete="off"></textarea></label>)",
+            Escape{site->application_question.value_or("Why do you want to join?")}
+          );
+        }
+        return write(R"(<input type="submit" value="Register"></form></main>)");
       }
 
       auto write_create_board_form(
@@ -1349,7 +1372,7 @@ namespace Ludwig {
         optional<string_view> error = {}
       ) noexcept -> ResponseWriter& {
         return write_fmt(
-          R"(<main><form class="form form-page" method="post" action="/create_board"><h2>Create Board</h2>{})",
+          R"(<main><form data-component="Form" class="form form-page" method="post" action="/create_board"><h2>Create Board</h2>{})",
           error_banner(error)
         ).write(
           HTML_FIELD("name", "Name", "text", R"( autocomplete="off" placeholder="my_cool_board" pattern=")" USERNAME_REGEX_SRC R"(" required)")
@@ -1375,7 +1398,7 @@ namespace Ludwig {
         optional<string_view> error = {}
       ) noexcept -> ResponseWriter& {
         write_fmt(
-          R"(<main><form class="form form-page" method="post" action="/b/{}/create_thread"><h2>Create Thread</h2>{})"
+          R"(<main><form data-component="Form" class="form form-page" method="post" action="/b/{}/create_thread"><h2>Create Thread</h2>{})"
           R"(<p class="thread-info"><span>Posting as )",
           Escape(board.board().name()), error_banner(error)
         );
@@ -1391,7 +1414,7 @@ namespace Ludwig {
         } else {
           write(HTML_TEXTAREA("text_content", "Text content", " required", ""));
         }
-        return *this;
+        return write(R"(<input type="submit" value="Submit"></form></main>)");
       }
 
       auto write_edit_thread_form(
@@ -1400,7 +1423,7 @@ namespace Ludwig {
         optional<string_view> error = {}
       ) noexcept -> ResponseWriter& {
         write_fmt(
-          R"(<main><form class="form form-page" method="post" action="/thread/{:x}/edit"><h2>Edit Thread</h2>{})"
+          R"(<main><form data-component="Form" class="form form-page" method="post" action="/thread/{:x}/edit"><h2>Edit Thread</h2>{})"
           R"(<p class="thread-info"><span>Posting as )",
           thread.id, error_banner(error)
         );
@@ -1473,14 +1496,20 @@ namespace Ludwig {
 
       auto write_site_admin_form(const SiteDetail* site, optional<string_view> error = {}) noexcept -> ResponseWriter& {
         return write_fmt(
-          R"(<form class="form form-page" method="post" action="/site_admin"><h2>Site settings</h2>{})"
+          R"(<form data-component="Form" class="form form-page" method="post" action="/site_admin"><h2>Site settings</h2>{})"
           HTML_FIELD("name", "Site name", "text", R"( value="{}" autocomplete="off" required)")
           HTML_TEXTAREA("description", "Sidebar description", "", "{}")
           HTML_FIELD("icon_url", "Icon URL", "text", R"( value="{}" autocomplete="off")")
-          HTML_FIELD("banner_url", "Banner URL", "text", R"( value="{}" autocomplete="off")"),
+          HTML_FIELD("banner_url", "Banner URL", "text", R"( value="{}" autocomplete="off")")
+          HTML_FIELD("color_accent", "Accent Color", "color", R"( value="{}" autocomplete="off")")
+          HTML_FIELD("color_accent_dim", "Accent Color (Dim)", "color", R"( value="{}" autocomplete="off")")
+          HTML_FIELD("color_accent_hover", "Accent Color (Hover)", "color", R"( value="{}" autocomplete="off")"),
           error_banner(error),
           Escape{site->name}, Escape{site->description},
-          Escape{site->icon_url.value_or("")}, Escape{site->banner_url.value_or("")}
+          Escape{site->icon_url.value_or("")}, Escape{site->banner_url.value_or("")},
+          site->color_accent,
+          site->color_accent_dim,
+          site->color_accent_hover
         )
         .write_home_page_type_select(site->home_page_type)
         .write_voting_select(site->votes_enabled, site->downvotes_enabled)
@@ -1521,7 +1550,7 @@ namespace Ludwig {
         optional<string_view> error = {}
       ) noexcept -> ResponseWriter& {
         write_fmt(
-          R"(<form class="form form-page" method="post" action="/site_admin/first_run_setup">{})"
+          R"(<form data-component="Form" class="form form-page" method="post" action="/site_admin/first_run_setup">{})"
           HTML_FIELD("name", "What is this server's name?", "text", R"( required value="Ludwig" autocomplete="off")")
           "{}",
           error_banner(error),
@@ -1577,7 +1606,7 @@ namespace Ludwig {
         else if (login.local_user().expand_cw_images()) cw_mode = 3;
         else if (login.local_user().expand_cw_posts()) cw_mode = 2;
         write_fmt(
-          R"(<form class="form form-page" method="post" action="/settings"><h2>User settings</h2>{})"
+          R"(<form data-component="Form" class="form form-page" method="post" action="/settings"><h2>User settings</h2>{})"
           HTML_CHECKBOX("open_links_in_new_tab", "Open links in new tab", "{}")
           HTML_CHECKBOX("show_avatars", "Show avatars", "{}")
           HTML_CHECKBOX("show_images_threads", "Show images on threads by default", "{}")
@@ -1629,7 +1658,7 @@ namespace Ludwig {
         optional<string_view> error = {}
       ) noexcept -> ResponseWriter& {
         return write_fmt(
-          R"(<form class="form form-page" method="post" action="/settings/profile"><h2>Profile</h2>{})"
+          R"(<form data-component="Form" class="form form-page" method="post" action="/settings/profile"><h2>Profile</h2>{})"
           R"(<label for="name"><span>Username</span><output name="name" id="name">{}</output></label>)"
           HTML_FIELD("display_name", "Display name", "text", R"( value="{}")")
           HTML_FIELD("email", "Email address", "email", R"( required value="{}")")
@@ -1653,12 +1682,12 @@ namespace Ludwig {
         optional<string_view> error = {}
       ) noexcept -> ResponseWriter& {
         return write_fmt(
-          R"(<form class="form form-page" method="post" action="/settings/account"><h2>Change password</h2>{})"
+          R"(<form data-component="Form" class="form form-page" method="post" action="/settings/account"><h2>Change password</h2>{})"
           HTML_FIELD("old_password", "Old password", "password", R"( required autocomplete="off")")
           HTML_FIELD("password", "New password", "password", R"( required autocomplete="off")")
           HTML_FIELD("confirm_password", "Confirm new password", "password", R"( required autocomplete="off")")
           R"(<input type="submit" value="Submit"></form><br>)"
-          R"(<form class="form form-page" method="post" action="/settings/delete_account"><h2>Delete account</h2>)"
+          R"(<form data-component="Form" class="form form-page" method="post" action="/settings/delete_account"><h2>Delete account</h2>)"
           R"(<p>⚠️ <strong>Warning: This cannot be undone!</strong> ⚠️</p>)"
           HTML_FIELD("delete_password", "Type your password here", "password", R"( required autocomplete="off")")
           HTML_FIELD("delete_confirm", R"(Type "delete" here to confirm)", "text", R"( required autocomplete="off")")
@@ -1674,7 +1703,7 @@ namespace Ludwig {
         optional<string_view> error = {}
       ) noexcept -> ResponseWriter& {
         return write_fmt(
-          R"(<form class="form form-page" method="post" action="/b/{}/settings"><h2>Board settings</h2>{})"
+          R"(<form data-component="Form" class="form form-page" method="post" action="/b/{}/settings"><h2>Board settings</h2>{})"
           HTML_FIELD("display_name", "Display name", "text", R"( autocomplete="off" value="{}")")
           HTML_TEXTAREA("description", "Sidebar description", "", "{}")
           HTML_FIELD("content_warning", "Content warning (optional)", "text", R"( autocomplete="off" value="{}")")
@@ -1705,11 +1734,9 @@ namespace Ludwig {
     auto error_page(Response rsp, const ApiError& e, const ErrorMeta& m) noexcept -> void {
       if (m.is_htmx) {
         writer(
-          rsp->writeStatus(http_status(200))
+          rsp->writeStatus(http_status(e.http_status))
             ->writeHeader("Content-Type", TYPE_HTML)
-            ->writeHeader("HX-Retarget", "#toasts")
-            ->writeHeader("HX-Reswap", "afterbegin")
-        ) .write_toast(e.message, " toast-error")
+        ) .write_fmt("Error {:d}: {}", e.http_status, Escape(e.message))
           .finish();
       } else if (e.http_status == 401) {
         rsp->writeStatus(http_status(303))
@@ -1947,6 +1974,7 @@ namespace Ludwig {
 
       serve_static(app, "default-theme.css", TYPE_CSS, default_theme_css_str());
       serve_static(app, "htmx.min.js", TYPE_JS, htmx_min_js_str());
+      serve_static(app, "ludwig.js", TYPE_JS, ludwig_js_str());
       serve_static(app, "feather-sprite.svg", TYPE_SVG, feather_sprite_svg_str());
 
       // Pages
@@ -2307,7 +2335,7 @@ namespace Ludwig {
               .canonical_path = "/register",
               .banner_title = "Register",
             })
-            .write_register_form()
+            .write_register_form(m.site)
             .write_html_footer(m)
             .finish();
         }
@@ -2500,7 +2528,7 @@ namespace Ludwig {
                   .canonical_path = "/register",
                   .banner_title = "Register",
                 })
-                .write_register_form({e.message})
+                .write_register_form(m->site, {e.message})
                 .write_html_footer(*m)
                 .finish();
               return;
