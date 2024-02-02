@@ -20,32 +20,30 @@ namespace Ludwig {
     else return fbb.CreateString(**updated);
   }
 
-  static inline auto update_rich_text(
+  static inline auto update_rich_text_emojis_only(
     FlatBufferBuilder& fbb,
-    RichTextParser& rich_text,
     optional<optional<string_view>> updated,
-    const Vector<PlainTextWithEmojis>* types,
+    const Vector<RichText>* types,
     const Vector<Offset<void>>* values
   ) {
     return updated
       .transform([](optional<string_view> sv) { return sv.transform(λx(string(x))); })
       .value_or(types->size()
-        ? optional(rich_text.plain_text_with_emojis_to_text_content(types, values))
+        ? optional(rich_text_to_plain_text(types, values))
         : nullopt)
-      .transform([&](string s) { return rich_text.parse_plain_text_with_emojis(fbb, s); })
+      .transform([&](string s) { return plain_text_with_emojis_to_rich_text(fbb, s); })
       .value_or(pair(0, 0));
   }
 
   static inline auto update_rich_text(
     FlatBufferBuilder& fbb,
-    RichTextParser& rich_text,
     optional<optional<string_view>> updated,
     const String* existing_raw
   ) {
     return updated
       .value_or(existing_raw ? optional(existing_raw->string_view()) : nullopt)
       .transform([&](string_view s) {
-        const auto [types, values] = rich_text.parse_markdown(fbb, s);
+        const auto [types, values] = markdown_to_rich_text(fbb, s);
         return tuple(fbb.CreateString(s), types, values);
       })
       .value_or(tuple(0, 0, 0));
@@ -53,7 +51,6 @@ namespace Ludwig {
 
   auto patch_user(
     FlatBufferBuilder& fbb,
-    RichTextParser& rt,
     const User& old,
     const UserPatch& patch
   ) -> Offset<User> {
@@ -65,9 +62,9 @@ namespace Ludwig {
       matrix_user_id = update_opt_str(fbb, patch.matrix_user_id, old.matrix_user_id()),
       mod_reason = update_opt_str(fbb, patch.mod_reason, old.mod_reason());
     const auto [display_name_type, display_name] =
-      update_rich_text(fbb, rt, patch.display_name, old.display_name_type(), old.display_name());
+      update_rich_text_emojis_only(fbb, patch.display_name, old.display_name_type(), old.display_name());
     const auto [bio_raw, bio_type, bio] =
-      update_rich_text(fbb, rt, patch.bio, old.bio_raw());
+      update_rich_text(fbb, patch.bio, old.bio_raw());
     UserBuilder b(fbb);
     b.add_name(name);
     b.add_display_name_type(display_name_type);
@@ -141,7 +138,6 @@ namespace Ludwig {
 
   auto patch_board(
     FlatBufferBuilder& fbb,
-    RichTextParser& rt,
     const Board& old,
     const BoardPatch& patch
   ) -> Offset<Board> {
@@ -154,9 +150,9 @@ namespace Ludwig {
       content_warning = update_opt_str(fbb, patch.content_warning, old.content_warning()),
       mod_reason = update_opt_str(fbb, patch.mod_reason, old.mod_reason());
     const auto [display_name_type, display_name] =
-      update_rich_text(fbb, rt, patch.display_name, old.display_name_type(), old.display_name());
+      update_rich_text_emojis_only(fbb, patch.display_name, old.display_name_type(), old.display_name());
     const auto [description_raw, description_type, description] =
-      update_rich_text(fbb, rt, patch.description, old.description_raw());
+      update_rich_text(fbb, patch.description, old.description_raw());
     BoardBuilder b(fbb);
     b.add_name(name);
     b.add_display_name_type(display_name_type);
@@ -202,7 +198,6 @@ namespace Ludwig {
 
   auto patch_thread(
     FlatBufferBuilder& fbb,
-    RichTextParser& rt,
     const Thread& old,
     const ThreadPatch& patch
   ) -> Offset<Thread> {
@@ -212,9 +207,9 @@ namespace Ludwig {
       content_warning = update_opt_str(fbb, patch.content_warning, old.content_warning()),
       mod_reason = update_opt_str(fbb, patch.mod_reason, old.mod_reason());
     const auto [title_type, title] =
-      update_rich_text(fbb, rt, patch.title, old.title_type(), old.title());
+      update_rich_text_emojis_only(fbb, patch.title, old.title_type(), old.title());
     const auto [content_text_raw, content_text_type, content_text] =
-      update_rich_text(fbb, rt, patch.content_text, old.content_text_raw());
+      update_rich_text(fbb, patch.content_text, old.content_text_raw());
     ThreadBuilder b(fbb);
     b.add_author(old.author());
     b.add_board(old.board());
@@ -240,7 +235,6 @@ namespace Ludwig {
 
   auto patch_comment(
     FlatBufferBuilder& fbb,
-    RichTextParser& rt,
     const Comment& old,
     const CommentPatch& patch
   ) -> Offset<Comment> {
@@ -249,7 +243,7 @@ namespace Ludwig {
       content_warning = update_opt_str(fbb, patch.content_warning, old.content_warning()),
       mod_reason = update_opt_str(fbb, patch.mod_reason, old.mod_reason());
     const auto [content_raw, content_type, content] =
-      update_rich_text(fbb, rt, patch.content, old.content_raw());
+      update_rich_text(fbb, patch.content, old.content_raw());
     CommentBuilder b(fbb);
     b.add_author(old.author());
     b.add_parent(old.parent());

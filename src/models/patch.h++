@@ -1,5 +1,5 @@
 #pragma once
-#include "util/rich_text.h++"
+#include "util/common.h++"
 #include "models/db.h++"
 
 namespace Ludwig {
@@ -61,7 +61,6 @@ namespace Ludwig {
 
   auto patch_user(
     flatbuffers::FlatBufferBuilder& fbb,
-    RichTextParser& rt,
     const User& old,
     const UserPatch& patch
   ) -> flatbuffers::Offset<User>;
@@ -74,7 +73,6 @@ namespace Ludwig {
 
   auto patch_board(
     flatbuffers::FlatBufferBuilder& fbb,
-    RichTextParser& rt,
     const Board& old,
     const BoardPatch& patch
   ) -> flatbuffers::Offset<Board>;
@@ -87,14 +85,12 @@ namespace Ludwig {
 
   auto patch_thread(
     flatbuffers::FlatBufferBuilder& fbb,
-    RichTextParser& rt,
     const Thread& old,
     const ThreadPatch& patch
   ) -> flatbuffers::Offset<Thread>;
 
   auto patch_comment(
     flatbuffers::FlatBufferBuilder& fbb,
-    RichTextParser& rt,
     const Comment& old,
     const CommentPatch& patch
   ) -> flatbuffers::Offset<Comment>;

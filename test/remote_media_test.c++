@@ -35,14 +35,13 @@ TEST_CASE("fetch Wikipedia link card", "[remote_media]") {
     fbb.Clear();
     {
       const auto thread_url = fbb.CreateString(WIKI_URL);
-      const auto thread_title_type = fbb.CreateVector(vector{PlainTextWithEmojis::Plain});
-      const auto thread_title = fbb.CreateVector(vector{fbb.CreateString("Red panda").Union()});
+      const auto [title_type, title] = plain_text_to_rich_text(fbb, "Red panda");
       ThreadBuilder t(fbb);
       t.add_author(user_id);
       t.add_board(board_id);
       t.add_content_url(thread_url);
-      t.add_title_type(thread_title_type);
-      t.add_title(thread_title);
+      t.add_title_type(title_type);
+      t.add_title(title);
       t.add_created_at(now_s());
       fbb.Finish(t.Finish());
     }

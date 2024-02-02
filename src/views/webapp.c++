@@ -132,14 +132,12 @@ namespace Ludwig {
 
   template <bool SSL> struct Webapp : public std::enable_shared_from_this<Webapp<SSL>> {
     shared_ptr<InstanceController> controller;
-    shared_ptr<RichTextParser> rt;
     shared_ptr<KeyedRateLimiter> rate_limiter; // may be null!
 
     Webapp(
       shared_ptr<InstanceController> controller,
-      shared_ptr<RichTextParser> rt,
       shared_ptr<KeyedRateLimiter> rl
-    ) : controller(controller), rt(rt), rate_limiter(rl) {}
+    ) : controller(controller), rate_limiter(rl) {}
 
     using App = uWS::TemplatedApp<SSL>;
     using Response = uWS::HttpResponse<SSL>*;
@@ -260,7 +258,7 @@ namespace Ludwig {
 
     static auto display_name_as_text(const User& user) -> string {
       if (user.display_name_type() && user.display_name_type()->size()) {
-        return RichTextParser::plain_text_with_emojis_to_text_content(user.display_name_type(), user.display_name());
+        return rich_text_to_plain_text(user.display_name_type(), user.display_name());
       }
       const auto name = user.name()->string_view();
       return string(name.substr(0, name.find('@')));
@@ -268,23 +266,22 @@ namespace Ludwig {
 
     static auto display_name_as_text(const Board& board) -> string {
       if (board.display_name_type() && board.display_name_type()->size()) {
-        return RichTextParser::plain_text_with_emojis_to_text_content(board.display_name_type(), board.display_name());
+        return rich_text_to_plain_text(board.display_name_type(), board.display_name());
       }
       const auto name = board.name()->string_view();
       return string(name.substr(0, name.find('@')));
     }
 
     static auto display_name_as_text(const Thread& thread) -> string {
-      return RichTextParser::plain_text_with_emojis_to_text_content(thread.title_type(), thread.title());
+      return rich_text_to_plain_text(thread.title_type(), thread.title());
     }
 
     struct ResponseWriter {
-      RichTextParser& rt;
       InstanceController& controller;
       Response rsp;
       string buf;
 
-      ResponseWriter(Webapp<SSL>* w, Response rsp) : rt(*w->rt), controller(*w->controller), rsp(rsp) { buf.reserve(1024); }
+      ResponseWriter(Webapp<SSL>* w, Response rsp) : controller(*w->controller), rsp(rsp) { buf.reserve(1024); }
       operator Response() { return rsp; }
       auto write(string_view s) noexcept -> ResponseWriter& { buf.append(s); return *this; }
       auto finish() -> void { rsp->end(buf); }
@@ -305,7 +302,7 @@ namespace Ludwig {
       auto write_qualified_display_name(const User* user) noexcept -> ResponseWriter& {
         const auto name = user->name()->string_view();
         if (user->display_name_type() && user->display_name_type()->size()) {
-          write(RichTextParser::plain_text_with_emojis_to_html(user->display_name_type(), user->display_name(), {}));
+          write(rich_text_to_html_emojis_only(user->display_name_type(), user->display_name(), {}));
           const auto at_index = name.find('@');
           if (at_index != string_view::npos) write(name.substr(at_index));
         } else {
@@ -317,7 +314,7 @@ namespace Ludwig {
       auto write_qualified_display_name(const Board* board) noexcept -> ResponseWriter& {
         const auto name = board->name()->string_view();
         if (board->display_name_type() && board->display_name_type()->size()) {
-          write(RichTextParser::plain_text_with_emojis_to_html(board->display_name_type(), board->display_name(), {}));
+          write(rich_text_to_html_emojis_only(board->display_name_type(), board->display_name(), {}));
           const auto at_index = name.find('@');
           if (at_index != string_view::npos) write(name.substr(at_index));
         } else {
@@ -328,7 +325,7 @@ namespace Ludwig {
 
       auto display_name_as_html(const User& user) -> string {
         if (user.display_name_type() && user.display_name_type()->size()) {
-          return rt.plain_text_with_emojis_to_html(user.display_name_type(), user.display_name(), {});
+          return rich_text_to_html_emojis_only(user.display_name_type(), user.display_name(), {});
         }
         const auto name = user.name()->string_view();
         return fmt::format("{}", Escape(name.substr(0, name.find('@'))));
@@ -336,7 +333,7 @@ namespace Ludwig {
 
       auto display_name_as_html(const Board& board) -> string {
         if (board.display_name_type() && board.display_name_type()->size()) {
-          return rt.plain_text_with_emojis_to_html(board.display_name_type(), board.display_name(), {});
+          return rich_text_to_html_emojis_only(board.display_name_type(), board.display_name(), {});
         }
         const auto name = board.name()->string_view();
         return fmt::format("{}", Escape(name.substr(0, name.find('@'))));
@@ -565,7 +562,7 @@ namespace Ludwig {
             write_fmt(R"(<section id="board-sidebar"><h2>{}</h2>)", display_name_as_html(board.board()));
             // TODO: Banner image
             if (board.board().description_type() && board.board().description_type()->size()) {
-              write_fmt("<p>{}</p>", rt.blocks_to_html(
+              write_fmt("<p>{}</p>", rich_text_to_html(
                 board.board().description_type(),
                 board.board().description(),
                 { .open_links_in_new_tab = login && login->local_user().open_links_in_new_tab() }
@@ -575,7 +572,7 @@ namespace Ludwig {
           [&](const UserDetail& user) {
             write_fmt(R"(<section id="user-sidebar"><h2>{}</h2>)", display_name_as_html(user.user()));
             if (user.user().bio_type() && user.user().bio_type()->size()) {
-              write_fmt("<p>{}</p>", rt.blocks_to_html(
+              write_fmt("<p>{}</p>", rich_text_to_html(
                 user.user().bio_type(),
                 user.user().bio(),
                 { .open_links_in_new_tab = login && login->local_user().open_links_in_new_tab() }
@@ -1022,7 +1019,7 @@ namespace Ludwig {
           is_list_item ? "<li><article" : "<div",
           thread.id
         );
-        const auto title = rt.plain_text_with_emojis_to_html(thread.thread().title_type(), thread.thread().title(), {});
+        const auto title = rich_text_to_html_emojis_only(thread.thread().title_type(), thread.thread().title(), {});
         if (is_list_item || thread.thread().content_url()) {
           write_fmt(R"(<a class="thread-title-link" href="{}">{}</a></h2>)",
             Escape{
@@ -1104,7 +1101,7 @@ namespace Ludwig {
         if (show_thread) {
           write_fmt(R"(</span><span>on <a href="/thread/{:x}">{}</a>)",
             comment.comment().thread(),
-            rt.plain_text_with_emojis_to_html(comment.thread().title_type(), comment.thread().title(), {})
+            rich_text_to_html_emojis_only(comment.thread().title_type(), comment.thread().title(), {})
           );
           if (comment.thread().content_warning() || comment.thread().mod_state() > ModState::Visible) {
             write_short_warnings(comment.thread());
@@ -1112,7 +1109,7 @@ namespace Ludwig {
         }
         const bool has_warnings = comment.comment().content_warning() || comment.comment().mod_state() > ModState::Visible,
           thread_warnings = show_thread && (comment.thread().content_warning() || comment.thread().mod_state() > ModState::Visible);
-        const auto content = rt.blocks_to_html(
+        const auto content = rich_text_to_html(
           comment.comment().content_type(),
           comment.comment().content(),
           { .show_images = show_images, .open_links_in_new_tab = login && login->local_user().open_links_in_new_tab() }
@@ -1281,8 +1278,14 @@ namespace Ludwig {
       ) noexcept -> ResponseWriter& {
         write(R"(<article class="thread-with-comments">)");
         write_thread_entry(thread, site, login, false, true, true, show_images);
-        if (thread.thread().content_text_type() && thread.thread().content_text_type()->size()) {
-          const auto content = rt.blocks_to_html(
+        if (
+          thread.thread().content_text() &&
+          thread.thread().content_text()->size() &&
+          !(thread.thread().content_text()->size() == 1 &&
+            thread.thread().content_text_type()->GetEnum<RichText>(0) == RichText::Text &&
+            !thread.thread().content_text()->GetAsString(0)->size())
+        ) {
+          const auto content = rich_text_to_html(
             thread.thread().content_text_type(),
             thread.thread().content_text(),
             { .show_images = show_images, .open_links_in_new_tab = login && login->local_user().open_links_in_new_tab() }
@@ -1668,7 +1671,7 @@ namespace Ludwig {
           R"(<input type="submit" value="Submit"></form>)",
           error_banner(error),
           Escape(login.user().name()),
-          Escape(rt.plain_text_with_emojis_to_text_content(login.user().display_name_type(), login.user().display_name())),
+          Escape(rich_text_to_plain_text(login.user().display_name_type(), login.user().display_name())),
           Escape(login.local_user().email()),
           Escape(login.user().bio_raw()),
           Escape(login.user().avatar_url()),
@@ -1716,7 +1719,7 @@ namespace Ludwig {
           //HTML_CHECKBOX("invite_mod_only", "Only moderators can invite new members", "{}")
           ,
           Escape(board.board().name()), error_banner(error),
-          Escape(rt.plain_text_with_emojis_to_text_content(board.board().display_name_type(), board.board().display_name())),
+          Escape(rich_text_to_plain_text(board.board().display_name_type(), board.board().display_name())),
           Escape(board.board().description_raw()),
           Escape(board.board().content_warning()),
           Escape(board.board().icon_url()),
@@ -2890,24 +2893,21 @@ namespace Ludwig {
   template <bool SSL> auto webapp_routes(
     uWS::TemplatedApp<SSL>& app,
     shared_ptr<InstanceController> controller,
-    shared_ptr<RichTextParser> rt,
     shared_ptr<KeyedRateLimiter> rl
   ) -> void {
-    auto router = std::make_shared<Webapp<SSL>>(controller, rt, rl);
+    auto router = std::make_shared<Webapp<SSL>>(controller, rl);
     router->register_routes(app);
   }
 
   template auto webapp_routes<true>(
     uWS::TemplatedApp<true>& app,
     shared_ptr<InstanceController> controller,
-    shared_ptr<RichTextParser> rt,
     shared_ptr<KeyedRateLimiter> rl
   ) -> void;
 
   template auto webapp_routes<false>(
     uWS::TemplatedApp<false>& app,
     shared_ptr<InstanceController> controller,
-    shared_ptr<RichTextParser> rt,
     shared_ptr<KeyedRateLimiter> rl
   ) -> void;
 }

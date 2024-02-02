@@ -31,70 +31,18 @@ enum UserSortType : ubyte { New, Old, MostPosts, NewPosts }
 
 enum ModState : ubyte { Visible, Flagged, Locked, Removed }
 
-union TextBlock {
-  P: TextSpans,
-  H1: TextSpans,
-  H2: TextSpans,
-  H3: TextSpans,
-  H4: TextSpans,
-  H5: TextSpans,
-  H6: TextSpans,
-  Blockquote: TextBlocks,
-  Code: TextCodeBlock,
-  Math: string,
-  Image: TextImage,
-  Hr: FbVoid,
-  UnorderedList: TextList,
-  OrderedList: TextList
-}
-
-union TextSpan {
-  Plain: string,
-  Code: string,
-  Math: string,
-  Bold: TextSpans,
-  Italic: TextSpans,
-  Strikeout: TextSpans,
-  Spoiler: TextSpans,
-  Link: TextLink,
-  SoftBreak: FbVoid,
-  HardBreak: FbVoid,
-  CustomEmoji: string
-}
-
-union PlainTextWithEmojis {
-  Plain: string,
-  CustomEmoji: string
-}
-
-table FbVoid {}
-
-table TextBlocks {
-  blocks: [TextBlock] (required);
-}
-
-table TextSpans {
-  spans: [TextSpan] (required);
-}
-
-table TextList {
-  items: [TextBlocks] (required);
-}
-
-table TextCodeBlock {
-  text: string (required);
-  language: string;
-}
-
-table TextLink {
-  href: string (required);
-  title: string;
-  spans: [TextSpan] (required);
-}
-
-table TextImage {
+table RichTextImage {
   src: string (required);
   alt: string;
+}
+
+union RichText {
+  Text: string,
+  Emoji: string,
+  Link: string,
+  UserLink: string,
+  BoardLink: string,
+  Image: RichTextImage
 }
 
 table Session {
@@ -108,9 +56,9 @@ table Session {
 
 table User {
   name: string (required);
-  display_name: [PlainTextWithEmojis];
+  display_name: [RichText];
   bio_raw: string;
-  bio: [TextBlock];
+  bio: [RichText];
   actor_id: string;
   inbox_url: string;
   matrix_user_id: string;
@@ -180,7 +128,7 @@ table Application {
 
 table Board {
   name: string (required);
-  display_name: [PlainTextWithEmojis];
+  display_name: [RichText];
   actor_id: string;
   inbox_url: string;
   followers_url: string;
@@ -190,7 +138,7 @@ table Board {
   fetched_at: uint64 = null;
   deleted_at: uint64 = null;
   description_raw: string;
-  description: [TextBlock];
+  description: [RichText];
   icon_url: string;
   banner_url: string;
   content_warning: string;
@@ -225,7 +173,7 @@ enum MediaCategory : ubyte { Image, Audio, Video }
 table Thread {
   author: uint64;
   board: uint64;
-  title: [PlainTextWithEmojis];
+  title: [RichText];
   created_at: uint64;
   updated_at: uint64 = null;
   fetched_at: uint64 = null;
@@ -235,7 +183,7 @@ table Thread {
   original_post_url: string;
   content_url: string;
   content_text_raw: string;
-  content_text: [TextBlock];
+  content_text: [RichText];
   content_warning: string;
   featured: bool;
   mod_state: ModState = Visible;
@@ -264,7 +212,7 @@ table Comment {
   activity_url: string;
   original_post_url: string;
   content_raw: string;
-  content: [TextBlock] (required);
+  content: [RichText] (required);
   content_warning: string;
   mod_state: ModState = Visible;
   mod_reason: string;

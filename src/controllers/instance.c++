@@ -12,8 +12,7 @@
 using std::function, std::max, std::min, std::nullopt, std::optional, std::pair,
     std::priority_queue, std::regex, std::regex_match, std::shared_ptr,
     std::string, std::string_view, std::unique_ptr, std::vector, flatbuffers::Offset,
-    flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot,
-    flatbuffers::Vector;
+    flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot;
 namespace chrono = std::chrono;
 
 #define SECONDS(N) chrono::system_clock::time_point(chrono::seconds(N))
@@ -294,13 +293,11 @@ namespace Ludwig {
   InstanceController::InstanceController(
     shared_ptr<DB> db,
     shared_ptr<HttpClient> http_client,
-    shared_ptr<RichTextParser> rich_text,
     shared_ptr<EventBus> event_bus,
     optional<shared_ptr<SearchEngine>> search_engine,
     optional<pair<Hash, Salt>> first_run_admin_password
   ) : db(db),
       http_client(http_client),
-      rich_text(rich_text),
       event_bus(event_bus),
       site_detail_sub(event_bus->on_event(Event::SiteUpdate, [&](Event, uint64_t){
         auto txn = open_read_txn();
@@ -1446,7 +1443,7 @@ namespace Ludwig {
     }
     if (update.display_name || update.bio || update.avatar_url || update.banner_url || update.bot) {
       FlatBufferBuilder fbb;
-      fbb.Finish(patch_user(fbb, *rich_text, detail.user(), {
+      fbb.Finish(patch_user(fbb, detail.user(), {
         .display_name = update.display_name,
         .bio = update.bio,
         .avatar_url = update.avatar_url,
@@ -1545,7 +1542,7 @@ namespace Ludwig {
     FlatBufferBuilder fbb;
     {
       const auto [display_name_types, display_name_values] =
-        display_name ? rich_text->parse_plain_text_with_emojis(fbb, *display_name) : pair(0, 0);
+        display_name ? plain_text_with_emojis_to_rich_text(fbb, *display_name) : pair(0, 0);
       const auto content_warning_s = content_warning.transform([&](auto s) { return fbb.CreateString(s); });
       const auto name_s = fbb.CreateString(name);
       BoardBuilder b(fbb);
@@ -1596,7 +1593,7 @@ namespace Ludwig {
     }
     if (update.display_name || update.description || update.icon_url || update.banner_url) {
       FlatBufferBuilder fbb;
-      fbb.Finish(patch_board(fbb, *rich_text, detail.board(), {
+      fbb.Finish(patch_board(fbb, detail.board(), {
         .display_name = update.display_name,
         .description = update.description,
         .icon_url = update.icon_url,
@@ -1647,9 +1644,9 @@ namespace Ludwig {
       const auto submission_s = submission_url ? fbb.CreateString(*submission_url) : 0,
         content_raw_s = text_content_markdown ? fbb.CreateString(*text_content_markdown) : 0,
         content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
-      auto [title_blocks_type, title_blocks] = rich_text->parse_plain_text_with_emojis(fbb, title);
-      pair<Offset<Vector<TextBlock>>, Offset<Vector<Offset<void>>>> content_blocks;
-      if (text_content_markdown) content_blocks = rich_text->parse_markdown(fbb, *text_content_markdown);
+      auto [title_blocks_type, title_blocks] = plain_text_with_emojis_to_rich_text(fbb, title);
+      RichTextVectors content;
+      if (text_content_markdown) content = markdown_to_rich_text(fbb, *text_content_markdown);
       ThreadBuilder b(fbb);
       b.add_created_at(now_s());
       b.add_author(author);
@@ -1659,8 +1656,8 @@ namespace Ludwig {
       if (submission_url) b.add_content_url(submission_s);
       if (text_content_markdown) {
         b.add_content_text_raw(content_raw_s);
-        b.add_content_text_type(content_blocks.first);
-        b.add_content_text(content_blocks.second);
+        b.add_content_text_type(content.first);
+        b.add_content_text(content.second);
       }
       if (content_warning) b.add_content_warning(content_warning_s);
       fbb.Finish(b.Finish());
@@ -1689,7 +1686,7 @@ namespace Ludwig {
       throw ApiError("Title cannot be empty", 400);
     }
     FlatBufferBuilder fbb;
-    fbb.Finish(patch_thread(fbb, *rich_text, detail.thread(), {
+    fbb.Finish(patch_thread(fbb, detail.thread(), {
       .title = update.title,
       .content_text = update.text_content,
       .content_warning = update.content_warning,
@@ -1723,7 +1720,7 @@ namespace Ludwig {
     FlatBufferBuilder fbb;
     const auto content_raw_s = fbb.CreateString(text_content_markdown),
       content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
-    const auto [content_type, content] = rich_text->parse_markdown(fbb, text_content_markdown);
+    const auto [content_type, content] = markdown_to_rich_text(fbb, text_content_markdown);
     CommentBuilder b(fbb);
     b.add_created_at(now_s());
     b.add_author(author);
@@ -1761,7 +1758,7 @@ namespace Ludwig {
       throw ApiError("Content cannot be empty", 400);
     }
     FlatBufferBuilder fbb;
-    fbb.Finish(patch_comment(fbb, *rich_text, detail.comment(), {
+    fbb.Finish(patch_comment(fbb, detail.comment(), {
       .content = update.text_content,
       .content_warning = update.content_warning,
       .updated_at = now_s()

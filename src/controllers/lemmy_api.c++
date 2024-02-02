@@ -174,7 +174,7 @@ namespace Ludwig::Lemmy {
         : nullopt,
       .description = opt_str(board.description_raw()),
       .display_name = board.display_name() && board.display_name()->size()
-        ? optional(RichTextParser::plain_text_with_emojis_to_text_content(board.display_name_type(), board.display_name()))
+        ? optional(rich_text_to_plain_text(board.display_name_type(), board.display_name()))
         : nullopt,
       .deleted = !!board.deleted_at(),
       .hidden = hidden,
@@ -192,7 +192,7 @@ namespace Ludwig::Lemmy {
       .community_id = thread.board(),
       .creator_id = thread.author(),
       .language_id = 1, // TODO: Languages
-      .name = RichTextParser::plain_text_with_emojis_to_text_content(thread.title_type(), thread.title()),
+      .name = rich_text_to_plain_text(thread.title_type(), thread.title()),
       .ap_id = thread.activity_url()
         ? thread.activity_url()->str()
         : fmt::format("{}/ap/activity/{:x}", site->base_url, id),
@@ -245,7 +245,7 @@ namespace Ludwig::Lemmy {
         : nullopt,
       .bio = opt_str(user.bio_raw()),
       .display_name = user.display_name() && user.display_name()->size()
-          ? optional(RichTextParser::plain_text_with_emojis_to_text_content(user.display_name_type(), user.display_name()))
+          ? optional(rich_text_to_plain_text(user.display_name_type(), user.display_name()))
           : nullopt,
       .matrix_user_id = opt_str(user.matrix_user_id()),
       .admin = local_user.transform(λx(x.get().admin())).value_or(false),
@@ -675,7 +675,7 @@ namespace Ludwig::Lemmy {
     auto txn = instance->open_read_txn();
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
     if (!form.id == form.name.empty()) {
-      throw ApiError("get_community requires exactly one of \"id\" or \"name\"", 400);
+      throw ApiError(R"(get_community requires exactly one of "id" or "name")", 400);
     }
     uint64_t id;
     if (form.id) {
@@ -705,7 +705,7 @@ namespace Ludwig::Lemmy {
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
     const auto login = LocalUserDetail::get_login(txn, login_id);
     if ((form.person_id == 0) == form.username.empty()) {
-      throw ApiError("get_person_details requires exactly one of \"person_id\" or \"username\"", 400);
+      throw ApiError(R"(get_person_details requires exactly one of "person_id" or "username")", 400);
     }
     uint64_t id;
     if (form.person_id) {
@@ -743,7 +743,7 @@ namespace Ludwig::Lemmy {
     auto txn = instance->open_read_txn();
     const auto user_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
     if (!form.id == !form.comment_id) {
-      throw ApiError("get_post requires exactly one of \"id\" or \"comment_id\"", 400);
+      throw ApiError(R"(get_post requires exactly one of "id" or "comment_id")", 400);
     }
     uint64_t id;
     if (form.id) {

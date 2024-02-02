@@ -715,10 +715,15 @@ label.upvote, label.downvote {
   color: var(--color-accent);
   width: 0.8rem;
   height: 0.8rem;
+  position: relative;
+  top: 1px;
+  pointer-events: none;
 }
 
 .controls-submenu select {
-  width: 4rem;
+  width: 5rem;
+  padding-left: 1rem;
+  margin-left: -0.8rem;
 }
 
 body:not(.has-js) .js {

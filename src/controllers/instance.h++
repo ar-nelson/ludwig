@@ -18,6 +18,7 @@ namespace Ludwig {
 
 # define USERNAME_REGEX_SRC R"([a-zA-Z][a-zA-Z0-9_]{0,63})"
 # define INVITE_CODE_REGEX_SRC R"(([0-9A-F]{5})-([0-9A-F]{3})-([0-9A-F]{3})-([0-9A-F]{5}))"
+
   static const std::regex
     username_regex(USERNAME_REGEX_SRC),
     email_regex(
@@ -30,7 +31,7 @@ namespace Ludwig {
       std::regex::ECMAScript | std::regex::icase
     ),
     invite_code_regex(INVITE_CODE_REGEX_SRC),
-    color_hex_regex(R"(#[0-9a-fA-F]{6})");
+    color_hex_regex(R"(#[0-9a-f]{6})", std::regex::icase);
 
   struct LoginResponse {
     uint64_t user_id, session_id;
@@ -206,7 +207,6 @@ namespace Ludwig {
   private:
     std::shared_ptr<DB> db;
     std::shared_ptr<HttpClient> http_client;
-    std::shared_ptr<RichTextParser> rich_text;
     std::shared_ptr<EventBus> event_bus;
     EventBus::Subscription site_detail_sub;
     std::optional<std::shared_ptr<SearchEngine>> search_engine;
@@ -233,7 +233,6 @@ namespace Ludwig {
     InstanceController(
       std::shared_ptr<DB> db,
       std::shared_ptr<HttpClient> http_client,
-      std::shared_ptr<RichTextParser> rich_text,
       std::shared_ptr<EventBus> event_bus = std::make_shared<DummyEventBus>(),
       std::optional<std::shared_ptr<SearchEngine>> search_engine = {},
       std::optional<std::pair<Hash, Salt>> first_run_admin_password = {}

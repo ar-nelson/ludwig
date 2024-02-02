@@ -9,8 +9,6 @@ using flatbuffers::FlatBufferBuilder, flatbuffers::Offset;
 #define HOUR 3600
 #define DAY (HOUR * 24)
 
-auto rich_text = std::make_shared<RichTextParser>(std::make_shared<LibXmlContext>());
-
 struct Instance {
   TempFile file;
   shared_ptr<InstanceController> controller;
@@ -22,7 +20,7 @@ struct Instance {
     txn.set_setting(SettingsKey::created_at, epoch);
     txn.set_setting(SettingsKey::base_url, "http://ludwig.test");
     txn.commit();
-    controller = make_shared<InstanceController>(db, nullptr, rich_text);
+    controller = make_shared<InstanceController>(db, nullptr);
   }
 };
 
@@ -43,7 +41,7 @@ struct PopulatedInstance {
     fbb.ForceDefaults(true);
     {
       const auto name = fbb.CreateString("admin");
-      const auto [dn_t, dn] = RichTextParser::plain_text_to_plain_text_with_emojis(fbb, "Admin User");
+      const auto [dn_t, dn] = plain_text_to_rich_text(fbb, "Admin User");
       UserBuilder u(fbb);
       u.add_name(name);
       u.add_display_name_type(dn_t);
@@ -65,20 +63,16 @@ struct PopulatedInstance {
     fbb.Clear();
     {
       const auto name = fbb.CreateString("rando"),
-        bio_raw = fbb.CreateString("This is *my* bio");
-      const auto [dn_t, dn] = RichTextParser::plain_text_to_plain_text_with_emojis(fbb, "Some Local Rando");
-      const auto bio_t = fbb.CreateVector(vector{TextBlock::P});
-      const auto bio = fbb.CreateVector(vector{CreateTextSpans(fbb,
-        fbb.CreateVector(vector{TextSpan::Plain, TextSpan::Italic, TextSpan::Plain}),
-        fbb.CreateVector(vector{
-          fbb.CreateString("This is ").Union(),
-          CreateTextSpans(fbb,
-            fbb.CreateVector(vector{TextSpan::Plain}),
-            fbb.CreateVector(vector{fbb.CreateString("my").Union()})
-          ).Union(),
-          fbb.CreateString(" bio").Union()
-        })
-      ).Union()});
+        bio_raw = fbb.CreateString("Check out my website: [click here!](http://rando.example) :partyparrot:");
+      const auto [dn_t, dn] = plain_text_to_rich_text(fbb, "Some Local Rando");
+      const auto bio_t = fbb.CreateVector(vector{RichText::Text, RichText::Link, RichText::Text, RichText::Emoji, RichText::Text});
+      const auto bio = fbb.CreateVector(vector{
+        fbb.CreateString("<p>Check out my website: ").Union(),
+        fbb.CreateString("http://rando.example").Union(),
+        fbb.CreateString("click here!</a> ").Union(),
+        fbb.CreateString("partyparrot").Union(),
+        fbb.CreateString("</p>").Union()
+      });
       UserBuilder u(fbb);
       u.add_name(name);
       u.add_display_name_type(dn_t);
@@ -105,8 +99,8 @@ struct PopulatedInstance {
       const auto name = fbb.CreateString("troll"),
         bio_raw = fbb.CreateSharedString("Problem?"),
         mod_reason = fbb.CreateString("begone");
-      const auto [dn_t, dn] = RichTextParser::plain_text_to_plain_text_with_emojis(fbb, "Banned Troll");
-      const auto [bio_t, bio] = RichTextParser::plain_text_to_blocks(fbb, "Problem?");
+      const auto [dn_t, dn] = plain_text_to_rich_text(fbb, "Banned Troll");
+      const auto [bio_t, bio] = plain_text_to_rich_text(fbb, "Problem?");
       UserBuilder u(fbb);
       u.add_name(name);
       u.add_display_name_type(dn_t);
@@ -133,8 +127,8 @@ struct PopulatedInstance {
     {
       const auto name = fbb.CreateString("robot"),
         bio_raw = fbb.CreateSharedString("domo");
-      const auto [dn_t, dn] = RichTextParser::plain_text_to_plain_text_with_emojis(fbb, "Mr. Roboto");
-      const auto [bio_t, bio] = RichTextParser::plain_text_to_blocks(fbb, "domo");
+      const auto [dn_t, dn] = plain_text_to_rich_text(fbb, "Mr. Roboto");
+      const auto [bio_t, bio] = plain_text_to_rich_text(fbb, "domo");
       UserBuilder u(fbb);
       u.add_name(name);
       u.add_display_name_type(dn_t);
@@ -160,7 +154,7 @@ struct PopulatedInstance {
       const auto name = fbb.CreateString("visitor@federated.test"),
         actor_url = fbb.CreateString("https://federated.test/ap/user/visitor"),
         inbox_url = fbb.CreateString("https://federated.test/ap/user/visitor/inbox");
-      const auto [dn_t, dn] = RichTextParser::plain_text_to_plain_text_with_emojis(fbb, "Visitor from Elsewhere");
+      const auto [dn_t, dn] = plain_text_to_rich_text(fbb, "Visitor from Elsewhere");
       UserBuilder u(fbb);
       u.add_name(name);
       u.add_display_name_type(dn_t);
@@ -278,17 +272,16 @@ struct PopulatedInstance {
     };
     for (size_t i = 0; i < NUM_THREADS; i++) {
       fbb.Clear();
-      const auto [board, user, time, title, content_warning, mod_state] = thread_data[i];
+      const auto [board, user, time, title_raw, content_warning, mod_state] = thread_data[i];
       const auto url_s = fbb.CreateString("https://example.com"),
         content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0;
-      const auto title_type = fbb.CreateVector(vector{PlainTextWithEmojis::Plain});
-      const auto title_vec = fbb.CreateVector(vector{fbb.CreateString(title).Union()});
+      const auto [title_type, title] = plain_text_to_rich_text(fbb, title_raw);
       ThreadBuilder t(fbb);
       t.add_board(boards[board]);
       t.add_author(users[user]);
       t.add_created_at(epoch + time);
       t.add_title_type(title_type);
-      t.add_title(title_vec);
+      t.add_title(title);
       t.add_content_url(url_s);
       if (content_warning) t.add_content_warning(content_warning_s);
       if (mod_state) t.add_mod_state(*mod_state);
@@ -298,19 +291,18 @@ struct PopulatedInstance {
     for (size_t i = 0; i < ITEMS_PER_PAGE * 3; i++) {
       fbb.Clear();
       const auto url_s = fbb.CreateString("https://example.com");
-      const auto title_type = fbb.CreateVector(vector{PlainTextWithEmojis::Plain});
-      const auto title_vec = fbb.CreateVector(vector{fbb.CreateString(fmt::format("filler post {}", i)).Union()});
+      const auto [title_type, title] = plain_text_to_rich_text(fbb, fmt::format("filler post {}", i));
       ThreadBuilder t(fbb);
       t.add_board(boards[1]);
       t.add_author(users[3]);
       t.add_created_at(epoch + DAY * 3 + HOUR * i);
       t.add_title_type(title_type);
-      t.add_title(title_vec);
+      t.add_title(title);
       t.add_content_url(url_s);
       fbb.Finish(t.Finish());
     }
     txn.commit();
-    controller = make_shared<InstanceController>(db, nullptr, rich_text);
+    controller = make_shared<InstanceController>(db, nullptr);
   }
 };
 

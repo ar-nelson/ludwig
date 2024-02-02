@@ -26,7 +26,7 @@ namespace Ludwig {
     PlaceholderFlatbuffers() {
       fbb.ForceDefaults(true);
       const auto blank = fbb.CreateString("");
-      const auto display_name_type = fbb.CreateVector(vector{PlainTextWithEmojis::Plain});
+      const auto display_name_type = fbb.CreateVector(vector{RichText::Text});
       const auto display_name = fbb.CreateVector(vector{fbb.CreateString("[deleted]").Union()});
       const auto admin = fbb.CreateString("admin");
       {

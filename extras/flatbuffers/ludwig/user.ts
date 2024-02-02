@@ -5,8 +5,7 @@
 import * as flatbuffers from 'npm:flatbuffers';
 
 import { ModState } from '../ludwig/mod-state.ts';
-import { PlainTextWithEmojis, unionToPlainTextWithEmojis, unionListToPlainTextWithEmojis } from '../ludwig/plain-text-with-emojis.ts';
-import { TextBlock, unionToTextBlock, unionListToTextBlock } from '../ludwig/text-block.ts';
+import { RichText, unionToRichText, unionListToRichText } from '../ludwig/rich-text.ts';
 
 
 export class User {
@@ -34,7 +33,7 @@ name(optionalEncoding?:any):string|Uint8Array|null {
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
-displayNameType(index: number):PlainTextWithEmojis|null {
+displayNameType(index: number):RichText|null {
   const offset = this.bb!.__offset(this.bb_pos, 6);
   return offset ? this.bb!.readUint8(this.bb!.__vector(this.bb_pos + offset) + index) : 0;
 }
@@ -66,7 +65,7 @@ bioRaw(optionalEncoding?:any):string|Uint8Array|null {
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
-bioType(index: number):TextBlock|null {
+bioType(index: number):RichText|null {
   const offset = this.bb!.__offset(this.bb_pos, 12);
   return offset ? this.bb!.readUint8(this.bb!.__vector(this.bb_pos + offset) + index) : 0;
 }
@@ -180,7 +179,7 @@ static addDisplayNameType(builder:flatbuffers.Builder, displayNameTypeOffset:fla
   builder.addFieldOffset(1, displayNameTypeOffset, 0);
 }
 
-static createDisplayNameTypeVector(builder:flatbuffers.Builder, data:PlainTextWithEmojis[]):flatbuffers.Offset {
+static createDisplayNameTypeVector(builder:flatbuffers.Builder, data:RichText[]):flatbuffers.Offset {
   builder.startVector(1, data.length, 1);
   for (let i = data.length - 1; i >= 0; i--) {
     builder.addInt8(data[i]!);
@@ -216,7 +215,7 @@ static addBioType(builder:flatbuffers.Builder, bioTypeOffset:flatbuffers.Offset)
   builder.addFieldOffset(4, bioTypeOffset, 0);
 }
 
-static createBioTypeVector(builder:flatbuffers.Builder, data:TextBlock[]):flatbuffers.Offset {
+static createBioTypeVector(builder:flatbuffers.Builder, data:RichText[]):flatbuffers.Offset {
   builder.startVector(1, data.length, 1);
   for (let i = data.length - 1; i >= 0; i--) {
     builder.addInt8(data[i]!);

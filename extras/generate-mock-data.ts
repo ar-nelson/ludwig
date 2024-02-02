@@ -11,14 +11,11 @@ import {
   LocalBoard,
   LocalUser,
   ModState,
-  PlainTextWithEmojis,
+  RichText,
   Salt,
   SettingRecord,
   SortType,
   SubscriptionBatch,
-  TextBlock,
-  TextSpan,
-  TextSpans,
   Thread,
   User,
   VoteBatch,
@@ -102,23 +99,17 @@ function genUser(
       ),
       User.createDisplayNameTypeVector(
         fbb,
-        displayName ? [PlainTextWithEmojis.Plain] : [],
+        displayName ? [RichText.Text] : [],
       ),
       User.createDisplayNameVector(
         fbb,
         displayName ? [fbb.createString(displayName)] : [],
       ),
       bio ? fbb.createSharedString(bio) : 0,
-      User.createBioTypeVector(fbb, bio ? [TextBlock.P] : []),
+      User.createBioTypeVector(fbb, bio ? [RichText.Text] : []),
       User.createBioVector(
         fbb,
-        bio
-          ? [TextSpans.createTextSpans(
-            fbb,
-            TextSpans.createSpansTypeVector(fbb, [TextSpan.Plain]),
-            TextSpans.createSpansVector(fbb, [fbb.createSharedString(bio)]),
-          )]
-          : [],
+        bio ? [fbb.createSharedString(bio)] : [],
       ),
       instance
         ? fbb.createString(`https://${instance.domain}/u/${baseName}`)
@@ -210,7 +201,7 @@ function genBoard(
       ),
       Board.createDisplayNameTypeVector(
         fbb,
-        displayName ? [PlainTextWithEmojis.Plain] : [],
+        displayName ? [RichText.Text] : [],
       ),
       Board.createDisplayNameVector(
         fbb,
@@ -237,19 +228,11 @@ function genBoard(
       description ? fbb.createSharedString(description) : 0,
       Board.createDescriptionTypeVector(
         fbb,
-        description ? [TextBlock.P] : [],
+        description ? [RichText.Text] : [],
       ),
       Board.createDescriptionVector(
         fbb,
-        description
-          ? [TextSpans.createTextSpans(
-            fbb,
-            TextSpans.createSpansTypeVector(fbb, [TextSpan.Plain]),
-            TextSpans.createSpansVector(fbb, [
-              fbb.createSharedString(description),
-            ]),
-          )]
-          : [],
+        description ? [fbb.createSharedString(description)] : []
       ),
       icon ? fbb.createString(icon) : 0,
       banner ? fbb.createString(banner) : 0,
@@ -306,7 +289,7 @@ function genThread(
       fbb,
       author,
       board,
-      Thread.createTitleTypeVector(fbb, [PlainTextWithEmojis.Plain]),
+      Thread.createTitleTypeVector(fbb, [RichText.Text]),
       Thread.createTitleVector(fbb, [fbb.createString(title)]),
       BigInt(date.valueOf()) / 1000n,
       faker.helpers.maybe(
@@ -331,19 +314,10 @@ function genThread(
       ),
       content_url ? fbb.createString(content_url) : 0,
       content_text ? fbb.createString(content_text.join("\n\n")) : 0,
-      Thread.createContentTextTypeVector(
-        fbb,
-        content_text.map(() => TextBlock.P),
-      ),
+      Thread.createContentTextTypeVector(fbb, [RichText.Text]),
       Thread.createContentTextVector(
         fbb,
-        content_text.map((t) =>
-          TextSpans.createTextSpans(
-            fbb,
-            TextSpans.createSpansTypeVector(fbb, [TextSpan.Plain]),
-            TextSpans.createSpansVector(fbb, [fbb.createString(t)]),
-          )
-        ),
+        [fbb.createString(content_text.map((t) => `<p>${t}</p>`).join(""))]
       ),
       faker.datatype.boolean(0.05)
         ? fbb.createString(faker.company.catchPhrase())
@@ -401,19 +375,10 @@ function genComment(
         }`,
       ),
       fbb.createSharedString(contentRaw),
-      Comment.createContentTypeVector(
-        fbb,
-        content.map(() => TextBlock.P),
-      ),
+      Comment.createContentTypeVector(fbb, [RichText.Text]),
       Comment.createContentVector(
         fbb,
-        content.map((t) =>
-          TextSpans.createTextSpans(
-            fbb,
-            TextSpans.createSpansTypeVector(fbb, [TextSpan.Plain]),
-            TextSpans.createSpansVector(fbb, [fbb.createString(t)]),
-          )
-        ),
+        [fbb.createString(content.map((t) => `<p>${t}</p>`).join(""))]
       ),
       faker.datatype.boolean(0.05)
         ? fbb.createString(faker.company.catchPhrase())

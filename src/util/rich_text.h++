@@ -1,5 +1,6 @@
 #pragma once
 #include "util/common.h++"
+#include "util/web.h++"
 #include "models/db.h++"
 #include "libxml/HTMLparser.h"
 #include <map>
@@ -31,73 +32,71 @@ namespace Ludwig {
     bool links_nofollow = true;
   };
 
-  class RichTextParser {
-  private:
-    std::unordered_map<std::string_view, std::string_view> shortcode_to_emoji;
-    std::shared_ptr<LibXmlContext> xml_ctx;
-  public:
-    RichTextParser(std::shared_ptr<LibXmlContext> xml_ctx);
+  using RichTextVectors =  std::pair<
+    flatbuffers::Offset<flatbuffers::Vector<RichText>>,
+    flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<void>>>
+  >;
 
-    auto parse_html(
-      flatbuffers::FlatBufferBuilder& fbb,
-      std::string_view html
-    ) const -> std::pair<
-      flatbuffers::Offset<flatbuffers::Vector<TextBlock>>,
-      flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<void>>>
-    >;
+  auto html_to_rich_text(
+    flatbuffers::FlatBufferBuilder& fbb,
+    std::string_view html,
+    LibXmlContext& xml_ctx
+  ) -> RichTextVectors;
 
-    auto parse_markdown(
-      flatbuffers::FlatBufferBuilder& fbb,
-      std::string_view markdown
-    ) const -> std::pair<
-      flatbuffers::Offset<flatbuffers::Vector<TextBlock>>,
-      flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<void>>>
-    >;
+  auto markdown_to_rich_text(
+    flatbuffers::FlatBufferBuilder& fbb,
+    std::string_view markdown
+  ) noexcept -> RichTextVectors;
 
-    static auto plain_text_to_blocks(
-      flatbuffers::FlatBufferBuilder& fbb,
-      std::string_view text
-    ) -> std::pair<
-      flatbuffers::Offset<flatbuffers::Vector<TextBlock>>,
-      flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<void>>>
-    >;
+  static inline auto plain_text_to_rich_text(
+    flatbuffers::FlatBufferBuilder& fbb,
+    std::string_view text
+  ) noexcept -> RichTextVectors {
+    return {
+      fbb.CreateVector(std::vector{RichText::Text}),
+      fbb.CreateVector(std::vector{fbb.CreateString(fmt::format("{}", Escape{text})).Union()})
+    };
+  }
 
-    auto parse_plain_text_with_emojis(
-      flatbuffers::FlatBufferBuilder& fbb,
-      std::string_view text
-    ) const -> std::pair<
-      flatbuffers::Offset<flatbuffers::Vector<PlainTextWithEmojis>>,
-      flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<void>>>
-    >;
+  auto plain_text_with_emojis_to_rich_text(
+    flatbuffers::FlatBufferBuilder& fbb,
+    std::string_view text
+  ) noexcept -> RichTextVectors;
 
-    static auto plain_text_to_plain_text_with_emojis(
-      flatbuffers::FlatBufferBuilder& fbb,
-      std::string_view text
-    ) -> std::pair<
-      flatbuffers::Offset<flatbuffers::Vector<PlainTextWithEmojis>>,
-      flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<void>>>
-    >;
+  auto rich_text_to_html(
+    const flatbuffers::Vector<RichText>* types,
+    const flatbuffers::Vector<flatbuffers::Offset<void>>* values,
+    const ToHtmlOptions& opts = {}
+  ) noexcept -> std::string;
 
-    static auto blocks_to_html(
-      const flatbuffers::Vector<TextBlock>* types,
-      const flatbuffers::Vector<flatbuffers::Offset<void>>* values,
-      const ToHtmlOptions& opts
-    )-> std::string;
+  static inline auto rich_text_to_html_emojis_only(
+    const flatbuffers::Vector<RichText>* types,
+    const flatbuffers::Vector<flatbuffers::Offset<void>>* values,
+    const ToHtmlOptions& opts = {}
+  ) noexcept -> std::string {
+    if (!types || !values) return "";
+    std::string out;
+    for (unsigned i = 0; i < std::min(types->size(), values->size()); i++) {
+      switch (types->Get(i)) {
+        case RichText::Text:
+          out += values->GetAsString(i)->string_view();
+          break;
+        case RichText::Emoji:
+          if (auto emoji = opts.lookup_emoji(values->GetAsString(i)->string_view())) {
+            out += *emoji;
+          } else {
+            fmt::format_to(back_inserter(out), ":{}:", Escape{values->GetAsString(i)});
+          }
+          break;
+        default:
+          // Do nothing
+      }
+    }
+    return out;
+  }
 
-    static auto blocks_to_text_content(
-      const flatbuffers::Vector<TextBlock>* types,
-      const flatbuffers::Vector<flatbuffers::Offset<void>>* values
-    ) -> std::string;
-
-    static auto plain_text_with_emojis_to_html(
-      const flatbuffers::Vector<PlainTextWithEmojis>* types,
-      const flatbuffers::Vector<flatbuffers::Offset<void>>* values,
-      const ToHtmlOptions& opts
-    ) -> std::string;
-
-    static auto plain_text_with_emojis_to_text_content(
-      const flatbuffers::Vector<PlainTextWithEmojis>* types,
-      const flatbuffers::Vector<flatbuffers::Offset<void>>* values
-    ) -> std::string;
-  };
+  auto rich_text_to_plain_text(
+    const flatbuffers::Vector<RichText>* types,
+    const flatbuffers::Vector<flatbuffers::Offset<void>>* values
+  ) noexcept -> std::string;
 }

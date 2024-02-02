@@ -1,7 +1,7 @@
 add_library(vendor-misc STATIC
   misc/src/mdb.c
   misc/src/midl.c
-  misc/src/mmd.c
+  misc/src/md4c.c
   misc/src/rate_limiter.cpp
 )
 target_include_directories(vendor-misc PUBLIC misc/include/)

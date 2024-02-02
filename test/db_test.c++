@@ -10,7 +10,7 @@ static inline auto create_user(WriteTxn& txn, string_view name, string_view disp
   FlatBufferBuilder fbb;
   const auto name_s = fbb.CreateString(name);
   const auto [display_name_types, display_name_values] =
-    RichTextParser::plain_text_to_plain_text_with_emojis(fbb, display_name);
+    plain_text_to_rich_text(fbb, display_name);
   UserBuilder user(fbb);
   user.add_created_at(now);
   user.add_name(name_s);
@@ -24,7 +24,7 @@ static inline auto create_board(WriteTxn& txn, string_view name, string_view dis
   FlatBufferBuilder fbb;
   const auto name_s = fbb.CreateString(name);
   const auto [display_name_types, display_name_values] =
-    RichTextParser::plain_text_to_plain_text_with_emojis(fbb, display_name);
+    plain_text_to_rich_text(fbb, display_name);
   BoardBuilder board(fbb);
   board.add_created_at(now_s());
   board.add_name(name_s);
@@ -167,7 +167,7 @@ TEST_CASE("create users and boards, subscribe and unsubscribe", "[db]") {
 
 static inline auto create_thread(WriteTxn& txn, uint64_t user, uint64_t board, const char* title, const char* url) -> uint64_t {
   FlatBufferBuilder fbb;
-  const vector title_type{PlainTextWithEmojis::Plain};
+  const vector title_type{RichText::Text};
   const vector title_vec{fbb.CreateString(title).Union()};
   fbb.Finish(CreateThreadDirect(fbb,
     user,
@@ -285,13 +285,13 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       const auto author = users[random_int(gen, RND_SIZE / 10)];
       const auto board = boards[random_int(gen, 3)];
       fbb.Clear();
-      const vector title_type{PlainTextWithEmojis::Plain};
-      const vector title_vec{fbb.CreateString("Lorem ipsum dolor sit amet").Union()};
+      const vector title_type{RichText::Text};
+      const vector title{fbb.CreateString("Lorem ipsum dolor sit amet").Union()};
       fbb.Finish(CreateThreadDirect(fbb,
         author,
         board,
         &title_type,
-        &title_vec,
+        &title,
         now - random_int(gen, 86400 * 30),
         {},
         {},
@@ -314,7 +314,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         parent = parent_ix >= RND_SIZE ? comments[parent_ix - RND_SIZE] : threads[parent_ix],
         thread = parent_ix >= RND_SIZE ? txn.get_comment(parent)->get().thread() : parent;
       const auto content_raw = fbb.CreateSharedString("Lorem ipsum dolor sit amet");
-      const auto [content_type, content] = RichTextParser::plain_text_to_blocks(fbb, "Lorem ipsum dolor sit amet");
+      const auto [content_type, content] = plain_text_to_rich_text(fbb, "Lorem ipsum dolor sit amet");
       CommentBuilder comment(fbb);
       comment.add_author(author);
       comment.add_parent(parent);

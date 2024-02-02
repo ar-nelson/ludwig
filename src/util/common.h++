@@ -63,18 +63,19 @@ namespace Ludwig {
   struct Url {
   private:
     static constexpr inline char
-      SCHEME_REGEX[]   = "(?:(\\w+)://)",      // mandatory, match protocol before the ://
-      USER_REGEX[]     = "(?:([^@/:\\s]+)@)?", // match anything other than @ / : or whitespace before the ending @
-      HOST_REGEX[]     = "([^@/:\\s]+)",       // mandatory. match anything other than @ / : or whitespace
-      PORT_REGEX[]     = "(?::([0-9]{1,5}))?", // after the : match 1 to 5 digits
-      PATH_REGEX[]     = "(/[^:#?\\s]*)?",     // after the / match anything other than : # ? or whitespace
+      SCHEME_REGEX[]   = "(?:([a-z0-9-]+)://)", // mandatory, match protocol before the ://
+      USER_REGEX[]     = "(?:([^@/:\\s]+)@)?",  // match anything other than @ / : or whitespace before the ending @
+      HOST_REGEX[]     = "([^@/:\\s]+)",        // mandatory. match anything other than @ / : or whitespace
+      PORT_REGEX[]     = "(?::([0-9]{1,5}))?",  // after the : match 1 to 5 digits
+      PATH_REGEX[]     = "(/[^:#?\\s]*)?",      // after the / match anything other than : # ? or whitespace
       QUERY_REGEX[]    = "(\\?(?:(?:[^?;&#=]+(?:=[^?;&#=]*)?)(?:[;|&](?:[^?;&#=]+(?:=[^?;&#=]*)?))*))?", // after the ? match any number of x=y pairs, seperated by & or ;
-      FRAGMENT_REGEX[] = "(?:#([^#\\s]*))?";   // after the # match anything other than # or whitespace
+      FRAGMENT_REGEX[] = "(?:#([^#\\s]*))?";    // after the # match anything other than # or whitespace
     static const inline auto regex = std::regex(std::string("^")
       + SCHEME_REGEX + USER_REGEX
       + HOST_REGEX + PORT_REGEX
       + PATH_REGEX + QUERY_REGEX
-      + FRAGMENT_REGEX + "$"
+      + FRAGMENT_REGEX + "$",
+      std::regex::icase | std::regex::optimize
     );
   public:
     std::string scheme, user, host, port, path, query, fragment;
