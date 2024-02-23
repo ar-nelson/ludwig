@@ -6,15 +6,16 @@
 #include "static/htmx.min.js.h++"
 #include "static/ludwig.js.h++"
 #include "static/feather-sprite.svg.h++"
+#include "static/twemoji-piano.ico.h++"
 #include <iterator>
 #include <regex>
 #include <spdlog/fmt/chrono.h>
 #include <xxhash.h>
 #include "util/lambda_macros.h++"
 
-using std::bind, std::match_results, std::nullopt, std::optional, std::regex,
-    std::regex_search, std::shared_ptr, std::stoull, std::string,
-    std::string_view, std::variant, std::visit;
+using std::bind, std::match_results, std::monostate, std::nullopt,
+    std::optional, std::regex, std::regex_search, std::shared_ptr, std::stoull,
+    std::string, std::string_view, std::variant, std::visit;
 
 using namespace std::placeholders;
 namespace chrono = std::chrono;
@@ -144,11 +145,12 @@ namespace Ludwig {
     using Request = uWS::HttpRequest*;
 
     struct ErrorMeta {
-      bool is_htmx;
+      bool is_get, is_htmx;
     };
 
     auto error_middleware(const uWS::HttpResponse<SSL>*, Request req) noexcept -> ErrorMeta {
       return {
+        .is_get = req->getMethod() == "get",
         .is_htmx = !req->getHeader("hx-request").empty() && req->getHeader("hx-boosted").empty()
       };
     }
@@ -387,7 +389,7 @@ namespace Ludwig {
             R"(<meta property="og:title" content="{0} - {1}">)"
             R"(<meta property="twitter:title" content="{0} - {1}">)"
             R"(<meta property="og:type" content="website">)",
-            Escape{m.site->base_url}, Escape{*opt.page_title}
+            Escape{m.site->name}, Escape{*opt.page_title}
           );
         }
         if (opt.card_image) {
@@ -418,8 +420,10 @@ namespace Ludwig {
             m.login->stats().thread_karma() + m.login->stats().comment_karma(),
             InstanceController::can_change_site_settings(m.login) ? R"(<li><a href="/site_admin">Site admin</a>)" : ""
           );
-        } else {
+        } else if (m.site->registration_enabled) {
           write(R"(</ul><ul><li><a href="/login">Login</a><li><a href="/register">Register</a></ul></nav>)");
+        } else {
+          write(R"(</ul><ul><li><a href="/login">Login</a></ul></nav>)");
         }
         write(R"(<div id="toasts"></div>)");
         if (opt.banner_title) {
@@ -472,11 +476,12 @@ namespace Ludwig {
 
       auto write_sidebar(
         Login login,
+        const SiteDetail* site,
         variant<
-          const SiteDetail*,
+          monostate,
           const BoardDetail,
           const UserDetail
-        > detail
+        > detail = monostate()
       ) noexcept -> ResponseWriter& {
         write(
           R"(<label id="sidebar-toggle-label" for="sidebar-toggle"><svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#menu"></svg> Menu</label>)"
@@ -511,12 +516,13 @@ namespace Ludwig {
             R"(<label for="password"><span class="a11y">Password</span><input type="password" name="password" id="password" placeholder="Password"></label>)"
             R"(<label for="remember"><input type="checkbox" name="remember" id="remember"> Remember me</label>)"
             R"(<input type="submit" value="Login" class="big-button"></form>)"
-            R"(<a href="/register" class="big-button">Register</a></section>)",
-            HONEYPOT_FIELD
+            R"({}</section>)",
+            HONEYPOT_FIELD,
+            site->registration_enabled ? R"(<a href="/register" class="big-button">Register</a>)" : ""
           );
         } else {
           visit(overload{
-            [&](const SiteDetail*) {
+            [&](std::monostate) {
               if (controller.can_create_board(login)) {
                 write(
                   R"(<section id="actions-section"><h2>Actions</h2>)"
@@ -548,7 +554,7 @@ namespace Ludwig {
         }
 
         visit(overload{
-          [&](const SiteDetail* site) {
+          [&](std::monostate) {
             write_fmt(R"(<section id="site-sidebar"><h2>{}</h2>)", Escape{site->name});
             if (site->banner_url) {
               write_fmt(
@@ -1741,7 +1747,7 @@ namespace Ludwig {
             ->writeHeader("Content-Type", TYPE_HTML)
         ) .write_fmt("Error {:d}: {}", e.http_status, Escape(e.message))
           .finish();
-      } else if (e.http_status == 401) {
+      } else if (m.is_get && e.http_status == 401) {
         rsp->writeStatus(http_status(303))
           ->writeHeader("Set-Cookie", COOKIE_NAME "=deleted; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT")
           ->writeHeader("Location", "/login")
@@ -1788,12 +1794,12 @@ namespace Ludwig {
 
     auto serve_static(
       App& app,
-      string_view filename,
+      string path,
       string_view mimetype,
       string_view src
     ) noexcept -> void {
       const auto hash = fmt::format("\"{:016x}\"", XXH3_64bits(src.data(), src.length()));
-      app.get(fmt::format("/static/{}", filename), [src, mimetype, hash](auto* res, auto* req) {
+      app.get(path, [src, mimetype, hash](auto* res, auto* req) {
         if (req->getHeader("if-none-match") == hash) {
           res->writeStatus(http_status(304))->end();
         } else {
@@ -1975,10 +1981,11 @@ namespace Ludwig {
       // Static Files
       /////////////////////////////////////////////////////
 
-      serve_static(app, "default-theme.css", TYPE_CSS, default_theme_css_str());
-      serve_static(app, "htmx.min.js", TYPE_JS, htmx_min_js_str());
-      serve_static(app, "ludwig.js", TYPE_JS, ludwig_js_str());
-      serve_static(app, "feather-sprite.svg", TYPE_SVG, feather_sprite_svg_str());
+      serve_static(app, "/favicon.ico", "image/vnd.microsoft.icon", twemoji_piano_ico_str());
+      serve_static(app, "/static/default-theme.css", TYPE_CSS, default_theme_css_str());
+      serve_static(app, "/static/htmx.min.js", TYPE_JS, htmx_min_js_str());
+      serve_static(app, "/static/ludwig.js", TYPE_JS, ludwig_js_str());
+      serve_static(app, "/static/feather-sprite.svg", TYPE_SVG, feather_sprite_svg_str());
 
       // Pages
       /////////////////////////////////////////////////////
@@ -2110,7 +2117,7 @@ namespace Ludwig {
         } else {
           r.write_html_header(m, board_header_options(req, board.board()))
             .write("<div>")
-            .write_sidebar(m.login, board)
+            .write_sidebar(m.login, m.site, board)
             .write(R"(<section><h2 class="a11y">Sort and filter</h2>)")
             .write_sort_options(req->getUrl(), sort, show_threads, show_images)
             .write(R"(</section><main>)");
@@ -2171,7 +2178,7 @@ namespace Ludwig {
               .card_image = user.user().avatar_url() ? optional(fmt::format("/media/user/{}/avatar.webp", user.user().name()->string_view())) : nullopt
             })
             .write("<div>")
-            .write_sidebar(m.login, user)
+            .write_sidebar(m.login, m.site, user)
             .write(R"(<section><h2 class="a11y">Sort and filter</h2>)")
             .write_sort_options(req->getUrl(), sort, show_threads, show_images)
             .write(R"(</section><main>)");
@@ -2210,7 +2217,7 @@ namespace Ludwig {
           r.write_html_header(m, board_header_options(req, detail.board(),
               fmt::format("{} - {}", display_name_as_text(detail.board()), display_name_as_text(detail.thread()))))
             .write("<div>")
-            .write_sidebar(m.login, self->controller->board_detail(txn, detail.thread().board(), m.login))
+            .write_sidebar(m.login, m.site, self->controller->board_detail(txn, detail.thread().board(), m.login))
             .write("<main>")
             .write_thread_view(detail, comments, m.site, m.login, sort, show_images)
             .write("</main></div>")
@@ -2250,7 +2257,7 @@ namespace Ludwig {
                 display_name_as_text(detail.author()),
                 display_name_as_text(detail.thread()))))
             .write("<div>")
-            .write_sidebar(m.login, self->controller->board_detail(txn, detail.thread().board(), m.login))
+            .write_sidebar(m.login, m.site, self->controller->board_detail(txn, detail.thread().board(), m.login))
             .write("<main>")
             .write_comment_view(detail, comments, m.site, m.login, sort, show_images)
             .write("</main></div>")
@@ -2326,6 +2333,7 @@ namespace Ludwig {
         }
       })
       .get("/register", [self](auto* rsp, auto*, Meta& m) {
+        if (!m.site->registration_enabled) throw ApiError("Registration is not enabled on this site", 403);
         auto txn = self->controller->open_read_txn();
         m.populate(txn);
         if (m.login) {
@@ -2496,6 +2504,7 @@ namespace Ludwig {
         };
       })
       .post_form("/register", [self](auto* req, auto m) {
+        if (!m->site->registration_enabled) throw ApiError("Registration is not enabled on this site", 403);
         if (m->logged_in_user_id) throw ApiError("Already logged in", 403);
         return [self,
           user_agent = string(req->getHeader("user-agent")),
@@ -2796,6 +2805,7 @@ namespace Ludwig {
             });
           } catch (const ApiError& e) {
             write([=, m=std::move(m)](auto* rsp) mutable {
+              rsp->writeStatus(http_status(e.http_status));
               self->writer(rsp)
                 .write_html_header(*m, {
                   .canonical_path = "/site_admin",
@@ -2813,6 +2823,9 @@ namespace Ludwig {
       })
       .post_form("/site_admin/first_run_setup", [self](auto*, auto m) {
         {
+          if (m->site->setup_done) {
+            throw ApiError("First-run setup is already complete", 403);
+          }
           auto txn = self->controller->open_read_txn();
           const auto login = m->require_login(txn);
           if (!InstanceController::can_change_site_settings(login)) {
@@ -2833,6 +2846,7 @@ namespace Ludwig {
             });
           } catch (const ApiError& e) {
             write([=, m=std::move(m)](auto* rsp) mutable {
+              rsp->writeStatus(http_status(e.http_status));
               auto txn = self->controller->open_read_txn();
               self->writer(rsp)
                 .write_html_header(*m, {

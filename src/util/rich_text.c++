@@ -34,16 +34,19 @@ namespace Ludwig {
     }
   }
 
-  HtmlDoc::HtmlDoc(shared_ptr<LibXmlContext> xml_ctx, const char* data, size_t size, const char* url) : xml_ctx(xml_ctx) {
+  HtmlDoc::HtmlDoc(shared_ptr<LibXmlContext> xml_ctx, string_view src, const char* url) : xml_ctx(xml_ctx) {
     doc = htmlReadMemory(
-      data, (int)size, url, "utf-8",
+      src.data(), (int)src.size(), url, "utf-8",
       HTML_PARSE_NOBLANKS | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET
     );
     if (doc == nullptr) {
       throw runtime_error(fmt::format("Failed to parse HTML at {}", url));
     }
+    xpath_ctx = xmlXPathNewContext(doc);
+    if (xpath_ctx == nullptr) throw runtime_error("XPath setup failed");
   }
   HtmlDoc::~HtmlDoc() {
+    xmlXPathFreeContext(xpath_ctx);
     xmlFreeDoc(doc);
   }
   auto HtmlDoc::root() const -> xmlNodePtr {
@@ -60,6 +63,21 @@ namespace Ludwig {
   }
   auto HtmlDoc::attr(const xmlNode* node, const char* name) const -> string {
     return xml_str(xmlGetProp(node, (const xmlChar*)name));
+  }
+  auto HtmlDoc::xpath(const XPath& expr) const noexcept -> XPathResults {
+    return XPathResults(xmlXPathCompiledEval(expr, xpath_ctx));
+  }
+  auto HtmlDoc::xpath(const char* expr) const noexcept -> XPathResults {
+    return XPathResults(xmlXPathEval((const xmlChar*)expr, xpath_ctx));
+  }
+  auto HtmlDoc::xpath_exists(const XPath& expr) const noexcept -> bool {
+    return xmlXPathCompiledEvalToBoolean(expr, xpath_ctx);
+  }
+  auto HtmlDoc::xpath_exists(const char* expr) const noexcept -> bool {
+    auto obj = xmlXPathEval((const xmlChar*)expr, xpath_ctx);
+    auto bool_val = xmlXPathCastToBoolean(obj);
+    xmlXPathFreeObject(obj);
+    return bool_val;
   }
 
   auto html_to_rich_text(FlatBufferBuilder&, string_view, LibXmlContext&) -> RichTextVectors {

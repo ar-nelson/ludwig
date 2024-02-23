@@ -1155,7 +1155,12 @@ namespace Ludwig {
       }
       txn.set_setting(SettingsKey::private_key, string_view{(const char*)bio_data, bio_len});
 
-      txn.set_setting(SettingsKey::base_url, update.base_url.value_or("http://localhost:2023"));
+      string url_str(update.base_url.value_or("http://localhost:2023"));
+      if (auto url = Url::parse(url_str)) {
+        if (!url->is_http_s()) throw ApiError("Base URL must start with http:// or https://", 400);
+        txn.set_setting(SettingsKey::base_url, url->to_string());
+      } else throw ApiError("Base URL is not a valid URL (must start with http:// or https://)", 400);
+
       txn.set_setting(SettingsKey::media_upload_enabled, 0);
       txn.set_setting(SettingsKey::federation_enabled, 0);
       txn.set_setting(SettingsKey::federate_cw_content, 0);
@@ -1418,7 +1423,7 @@ namespace Ludwig {
     if (update.display_name && *update.display_name && (*update.display_name)->length() > 1024) {
       throw ApiError("Display name cannot be longer than 1024 bytes", 400);
     }
-    if (update.email || update.open_links_in_new_tab || update.show_avatars ||
+    if (update.email || update.admin || update.open_links_in_new_tab || update.show_avatars ||
         update.show_bot_accounts || update.hide_cw_posts ||
         update.expand_cw_posts || update.expand_cw_images ||
         update.show_karma || update.javascript_enabled ||
@@ -1427,6 +1432,7 @@ namespace Ludwig {
       FlatBufferBuilder fbb;
       fbb.Finish(patch_local_user(fbb, detail.local_user(), {
         .email = update.email,
+        .admin = update.admin.transform([](auto x){return x == IsAdmin::Yes;}),
         .open_links_in_new_tab = update.open_links_in_new_tab,
         .show_avatars = update.show_avatars,
         .show_bot_accounts = update.show_bot_accounts,

@@ -281,6 +281,7 @@ namespace Ludwig {
                 ->end();
             }
           } else {
+            spdlog::info("[{} {}] - 405 Method Not Allowed", req->getMethod(), req->getUrl());
             rsp->writeStatus(http_status(405))->end();
           }
         });
@@ -359,6 +360,7 @@ namespace Ludwig {
 
     template <typename T> auto post_handler(
       PostHandler<T>&& handler,
+      std::string_view method,
       size_t max_size,
       std::optional<std::string_view> expected_content_type,
       std::string body_prefix,
@@ -366,23 +368,23 @@ namespace Ludwig {
     ) {
       using std::current_exception, std::make_shared, std::string;
       return [
-        impl = impl, max_size, expected_content_type, body_prefix,
+        impl = impl, max_size, expected_content_type, body_prefix, method,
         handler = std::move(handler),
         parse_body = std::move(parse_body)
       ](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
         auto abort_flag = make_shared<std::atomic<bool>>(false);
         const string url(req->getUrl());
         const auto error_meta = make_shared<E>(impl->error_middleware(rsp, req));
-        rsp->onAborted([abort_flag, url]{
+        rsp->onAborted([method, abort_flag, url]{
           *abort_flag = true;
-          spdlog::debug("[POST {}] - HTTP session aborted", url);
+          spdlog::debug("[{} {}] - HTTP session aborted", method, url);
         });
         const string user_agent(req->getHeader("user-agent"));
         try {
           if (expected_content_type) {
             const auto content_type = req->getHeader("content-type");
             if (content_type.data() && !content_type.starts_with(*expected_content_type)) {
-              throw ApiError(fmt::format("Wrong POST request Content-Type (expected {})", *expected_content_type), 415);
+              throw ApiError(fmt::format("Wrong request Content-Type (expected {})", *expected_content_type), 415);
             }
           }
           rsp->onData([=,
@@ -393,7 +395,7 @@ namespace Ludwig {
           ](auto data, bool last) mutable {
             in_buffer.append(data);
             try {
-              if (in_buffer.length() > max_size) throw ApiError("POST body is too large", 413);
+              if (in_buffer.length() > max_size) throw ApiError("Request body is too large", 413);
               if (!last) return;
               rsp->cork([&]{
                 try {
@@ -407,37 +409,37 @@ namespace Ludwig {
                       });
                     }
                   );
-                  spdlog::debug("[POST {}] - {} {}", url, rsp->getRemoteAddressAsText(), user_agent);
+                  spdlog::debug("[{} {}] - {} {}", method, url, rsp->getRemoteAddressAsText(), user_agent);
                 } catch (...) {
                   *abort_flag = true;
-                  impl->handle_error(current_exception(), rsp, *error_meta, "POST", url);
+                  impl->handle_error(current_exception(), rsp, *error_meta, method, url);
                 }
               });
             } catch (...) {
-              rsp->cork([&]{ impl->handle_error(current_exception(), rsp, *error_meta, "POST", url); });
+              rsp->cork([&]{ impl->handle_error(current_exception(), rsp, *error_meta, method, url); });
             }
           });
         } catch (...) {
-          impl->handle_error(current_exception(), rsp, *error_meta, "POST", url);
+          impl->handle_error(current_exception(), rsp, *error_meta, method, url);
           return;
         }
       };
     }
 
     Router &&post(std::string pattern, PostHandler<std::string>&& handler, size_t max_size = 10 * MiB) {
-      app.post(pattern, post_handler<std::string>(std::move(handler), max_size, {}, "", [](auto&& s){return s;}));
+      app.post(pattern, post_handler<std::string>(std::move(handler), "POST", max_size, {}, "", [](auto&& s){return s;}));
       register_route(pattern, "POST");
       return std::move(*this);
     }
 
     Router &&put(std::string pattern, PostHandler<std::string>&& handler, size_t max_size = 10 * MiB) {
-      app.put(pattern, post_handler<std::string>(std::move(handler), max_size, {}, "", [](auto&& s){return s;}));
+      app.put(pattern, post_handler<std::string>(std::move(handler), "PUT", max_size, {}, "", [](auto&& s){return s;}));
       register_route(pattern, "PUT");
       return std::move(*this);
     }
 
     Router &&post_form(std::string pattern, PostHandler<QueryString<std::string_view>>&& handler, size_t max_size = 10 * MiB) {
-      app.post(pattern, post_handler<QueryString<std::string_view>>(std::move(handler), max_size, TYPE_FORM, "?", [](auto&& s){
+      app.post(pattern, post_handler<QueryString<std::string_view>>(std::move(handler), "POST", max_size, TYPE_FORM, "?", [](auto&& s){
         if (!simdjson::validate_utf8(s)) throw ApiError("POST body is not valid UTF-8", 415);
         return QueryString<std::string_view>(s);
       }));
@@ -451,7 +453,7 @@ namespace Ludwig {
       PostHandler<T>&& handler,
       size_t max_size = 10 * MiB
     ) {
-      app.post(pattern, post_handler<T>(std::move(handler), max_size, "application/json", "", [parser](auto&& s) -> T {
+      app.post(pattern, post_handler<T>(std::move(handler), "POST", max_size, "application/json", "", [parser](auto&& s) -> T {
         try {
           pad_json_string(s);
           return JsonSerialize<T>::from_json(parser->iterate(s).value());
@@ -469,7 +471,7 @@ namespace Ludwig {
       PostHandler<T>&& handler,
       size_t max_size = 10 * MiB
     ) {
-      app.put(pattern, post_handler<T>(std::move(handler), max_size, "application/json", "", [parser](auto&& s) -> T {
+      app.put(pattern, post_handler<T>(std::move(handler), "PUT", max_size, "application/json", "", [parser](auto&& s) -> T {
         try {
           pad_json_string(s);
           return JsonSerialize<T>::from_json(parser->iterate(s).value());

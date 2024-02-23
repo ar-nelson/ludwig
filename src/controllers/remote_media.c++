@@ -194,7 +194,7 @@ namespace Ludwig {
     PrioritizedLinkCardBuilder& card
   ) noexcept -> bool {
     try {
-      HtmlDoc doc(xml_ctx, html_src.data(), html_src.size(), url.c_str());
+      HtmlDoc doc(xml_ctx, html_src, url.c_str());
       xmlNodePtr main = nullptr;
       for (xmlNodePtr node = doc.root(); node != nullptr; node = next_node(node, main)) {
         if (node->type == XML_ELEMENT_NODE) {

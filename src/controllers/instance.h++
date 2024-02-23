@@ -152,6 +152,9 @@ namespace Ludwig {
     bool admin_exists, default_board_exists, base_url_set, home_page_type_set;
   };
 
+  enum class IsApproved : bool { No, Yes };
+  enum class IsAdmin : bool { No, Yes };
+
   struct LocalUserUpdate {
     std::optional<std::string_view> email;
     std::optional<std::optional<std::string_view>> display_name, bio,
@@ -159,6 +162,7 @@ namespace Ludwig {
     std::optional<bool> bot, open_links_in_new_tab, show_avatars,
         show_bot_accounts, show_karma, hide_cw_posts, expand_cw_images,
         expand_cw_posts, javascript_enabled, infinite_scroll_enabled;
+    std::optional<IsAdmin> admin;
     std::optional<SortType> default_sort_type;
     std::optional<CommentSortType> default_comment_sort_type;
   };
@@ -199,9 +203,6 @@ namespace Ludwig {
     try { return std::stoull(hex_id, nullptr, 16); }
     catch (...) { throw ApiError("Bad hexadecimal ID", 400); }
   }
-
-  enum class IsApproved : bool { No, Yes };
-  enum class IsAdmin : bool { No, Yes };
 
   class InstanceController : public std::enable_shared_from_this<InstanceController> {
   private:

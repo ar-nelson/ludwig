@@ -1,8 +1,6 @@
 #include "test_common.h++"
 #include "services/db.h++"
 #include "controllers/instance.h++"
-#include <sstream>
-#include <iomanip>
 
 using flatbuffers::FlatBufferBuilder, flatbuffers::Offset;
 

@@ -151,4 +151,9 @@ namespace Ludwig {
       for (size_t i = 0; i < Size; i++) arr[i] = x;
     }
   };
+
+  struct Defer {
+    uWS::MoveOnlyFunction<void ()> fn;
+    ~Defer() { fn(); }
+  };
 }

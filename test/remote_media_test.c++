@@ -1,6 +1,5 @@
 #include "test_common.h++"
 #include "services/db.h++"
-#include "services/http_client.h++"
 #include "controllers/remote_media.h++"
 
 using flatbuffers::FlatBufferBuilder;

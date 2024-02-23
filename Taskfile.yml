@@ -27,8 +27,8 @@ tasks:
       - cmake-debug
     sources:
       - src/**/*
-      - test/*.c++
-      - test/*.h++
+      - test/**/*.c++
+      - test/**/*.h++
       - vendor/CMakeLists.txt
       - CMakeLists.txt
     cmds:
@@ -42,8 +42,6 @@ tasks:
       - cmake-release
     sources:
       - src/**/*
-      - test/*.c++
-      - test/*.h++
       - vendor/CMakeLists.txt
       - CMakeLists.txt
     cmds:

@@ -68,12 +68,12 @@ int main(int argc, char** argv) {
     .dest("log_level")
     .help("log level (debug, info, warn, error, critical)")
     .set_default("info");
-  parser.add_option("--rate-limit")
+  parser.add_option("r", "--rate-limit")
     .dest("rate_limit")
     .type("INT")
     .help("max requests per 5 minutes from a single IP (default = 3000)")
     .set_default(3000);
-  parser.add_option("--threads")
+  parser.add_option("-t", "--threads")
     .dest("threads")
     .type("INT")
     .help("number of request handler threads (default = number of cores)")
@@ -160,6 +160,7 @@ int main(int argc, char** argv) {
     auto txn = db->open_read_txn();
     if (!txn.get_setting_int(SettingsKey::setup_done)) first_run = true;
     if (txn.get_admin_list().empty()) admin_exists = false;
+    if (!txn.get_setting_int(SettingsKey::default_board_id)) default_board_exists = false;
   }
 
   if (options.is_set_by_user("setup")) {
@@ -222,6 +223,7 @@ int main(int argc, char** argv) {
   sigemptyset(&sigint_handler.sa_mask);
   sigemptyset(&sigterm_handler.sa_mask);
   sigaction(SIGINT, &sigint_handler, nullptr);
+  sigaction(SIGPIPE, &sigterm_handler, nullptr);
   sigaction(SIGTERM, &sigterm_handler, nullptr);
 
   vector<thread> running_threads(threads - 1);

@@ -15,6 +15,7 @@ namespace Ludwig {
     auto https_fetch(HttpClientRequest& req) -> Async<AsioHttpClientResponse*>;
     auto http_fetch(HttpClientRequest& req) -> Async<AsioHttpClientResponse*>;
   protected:
+    auto fetch(HttpClientRequest&& req) -> Async<std::unique_ptr<const HttpClientResponse>>;
     auto fetch(HttpClientRequest&& req, HttpResponseCallback&& callback) -> void;
   public:
     AsioHttpClient(

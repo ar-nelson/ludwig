@@ -1,5 +1,6 @@
 #pragma once
 #include "util/common.h++"
+#include <future>
 
 namespace Ludwig {
   class HttpClient;
@@ -40,19 +41,20 @@ namespace Ludwig {
       if (!url.is_http_s()) throw std::runtime_error("Not an HTTP(S) URL: " + url_str);
       fmt::format_to(
         std::back_inserter(request), "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nUser-Agent: ludwig",
-        method, url.path.empty() ? "/" : url.path, url.host
+        method, url.path.empty() ? "/" : url.path, url.host + (url.port.empty() ? "" : ":" + url.port)
       );
     }
 
     auto redirect(std::string new_url) -> void {
       if (new_url.starts_with("/")) {
-        new_url = fmt::format("{}://{}{}", url.scheme, url.host, new_url);
-      }
-      url = *Url::parse(new_url).or_else([&] -> std::optional<Url> {
-        throw std::runtime_error("Redirect to invalid HTTP URL: " + new_url);
-      });
-      if (!url.is_http_s()) {
-        throw std::runtime_error("Redirect to non-HTTP(S) URL: " + new_url);
+        url.path = new_url;
+      } else {
+        url = *Url::parse(new_url).or_else([&] -> std::optional<Url> {
+          throw std::runtime_error("Redirect to invalid HTTP URL: " + new_url);
+        });
+        if (!url.is_http_s()) {
+          throw std::runtime_error("Redirect to non-HTTP(S) URL: " + new_url);
+        }
       }
       const auto request_suffix = request.substr(request.find("User-Agent: ludwig\r\n") + 18);
       request.clear();
@@ -80,7 +82,7 @@ namespace Ludwig {
     auto body(std::string_view content_type, std::string_view body)&& -> HttpClientRequestBuilder&&{
       assert(!req.has_body);
       fmt::format_to(
-        std::back_inserter(req.request), "\r\nContent-Type: {}\r\nContent-Length: {:x}\r\n\r\n{}",
+        std::back_inserter(req.request), "\r\nContent-Type: {}\r\nContent-Length: {:d}\r\n\r\n{}",
         content_type, body.length(), body
       );
       req.has_body = true;
@@ -88,6 +90,26 @@ namespace Ludwig {
     }
 
     auto dispatch(HttpResponseCallback&& callback) && -> void;
+
+    auto dispatch() && {
+      std::promise<std::unique_ptr<const HttpClientResponse>> promise;
+      auto future = promise.get_future();
+      std::move(*this).dispatch([promise = std::move(promise)](auto&& rsp) mutable -> void {
+        promise.set_value(std::move(rsp));
+      });
+      return future;
+    }
+
+    auto dispatch_and_wait(std::chrono::duration<uint64_t> timeout = std::chrono::seconds(15)) && {
+      auto url = req.url.to_string();
+      auto future = std::move(*this).dispatch();
+      if (future.wait_for(timeout) != std::future_status::ready) {
+        throw std::runtime_error(
+          fmt::format("Request to {} timed out after {:d} seconds",
+            url, std::chrono::duration_cast<std::chrono::seconds>(timeout).count()));
+      }
+      return future.get();
+    }
   };
 
   class HttpClient {
@@ -112,7 +134,7 @@ namespace Ludwig {
   };
 
   inline auto HttpClientRequestBuilder::dispatch(HttpResponseCallback&& callback) && -> void {
-    if (!req.has_body) req.request.append("\r\n\r\n");
+    if (!req.has_body) req.request += "\r\n\r\n";
     client.fetch(std::move(req), std::move(callback));
   }
 }
