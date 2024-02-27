@@ -294,7 +294,7 @@ namespace Ludwig {
 
     MDB_val val;
     if (db_get(txn, dbis[Settings], SettingsKey::next_id, val)) {
-      db_put(txn, dbis[Settings], SettingsKey::next_id, 1ULL);
+      db_put(txn, dbis[Settings], SettingsKey::next_id, ID_MIN_USER);
     }
     if ((err = mdb_txn_commit(txn))) goto die;
     return;
@@ -916,8 +916,8 @@ namespace Ludwig {
     if (db_get(txn, db.dbis[Application_User], user_id, v)) return {};
     return get_fb<Application>(v);
   }
-  auto ReadTxnBase::list_applications(OptCursor cursor) -> DBIter {
-    return DBIter(
+  auto ReadTxnBase::list_applications(OptCursor cursor) -> DBKeyIter {
+    return DBKeyIter(
       db.dbis[Application_User],
       txn,
       Dir::Asc,

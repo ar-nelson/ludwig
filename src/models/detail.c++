@@ -151,55 +151,67 @@ namespace Ludwig {
     return true;
   }
   auto BoardDetail::can_create_thread(Login login) const noexcept -> bool {
-    if (!login || login->user().mod_state() >= ModState::Locked) return false;
+    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked) return false;
     return !board().restricted_posting() || login->local_user().admin();
   }
   auto ThreadDetail::can_reply_to(Login login) const noexcept -> bool {
-    if (!login || login->user().mod_state() >= ModState::Locked) return false;
+    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked) return false;
     if (login->local_user().admin()) return true;
     return thread().mod_state() < ModState::Locked;
   }
   auto CommentDetail::can_reply_to(Login login) const noexcept -> bool {
-    if (!login || login->user().mod_state() >= ModState::Locked) return false;
+    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked) return false;
     if (login->local_user().admin()) return true;
     return comment().mod_state() < ModState::Locked &&
       thread().mod_state() < ModState::Locked;
   }
   auto ThreadDetail::can_edit(Login login) const noexcept -> bool {
-    if (!login || login->user().mod_state() >= ModState::Locked || thread().instance()) return false;
+    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked || thread().instance()) return false;
     return login->id == thread().author() || login->local_user().admin();
   }
   auto CommentDetail::can_edit(Login login) const noexcept -> bool {
-    if (!login || login->user().mod_state() >= ModState::Locked || comment().instance()) return false;
+    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked || comment().instance()) return false;
     return login->id == comment().author() || login->local_user().admin();
   }
   auto ThreadDetail::can_delete(Login login) const noexcept -> bool {
-    if (!login || login->user().mod_state() >= ModState::Locked || thread().instance()) return false;
+    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked || thread().instance()) return false;
     return login->id == thread().author() || login->local_user().admin();
   }
   auto CommentDetail::can_delete(Login login) const noexcept -> bool {
-    if (!login || login->user().mod_state() >= ModState::Locked || comment().instance()) return false;
+    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked || comment().instance()) return false;
     return login->id == comment().author() || login->local_user().admin();
   }
   auto ThreadDetail::can_upvote(Login login, const SiteDetail* site) const noexcept -> bool {
-    return login && can_view(login) && thread().mod_state() < ModState::Locked &&
-      login->user().mod_state() < ModState::Locked && board().can_upvote() &&
-      (board().instance() || site->votes_enabled);
+    return login && can_view(login) &&
+           thread().mod_state() < ModState::Locked &&
+           login->local_user().approved() &&
+           login->user().mod_state() < ModState::Locked &&
+           board().can_upvote() && (board().instance() || site->votes_enabled);
   }
   auto CommentDetail::can_upvote(Login login, const SiteDetail* site) const noexcept -> bool {
-    return login && can_view(login) && comment().mod_state() < ModState::Locked &&
-      thread().mod_state() < ModState::Locked && login->user().mod_state() < ModState::Locked &&
-      board().can_upvote() && (board().instance() || site->votes_enabled);
+    return login && can_view(login) &&
+           comment().mod_state() < ModState::Locked &&
+           thread().mod_state() < ModState::Locked &&
+           login->local_user().approved() &&
+           login->user().mod_state() < ModState::Locked &&
+           board().can_upvote() && (board().instance() || site->votes_enabled);
   }
   auto ThreadDetail::can_downvote(Login login, const SiteDetail* site) const noexcept -> bool {
-    return login && can_view(login) && thread().mod_state() < ModState::Locked &&
-      login->user().mod_state() < ModState::Locked && board().can_downvote() &&
-      (board().instance() || site->downvotes_enabled);
+    return login && can_view(login) &&
+           thread().mod_state() < ModState::Locked &&
+           login->local_user().approved() &&
+           login->user().mod_state() < ModState::Locked &&
+           board().can_downvote() &&
+           (board().instance() || site->downvotes_enabled);
   }
   auto CommentDetail::can_downvote(Login login, const SiteDetail* site) const noexcept -> bool {
-    return login && can_view(login) && comment().mod_state() < ModState::Locked &&
-      thread().mod_state() < ModState::Locked && login->user().mod_state() < ModState::Locked &&
-      board().can_downvote() && (board().instance() || site->downvotes_enabled);
+    return login && can_view(login) &&
+           comment().mod_state() < ModState::Locked &&
+           thread().mod_state() < ModState::Locked &&
+           login->local_user().approved() &&
+           login->user().mod_state() < ModState::Locked &&
+           board().can_downvote() &&
+           (board().instance() || site->downvotes_enabled);
   }
   auto ThreadDetail::should_show_votes(Login, const SiteDetail* site) const noexcept -> bool {
     return board().can_upvote() && (board().instance() || site->votes_enabled);

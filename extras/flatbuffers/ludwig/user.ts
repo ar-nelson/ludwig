@@ -136,39 +136,44 @@ deletedAt():bigint|null {
   return offset ? this.bb!.readUint64(this.bb_pos + offset) : null;
 }
 
+salt():number {
+  const offset = this.bb!.__offset(this.bb_pos, 32);
+  return offset ? this.bb!.readUint32(this.bb_pos + offset) : 0;
+}
+
 avatarUrl():string|null
 avatarUrl(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 avatarUrl(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 32);
+  const offset = this.bb!.__offset(this.bb_pos, 34);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 bannerUrl():string|null
 bannerUrl(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 bannerUrl(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 34);
+  const offset = this.bb!.__offset(this.bb_pos, 36);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 bot():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 36);
+  const offset = this.bb!.__offset(this.bb_pos, 38);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
 modState():ModState {
-  const offset = this.bb!.__offset(this.bb_pos, 38);
+  const offset = this.bb!.__offset(this.bb_pos, 40);
   return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Visible;
 }
 
 modReason():string|null
 modReason(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 modReason(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 40);
+  const offset = this.bb!.__offset(this.bb_pos, 42);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 static startUser(builder:flatbuffers.Builder) {
-  builder.startObject(19);
+  builder.startObject(20);
 }
 
 static addName(builder:flatbuffers.Builder, nameOffset:flatbuffers.Offset) {
@@ -275,24 +280,28 @@ static addDeletedAt(builder:flatbuffers.Builder, deletedAt:bigint) {
   builder.addFieldInt64(13, deletedAt, BigInt(0));
 }
 
+static addSalt(builder:flatbuffers.Builder, salt:number) {
+  builder.addFieldInt32(14, salt, 0);
+}
+
 static addAvatarUrl(builder:flatbuffers.Builder, avatarUrlOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(14, avatarUrlOffset, 0);
+  builder.addFieldOffset(15, avatarUrlOffset, 0);
 }
 
 static addBannerUrl(builder:flatbuffers.Builder, bannerUrlOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(15, bannerUrlOffset, 0);
+  builder.addFieldOffset(16, bannerUrlOffset, 0);
 }
 
 static addBot(builder:flatbuffers.Builder, bot:boolean) {
-  builder.addFieldInt8(16, +bot, +false);
+  builder.addFieldInt8(17, +bot, +false);
 }
 
 static addModState(builder:flatbuffers.Builder, modState:ModState) {
-  builder.addFieldInt8(17, modState, ModState.Visible);
+  builder.addFieldInt8(18, modState, ModState.Visible);
 }
 
 static addModReason(builder:flatbuffers.Builder, modReasonOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(18, modReasonOffset, 0);
+  builder.addFieldOffset(19, modReasonOffset, 0);
 }
 
 static endUser(builder:flatbuffers.Builder):flatbuffers.Offset {
@@ -301,7 +310,7 @@ static endUser(builder:flatbuffers.Builder):flatbuffers.Offset {
   return offset;
 }
 
-static createUser(builder:flatbuffers.Builder, nameOffset:flatbuffers.Offset, displayNameTypeOffset:flatbuffers.Offset, displayNameOffset:flatbuffers.Offset, bioRawOffset:flatbuffers.Offset, bioTypeOffset:flatbuffers.Offset, bioOffset:flatbuffers.Offset, actorIdOffset:flatbuffers.Offset, inboxUrlOffset:flatbuffers.Offset, matrixUserIdOffset:flatbuffers.Offset, instance:bigint, createdAt:bigint, updatedAt:bigint|null, fetchedAt:bigint|null, deletedAt:bigint|null, avatarUrlOffset:flatbuffers.Offset, bannerUrlOffset:flatbuffers.Offset, bot:boolean, modState:ModState, modReasonOffset:flatbuffers.Offset):flatbuffers.Offset {
+static createUser(builder:flatbuffers.Builder, nameOffset:flatbuffers.Offset, displayNameTypeOffset:flatbuffers.Offset, displayNameOffset:flatbuffers.Offset, bioRawOffset:flatbuffers.Offset, bioTypeOffset:flatbuffers.Offset, bioOffset:flatbuffers.Offset, actorIdOffset:flatbuffers.Offset, inboxUrlOffset:flatbuffers.Offset, matrixUserIdOffset:flatbuffers.Offset, instance:bigint, createdAt:bigint, updatedAt:bigint|null, fetchedAt:bigint|null, deletedAt:bigint|null, salt:number, avatarUrlOffset:flatbuffers.Offset, bannerUrlOffset:flatbuffers.Offset, bot:boolean, modState:ModState, modReasonOffset:flatbuffers.Offset):flatbuffers.Offset {
   User.startUser(builder);
   User.addName(builder, nameOffset);
   User.addDisplayNameType(builder, displayNameTypeOffset);
@@ -320,6 +329,7 @@ static createUser(builder:flatbuffers.Builder, nameOffset:flatbuffers.Offset, di
     User.addFetchedAt(builder, fetchedAt);
   if (deletedAt !== null)
     User.addDeletedAt(builder, deletedAt);
+  User.addSalt(builder, salt);
   User.addAvatarUrl(builder, avatarUrlOffset);
   User.addBannerUrl(builder, bannerUrlOffset);
   User.addBot(builder, bot);

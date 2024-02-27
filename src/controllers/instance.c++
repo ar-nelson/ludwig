@@ -336,7 +336,10 @@ namespace Ludwig {
   }
 
   auto InstanceController::can_create_board(Login login) -> bool {
-    return login && (!site_detail()->board_creation_admin_only || login->local_user().admin());
+    return login && ((!site_detail()->board_creation_admin_only &&
+                      login->local_user().approved() &&
+                      login->user().mod_state() < ModState::Locked) ||
+                     login->local_user().admin());
   }
 
   auto InstanceController::validate_or_regenerate_session(
@@ -531,6 +534,29 @@ namespace Ludwig {
     }
     if (iter->is_done()) return {};
     return PageCursor(iter->get_cursor()->int_field_0(), **iter);
+  }
+  auto InstanceController::list_applications(
+    Writer<pair<const Application&, LocalUserDetail>> out,
+    ReadTxnBase& txn,
+    Login login,
+    optional<uint64_t> from,
+    uint16_t limit
+  ) -> optional<uint64_t> {
+    if (login && !can_change_site_settings(login)) return {};
+    auto iter = txn.list_applications(from.transform([](auto x){return Cursor(x);}));
+    for (const auto id : iter) {
+      try {
+        out(pair<const Application&, LocalUserDetail>(
+          txn.get_application(id).value().get(),
+          LocalUserDetail::get(txn, id, login)
+        ));
+      } catch (const std::runtime_error& e) {
+        spdlog::warn("Application {:x} error: {}", id, e.what());
+      }
+      if (--limit == 0) break;
+    }
+    if (iter.is_done()) return {};
+    return *iter;
   }
   auto InstanceController::list_boards(
     Writer<BoardDetail> out,
@@ -1112,7 +1138,7 @@ namespace Ludwig {
     const auto now = now_s();
     auto txn = db->open_write_txn();
     if (!txn.get_setting_int(SettingsKey::setup_done)) {
-      if (!txn.get_setting_int(SettingsKey::next_id)) txn.set_setting(SettingsKey::next_id, 1);
+      if (!txn.get_setting_int(SettingsKey::next_id)) txn.set_setting(SettingsKey::next_id, ID_MIN_USER);
 
       // JWT secret
       uint8_t jwt_secret[JWT_SECRET_SIZE];
@@ -1296,16 +1322,19 @@ namespace Ludwig {
     }
     uint8_t salt[16], hash[32];
     if (!RAND_bytes(salt, 16)) {
-      throw ApiError("Not enough randomness to generate secure password salt", 500);
+      throw ApiError("Internal server error", 500, "Not enough randomness to generate secure password salt");
     }
     hash_password(std::move(password), salt, hash);
     FlatBufferBuilder fbb;
     {
+      union { uint8_t bytes[4]; uint32_t n; } salt;
+      RAND_pseudo_bytes(salt.bytes, 4);
       const auto name_s = fbb.CreateString(username);
       UserBuilder b(fbb);
       b.add_created_at(now_s());
       b.add_name(name_s);
       b.add_bot(is_bot);
+      b.add_salt(salt.n);
       fbb.Finish(b.Finish());
     }
     const auto user_id = txn.create_user(fbb.GetBufferSpan());
@@ -1397,11 +1426,13 @@ namespace Ludwig {
     optional<string_view> email,
     SecretString&& password,
     bool is_bot,
-    optional<uint64_t> invite
+    optional<uint64_t> invite,
+    IsApproved approved,
+    IsAdmin admin
   ) -> uint64_t {
     auto txn = db->open_write_txn();
     auto user_id = create_local_user_internal(
-      txn, username, email, std::move(password), is_bot, IsApproved::Yes, IsAdmin::No, invite
+      txn, username, email, std::move(password), is_bot, approved, admin, invite
     );
     txn.commit();
     return user_id;
@@ -1641,6 +1672,8 @@ namespace Ludwig {
     else if (len < 1) throw ApiError("Post title cannot be blank", 400);
     uint64_t thread_id;
     {
+      union { uint8_t bytes[4]; uint32_t n; } salt;
+      RAND_pseudo_bytes(salt.bytes, 4);
       auto txn = db->open_write_txn();
       const auto user = LocalUserDetail::get_login(txn, author);
       if (!BoardDetail::get(txn, board, user).can_create_thread(user)) {
@@ -1659,6 +1692,7 @@ namespace Ludwig {
       b.add_board(board);
       b.add_title_type(title_blocks_type);
       b.add_title(title_blocks);
+      b.add_salt(salt.n);
       if (submission_url) b.add_content_url(submission_s);
       if (text_content_markdown) {
         b.add_content_text_raw(content_raw_s);
@@ -1710,6 +1744,8 @@ namespace Ludwig {
     auto len = text_content_markdown.length();
     if (len > MiB) throw ApiError("Comment text content cannot be larger than 1MiB", 400);
     else if (len < 1) throw ApiError("Comment text content cannot be blank", 400);
+    union { uint8_t bytes[4]; uint32_t n; } salt;
+    RAND_pseudo_bytes(salt.bytes, 4);
     auto txn = db->open_write_txn();
     const auto login = LocalUserDetail::get_login(txn, author);
     optional<ThreadDetail> parent_thread;
@@ -1735,6 +1771,7 @@ namespace Ludwig {
     b.add_content_raw(content_raw_s);
     b.add_content_type(content_type);
     b.add_content(content);
+    b.add_salt(salt.n);
     if (content_warning) b.add_content_warning(content_warning_s);
     fbb.Finish(b.Finish());
     const auto comment_id = txn.create_comment(fbb.GetBufferSpan());

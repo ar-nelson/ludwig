@@ -13,7 +13,7 @@ namespace Ludwig {
     return (uint64_t)std::numeric_limits<int64_t>::max() + (uint64_t)karma;
   }
 
-  static constexpr auto ACTIVE_COMMENT_MAX_AGE = std::chrono::hours(48);
+  static constexpr std::chrono::hours ACTIVE_COMMENT_MAX_AGE(48);
 
   class StringVal {
   private:
@@ -206,7 +206,7 @@ namespace Ludwig {
     auto has_user_hidden_board(uint64_t user_id, uint64_t board_id) -> bool;
 
     auto get_application(uint64_t user_id) -> OptRef<const Application>;
-    auto list_applications(OptCursor cursor = {}) -> DBIter;
+    auto list_applications(OptCursor cursor = {}) -> DBKeyIter;
 
     auto get_invite(uint64_t invite_id) -> OptRef<const Invite>;
     auto list_invites_from_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;

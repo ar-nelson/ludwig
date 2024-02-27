@@ -67,6 +67,7 @@ table User {
   updated_at: uint64 = null;
   fetched_at: uint64 = null;
   deleted_at: uint64 = null;
+  salt: uint32; // random, will be used to generate hashes in vote activity URLs
   avatar_url: string;
   banner_url: string;
   bot: bool = false;
@@ -179,6 +180,7 @@ table Thread {
   fetched_at: uint64 = null;
   deleted_at: uint64 = null;
   instance: uint64 = 0;
+  salt: uint32; // random, will be used to generate hashes in vote activity URLs
   activity_url: string;
   original_post_url: string;
   content_url: string;
@@ -209,6 +211,7 @@ table Comment {
   fetched_at: uint64 = null;
   deleted_at: uint64 = null;
   instance: uint64 = 0;
+  salt: uint32; // random, will be used to generate hashes in vote activity URLs
   activity_url: string;
   original_post_url: string;
   content_raw: string;

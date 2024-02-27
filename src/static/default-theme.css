@@ -163,9 +163,57 @@ textarea {
   width: 100%;
   height: 6rem;
 }
-
 small {
   color: var(--color-fg-dim);
+}
+dl {
+  display: grid;
+  grid-auto-rows: auto;
+}
+dt {
+  font-weight: normal;
+  color: var(--color-fg-dim);
+  text-align: right;
+  grid-column: 1;
+  margin-bottom: 0.25rem;
+  padding: 0;
+}
+dd {
+  grid-column: 2;
+  margin-left: 0.5rem;
+  margin-bottom: 0.25rem;
+  padding: 0;
+}
+
+table {
+  width: 100%;
+  border-spacing: 0;
+  border-collapse: collapse;
+}
+td, th {
+  border-width: 0 1px;
+  border-style: solid;
+  padding: 0.25rem 0.125rem;
+}
+td {
+  background-color: var(--color-bg-dim);
+  border-color: var(--color-bg);
+}
+th, tr:nth-child(even) > td {
+  background-color: var(--color-bg);
+  border-color: var(--color-bg-dim);
+}
+
+.table-page table {
+  font-size: 0.8rem;
+}
+.table-reason {
+  min-width: 30%;
+}
+.table-reason .reason {
+  max-height: 8rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
 }
 
 .big-button,
@@ -231,6 +279,17 @@ a:link.big-button, a:visited.big-button {
 .topbar .quick-boards {
   flex: 1 1 auto;
   overflow-x: hidden;
+}
+
+.banner {
+  width: 100%;
+  min-width: 100%;
+  align-self: stretch;
+  padding: 0.25rem;
+  margin-bottom: 0.5rem;
+  text-align: center;
+  background-color: var(--color-accent);
+  color: var(--color-accent-fg);
 }
 
 #toasts {
@@ -377,12 +436,12 @@ summary + * {
   margin-right: 1rem;
 }
 
-ol.thread-list, ol.comment-list, ol.board-list {
+ol.thread-list, ol.comment-list, ol.board-list, ol.user-list {
   margin: 0;
   padding: 0;
 }
 
-.thread-list > li, .comment-list > li, .board-list > li {
+.thread-list > li, .comment-list > li, .board-list > li, .user-list > li {
   list-style-type: none;
   margin: 0;
   padding: 0;
@@ -390,7 +449,8 @@ ol.thread-list, ol.comment-list, ol.board-list {
 
 .thread-list > .no-entries,
 .comment-list > .no-entries,
-.board-list > .no-entries {
+.board-list > .no-entries,
+.user-list > .no-entries {
   display: block;
   text-align: center;
   padding: 1rem;
@@ -419,6 +479,34 @@ ol.thread-list, ol.comment-list, ol.board-list {
 
 .more-link.htmx-request + .spinner {
   display: inline-block;
+}
+
+.board-list-entry, .user-list-entry {
+  display: flex;
+  flex-direction: row;
+  border-top: 1px dotted var(--color-fg-dim);
+}
+
+.board-list-desc, .user-list-desc {
+  flex: 1 1 auto;
+  border-right: none;
+}
+
+.board-list-stats, .user-list-stats {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  margin-right: 1rem;
+}
+
+.user-list-name, .board-list-name {
+  font-weight: bold;
+  margin-bottom: 0.25rem;
+}
+
+.account-name {
+  margin-top: 0.25rem;
 }
 
 .thread {
@@ -764,6 +852,12 @@ body:not(.has-js) .js {
 .form-page {
   background-color: var(--color-bg-dim);
   padding: 2rem 10%;
+  border-radius: 0.5rem;
+}
+
+.table-page {
+  background-color: var(--color-bg-dim);
+  padding: 2rem 1rem;
   border-radius: 0.5rem;
 }
 

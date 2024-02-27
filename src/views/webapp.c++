@@ -110,6 +110,7 @@ namespace Ludwig {
   enum class SiteAdminTab : uint8_t {
     Settings,
     ImportExport,
+    Applications,
     Invites
   };
 
@@ -425,6 +426,14 @@ namespace Ludwig {
         } else {
           write(R"(</ul><ul><li><a href="/login">Login</a></ul></nav>)");
         }
+        if (m.login) {
+          if (!m.login->local_user().approved()) {
+            write(R"(<div id="banner-not-approved" class="banner">Your account is not yet approved. You cannot post, vote, or subscribe to boards.</div>)");
+          }
+          if (m.login->user().mod_state() >= ModState::Locked) {
+            write(R"(<div id="banner-locked" class="banner">Your account is locked. You cannot post, vote, or subscribe to boards.</div>)");
+          }
+        }
         write(R"(<div id="toasts"></div>)");
         if (opt.banner_title) {
           write(R"(<header id="page-header")");
@@ -446,7 +455,12 @@ namespace Ludwig {
       auto write_html_footer(const Meta& m) noexcept -> ResponseWriter& {
         return write_fmt(
           R"(<div class="spacer"></div><footer><small>Powered by <a href="https://github.com/ar-nelson/ludwig">Ludwig</a>)"
+          R"( · v{})"
+#         ifdef LUDWIG_DEBUG
+          " (DEBUG BUILD)"
+#         endif
           R"( · Generated in {:L}μs</small></footer></body></html>)",
+          VERSION,
           m.time_elapsed()
         );
       }
@@ -648,14 +662,39 @@ namespace Ludwig {
       }
 
       auto write_board_list_entry(const BoardDetail& entry) {
-        write(R"(<li class="board-list-entry"><h2 class="board-title">)");
+        write(R"(<li class="board-list-entry"><div class="board-list-desc"><p class="board-list-name">)");
         write_board_link(entry.board());
-        write("</h2></li>");
+        if (entry.board().display_name() && entry.board().display_name()->size()) {
+          write_fmt(R"(</p><p class="account-name"><small>{}</small>)", Escape{entry.board().name()});
+        }
+        write_fmt(
+          R"(</p><p>{}</p></div><div class="board-list-stats"><dl>)"
+          R"(<dt>Subscribers</dt><dd>{:d}</dd>)"
+          R"(<dt>Threads</dt><dd>{:d}</dd>)"
+          R"(<dt>Last Activity</dt><dd>{}</dd></dl></div></li>)",
+          rich_text_to_html(entry.board().description_type(), entry.board().description()),
+          entry.stats().subscriber_count(),
+          entry.stats().thread_count(),
+          RelativeTime{chrono::system_clock::time_point(chrono::seconds(entry.stats().latest_post_time()))}
+        );
       }
 
       auto write_user_list_entry(const UserDetail& entry, Login login = {}) {
-        write(R"(<li class="user-list-entry">)");
+        write(R"(<li class="user-list-entry"><div class="user-list-desc"><p class="user-list-name">)");
         write_user_link(entry.user(), login);
+        if (entry.user().display_name() && entry.user().display_name()->size()) {
+          write_fmt(R"(</p><p class="account-name"><small>{}</small>)", Escape{entry.user().name()});
+        }
+        write_fmt(
+          R"(</p><p>{}</p></div><div class="user-list-stats"><dl>)"
+          R"(<dt>Threads</dt><dd>{:d}</dd>)"
+          R"(<dt>Comments</dt><dd>{:d}</dd>)"
+          R"(<dt>Last Activity</dt><dd>{}</dd></dl></div></li>)",
+          rich_text_to_html(entry.user().bio_type(), entry.user().bio()),
+          entry.stats().thread_count(),
+          entry.stats().comment_count(),
+          RelativeTime{chrono::system_clock::time_point(chrono::seconds(entry.stats().latest_post_time()))}
+        );
       }
 
       template <class T> auto write_sort_select(string_view, T) noexcept -> ResponseWriter&;
@@ -1460,6 +1499,9 @@ namespace Ludwig {
         write(R"(<ul class="tabs">)");
         write_tab(SiteAdminTab::Settings, selected, "Settings", "/site_admin");
         write_tab(SiteAdminTab::ImportExport, selected, "Import/Export", "/site_admin/import_export");
+        if (site->registration_application_required) {
+          write_tab(SiteAdminTab::Applications, selected, "Applications", "/site_admin/applications");
+        }
         if (site->registration_invite_required) {
           write_tab(SiteAdminTab::Invites, selected, "Invites", "/site_admin/invites");
         }
@@ -1552,6 +1594,39 @@ namespace Ludwig {
           R"(<p>⚠️ <strong>Warning: This is a huge file, and it can take a long time to download!</strong> ⚠️</p>)"
           R"(<input type="submit" value="Download All The Things"></form>)"
         );
+      }
+
+      auto write_site_admin_applications_list(
+        InstanceController& instance,
+        ReadTxnBase& txn,
+        Login login,
+        optional<uint64_t> cursor = {},
+        optional<string_view> error = {}
+      ) noexcept -> ResponseWriter& {
+        write_fmt(
+          R"(<div class="table-page"><h2>Registration Applications</h2>{}<table>)"
+          R"(<thead><th>Name<th>Email<th>Date<th>IP Addr<th>User Agent<th class="table-reason">Reason<th>Approve</thead>)"
+          R"(<tbody id="application-table">)",
+          error_banner(error)
+        );
+        bool any_entries = false;
+        instance.list_applications([&](auto p){
+          any_entries = true;
+          auto& [application, detail] = p;
+          write_fmt(
+            R"(<tr><td>{}<td>{}<td>{:%D}<td>{}<td>{}<td class="table-reason"><div class="reason">{}</div><td><form method="post" action="/site_admin/application/approve/{:x}"><input type="submit" value="Approve"></form></tr>)",
+            Escape{detail.user().name()},
+            Escape{detail.local_user().email()},
+            fmt::localtime(detail.created_at()),
+            Escape{application.ip()},
+            Escape{application.user_agent()},
+            Escape{application.text()},
+            detail.id
+          );
+        }, txn, login, cursor);
+        if (!any_entries) write(R"(<tr><td colspan="7">There's nothing here.</tr>)");
+        // TODO: Pagination
+        return write("</tbody></table></div>");
       }
 
       auto write_first_run_setup_form(
@@ -1952,7 +2027,7 @@ namespace Ludwig {
       };
     }
 
-    static inline auto form_to_site_update(QueryString<string_view> body) -> SiteUpdate {
+    static inline auto form_to_site_update(QueryString<string> body) -> SiteUpdate {
       const auto voting = body.optional_uint("voting");
       return {
         .name = body.optional_string("name"),
@@ -2042,17 +2117,17 @@ namespace Ludwig {
               .banner_link = "/boards",
               .banner_title = "Boards",
             })
-            .write("<div>")
-            .write_sidebar(m.login, m.site)
-            .write(R"(<section><h2 class="a11y">Sort and filter</h2>)")
+            .write(R"(<div><section><h2 class="a11y">Sort and filter</h2>)")
             .write_sort_options("/boards", sort, local, sub)
             .write(R"(</section><main>)");
         }
         r.write(R"(<ol class="board-list" id="top-level-list">)");
+        bool any_entries = false;
         const auto next = self->controller->list_boards(
-          bind(&ResponseWriter::write_board_list_entry, r, _1),
+          [&](auto& b) { r.write_board_list_entry(b); any_entries = true; },
           txn, sort, local, sub, m.login, req->getQuery("from")
         );
+        if (!m.is_htmx && !any_entries) r.write(R"(<li class="no-entries">There's nothing here.)");
         r.write("</ol>").write_pagination(base_url, req->getQuery("from").empty(), next);
         if (!m.is_htmx) r.write("</main></div>").write_html_footer(m);
         r.finish();
@@ -2076,17 +2151,17 @@ namespace Ludwig {
               .banner_link = "/users",
               .banner_title = "Users",
             })
-            .write("<div>")
-            .write_sidebar(m.login, m.site)
-            .write(R"(<section><h2 class="a11y">Sort and filter</h2>)")
+            .write(R"(<div><section><h2 class="a11y">Sort and filter</h2>)")
             .write_sort_options("/users", sort, local, false)
             .write(R"(</section><main>)");
         }
         r.write(R"(<ol class="user-list" id="top-level-list">)");
+        bool any_entries = false;
         const auto next = self->controller->list_users(
-          [&](auto& e){r.write_user_list_entry(e, m.login);},
+          [&](auto& e){r.write_user_list_entry(e, m.login); any_entries = true; },
           txn, sort, local,m.login, req->getQuery("from")
         );
+        if (!m.is_htmx && !any_entries) r.write(R"(<li class="no-entries">There's nothing here.)");
         r.write("</ol>").write_pagination(base_url, req->getQuery("from").empty(), next);
         if (!m.is_htmx) r.write("</main></div>").write_html_footer(m);
         r.finish();
@@ -2438,12 +2513,30 @@ namespace Ludwig {
         }
         self->writer(rsp)
           .write_html_header(m, {
-            .canonical_path = "/site_admin",
+            .canonical_path = "/site_admin/import_export",
             .banner_title = "Site Admin",
           })
           .write("<main>")
           .write_site_admin_tabs(m.site, SiteAdminTab::ImportExport)
           .write_site_admin_import_export_form()
+          .write("</main>")
+          .write_html_footer(m)
+          .finish();
+      })
+      .get("/site_admin/applications", [self](auto* rsp, auto*, Meta& m) {
+        auto txn = self->controller->open_read_txn();
+        const auto login = m.require_login(txn);
+        if (!InstanceController::can_change_site_settings(login)) {
+          throw ApiError("Admin login required to view this page", 403);
+        }
+        self->writer(rsp)
+          .write_html_header(m, {
+            .canonical_path = "/site_admin/applications",
+            .banner_title = "Site Admin",
+          })
+          .write("<main>")
+          .write_site_admin_tabs(m.site, SiteAdminTab::Applications)
+          .write_site_admin_applications_list(*self->controller, txn, m.login, {})
           .write("</main>")
           .write_html_footer(m)
           .finish();
@@ -2530,8 +2623,8 @@ namespace Ludwig {
                 std::move(password),
                 rsp->getRemoteAddressAsText(),
                 user_agent,
-                body.optional_string("invite").transform(invite_code_to_id),
-                body.optional_string("application")
+                body.optional_string("invite_code").transform(invite_code_to_id),
+                body.optional_string("application_reason")
               );
             } catch (ApiError e) {
               rsp->writeStatus(http_status(e.http_status));
@@ -2777,7 +2870,7 @@ namespace Ludwig {
           user = m->require_login(),
           referer = string(req->getHeader("referer")),
           is_htmx = m->is_htmx
-        ](QueryString<string_view> body, auto&& write) {
+        ](QueryString<string> body, auto&& write) {
           self->controller->subscribe(user, board_id, !body.optional_bool("unsubscribe"));
           write([=](auto* rsp) mutable {
             if (is_htmx) {
@@ -2797,10 +2890,10 @@ namespace Ludwig {
             throw ApiError("Admin login required to perform this action", 403);
           }
         }
-        return [self, m=std::move(m)](QueryString<string_view> body, auto&& write) mutable {
+        return [self, m=std::move(m)](QueryString<string> body, auto&& write) mutable {
           try {
             self->controller->update_site(form_to_site_update(body), m->logged_in_user_id);
-            write([=](auto* rsp) {
+            write([](auto* rsp) {
               write_redirect_back(rsp, "/site_admin");
             });
           } catch (const ApiError& e) {
@@ -2832,7 +2925,7 @@ namespace Ludwig {
             throw ApiError("Admin login required to perform this action", 403);
           }
         }
-        return [self, m=std::move(m)](QueryString<string_view> body, auto&& write) mutable {
+        return [self, m=std::move(m)](QueryString<string> body, auto&& write) mutable {
           try {
             self->controller->first_run_setup({
               form_to_site_update(body),
@@ -2841,7 +2934,7 @@ namespace Ludwig {
               body.optional_string("admin_username"),
               body.optional_string("admin_password").transform(λx(SecretString(x)))
             });
-            write([=](auto* rsp) {
+            write([](auto* rsp) {
               write_redirect_back(rsp, "/");
             });
           } catch (const ApiError& e) {
@@ -2854,7 +2947,7 @@ namespace Ludwig {
                   .banner_title = "First-Run Setup",
                 })
                 .write("<main>")
-                .write_first_run_setup_form(self->controller->first_run_setup_options(txn))
+                .write_first_run_setup_form(self->controller->first_run_setup_options(txn), e.message)
                 .write("</main>")
                 .write_html_footer(*m)
                 .finish();
@@ -2896,6 +2989,39 @@ namespace Ludwig {
             }
             write([](auto rsp) { rsp->end(); });
           }).detach();
+        };
+      })
+      .post("/site_admin/applications/approve/:id", [self](auto* req, auto m) {
+        {
+          auto txn = self->controller->open_read_txn();
+          const auto login = m->require_login(txn);
+          if (!InstanceController::can_change_site_settings(login)) {
+            throw ApiError("Admin login required to perform this action", 403);
+          }
+        }
+        return [self, id=hex_id_param(req, 0), m=std::move(m)](string, auto&& write) mutable {
+          try {
+            self->controller->approve_local_user_application(id, m->logged_in_user_id);
+            write([](auto* rsp) {
+              write_redirect_back(rsp, "/site_admin/applications");
+            });
+          } catch (const ApiError& e) {
+            write([=, m=std::move(m)](auto* rsp) mutable {
+              rsp->writeStatus(http_status(e.http_status));
+              auto txn = self->controller->open_read_txn();
+              self->writer(rsp)
+                .write_html_header(*m, {
+                  .canonical_path = "/site_admin/applications",
+                  .banner_title = "Site Admin",
+                })
+                .write("<main>")
+                .write_site_admin_tabs(m->site, SiteAdminTab::Applications)
+                .write_site_admin_applications_list(*self->controller, txn, m->login, {}, e.message)
+                .write("</main>")
+                .write_html_footer(*m)
+                .finish();
+            });
+          }
         };
       })
       .any("/*", [](auto*, auto*, auto&) {

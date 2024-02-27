@@ -87,7 +87,7 @@ namespace Ludwig {
   template <typename T>
   struct QueryString {
     T query;
-    QueryString(T query) : query(query) {}
+    QueryString(const T& query) : query(query) {}
 
     auto required_hex_id(std::string_view key) -> uint64_t {
       try {
@@ -281,7 +281,7 @@ namespace Ludwig {
                 ->end();
             }
           } else {
-            spdlog::info("[{} {}] - 405 Method Not Allowed", req->getMethod(), req->getUrl());
+            spdlog::info("[{} {}] - 405 Method Not Found", req->getMethod(), req->getUrl());
             rsp->writeStatus(http_status(405))->end();
           }
         });
@@ -438,10 +438,10 @@ namespace Ludwig {
       return std::move(*this);
     }
 
-    Router &&post_form(std::string pattern, PostHandler<QueryString<std::string_view>>&& handler, size_t max_size = 10 * MiB) {
-      app.post(pattern, post_handler<QueryString<std::string_view>>(std::move(handler), "POST", max_size, TYPE_FORM, "?", [](auto&& s){
+    Router &&post_form(std::string pattern, PostHandler<QueryString<std::string>>&& handler, size_t max_size = 10 * MiB) {
+      app.post(pattern, post_handler<QueryString<std::string>>(std::move(handler), "POST", max_size, TYPE_FORM, "?", [](auto&& s){
         if (!simdjson::validate_utf8(s)) throw ApiError("POST body is not valid UTF-8", 415);
-        return QueryString<std::string_view>(s);
+        return QueryString<std::string>(s);
       }));
       register_route(pattern, "POST");
       return std::move(*this);

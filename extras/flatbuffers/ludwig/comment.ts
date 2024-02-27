@@ -66,73 +66,78 @@ instance():bigint {
   return offset ? this.bb!.readUint64(this.bb_pos + offset) : BigInt('0');
 }
 
+salt():number {
+  const offset = this.bb!.__offset(this.bb_pos, 20);
+  return offset ? this.bb!.readUint32(this.bb_pos + offset) : 0;
+}
+
 activityUrl():string|null
 activityUrl(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 activityUrl(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 20);
+  const offset = this.bb!.__offset(this.bb_pos, 22);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 originalPostUrl():string|null
 originalPostUrl(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 originalPostUrl(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 22);
+  const offset = this.bb!.__offset(this.bb_pos, 24);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 contentRaw():string|null
 contentRaw(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 contentRaw(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 24);
+  const offset = this.bb!.__offset(this.bb_pos, 26);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 contentType(index: number):RichText|null {
-  const offset = this.bb!.__offset(this.bb_pos, 26);
+  const offset = this.bb!.__offset(this.bb_pos, 28);
   return offset ? this.bb!.readUint8(this.bb!.__vector(this.bb_pos + offset) + index) : 0;
 }
 
 contentTypeLength():number {
-  const offset = this.bb!.__offset(this.bb_pos, 26);
+  const offset = this.bb!.__offset(this.bb_pos, 28);
   return offset ? this.bb!.__vector_len(this.bb_pos + offset) : 0;
 }
 
 contentTypeArray():Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 26);
+  const offset = this.bb!.__offset(this.bb_pos, 28);
   return offset ? new Uint8Array(this.bb!.bytes().buffer, this.bb!.bytes().byteOffset + this.bb!.__vector(this.bb_pos + offset), this.bb!.__vector_len(this.bb_pos + offset)) : null;
 }
 
 content(index: number, obj:any|string):any|string|null {
-  const offset = this.bb!.__offset(this.bb_pos, 28);
+  const offset = this.bb!.__offset(this.bb_pos, 30);
   return offset ? this.bb!.__union_with_string(obj, this.bb!.__vector(this.bb_pos + offset) + index * 4) : null;
 }
 
 contentLength():number {
-  const offset = this.bb!.__offset(this.bb_pos, 28);
+  const offset = this.bb!.__offset(this.bb_pos, 30);
   return offset ? this.bb!.__vector_len(this.bb_pos + offset) : 0;
 }
 
 contentWarning():string|null
 contentWarning(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 contentWarning(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 30);
+  const offset = this.bb!.__offset(this.bb_pos, 32);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 modState():ModState {
-  const offset = this.bb!.__offset(this.bb_pos, 32);
+  const offset = this.bb!.__offset(this.bb_pos, 34);
   return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Visible;
 }
 
 modReason():string|null
 modReason(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 modReason(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 34);
+  const offset = this.bb!.__offset(this.bb_pos, 36);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 static startComment(builder:flatbuffers.Builder) {
-  builder.startObject(16);
+  builder.startObject(17);
 }
 
 static addAuthor(builder:flatbuffers.Builder, author:bigint) {
@@ -167,20 +172,24 @@ static addInstance(builder:flatbuffers.Builder, instance:bigint) {
   builder.addFieldInt64(7, instance, BigInt('0'));
 }
 
+static addSalt(builder:flatbuffers.Builder, salt:number) {
+  builder.addFieldInt32(8, salt, 0);
+}
+
 static addActivityUrl(builder:flatbuffers.Builder, activityUrlOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(8, activityUrlOffset, 0);
+  builder.addFieldOffset(9, activityUrlOffset, 0);
 }
 
 static addOriginalPostUrl(builder:flatbuffers.Builder, originalPostUrlOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(9, originalPostUrlOffset, 0);
+  builder.addFieldOffset(10, originalPostUrlOffset, 0);
 }
 
 static addContentRaw(builder:flatbuffers.Builder, contentRawOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(10, contentRawOffset, 0);
+  builder.addFieldOffset(11, contentRawOffset, 0);
 }
 
 static addContentType(builder:flatbuffers.Builder, contentTypeOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(11, contentTypeOffset, 0);
+  builder.addFieldOffset(12, contentTypeOffset, 0);
 }
 
 static createContentTypeVector(builder:flatbuffers.Builder, data:RichText[]):flatbuffers.Offset {
@@ -196,7 +205,7 @@ static startContentTypeVector(builder:flatbuffers.Builder, numElems:number) {
 }
 
 static addContent(builder:flatbuffers.Builder, contentOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(12, contentOffset, 0);
+  builder.addFieldOffset(13, contentOffset, 0);
 }
 
 static createContentVector(builder:flatbuffers.Builder, data:flatbuffers.Offset[]):flatbuffers.Offset {
@@ -212,25 +221,25 @@ static startContentVector(builder:flatbuffers.Builder, numElems:number) {
 }
 
 static addContentWarning(builder:flatbuffers.Builder, contentWarningOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(13, contentWarningOffset, 0);
+  builder.addFieldOffset(14, contentWarningOffset, 0);
 }
 
 static addModState(builder:flatbuffers.Builder, modState:ModState) {
-  builder.addFieldInt8(14, modState, ModState.Visible);
+  builder.addFieldInt8(15, modState, ModState.Visible);
 }
 
 static addModReason(builder:flatbuffers.Builder, modReasonOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(15, modReasonOffset, 0);
+  builder.addFieldOffset(16, modReasonOffset, 0);
 }
 
 static endComment(builder:flatbuffers.Builder):flatbuffers.Offset {
   const offset = builder.endObject();
-  builder.requiredField(offset, 26) // content_type
-  builder.requiredField(offset, 28) // content
+  builder.requiredField(offset, 28) // content_type
+  builder.requiredField(offset, 30) // content
   return offset;
 }
 
-static createComment(builder:flatbuffers.Builder, author:bigint, parent:bigint, thread:bigint, createdAt:bigint, updatedAt:bigint|null, fetchedAt:bigint|null, deletedAt:bigint|null, instance:bigint, activityUrlOffset:flatbuffers.Offset, originalPostUrlOffset:flatbuffers.Offset, contentRawOffset:flatbuffers.Offset, contentTypeOffset:flatbuffers.Offset, contentOffset:flatbuffers.Offset, contentWarningOffset:flatbuffers.Offset, modState:ModState, modReasonOffset:flatbuffers.Offset):flatbuffers.Offset {
+static createComment(builder:flatbuffers.Builder, author:bigint, parent:bigint, thread:bigint, createdAt:bigint, updatedAt:bigint|null, fetchedAt:bigint|null, deletedAt:bigint|null, instance:bigint, salt:number, activityUrlOffset:flatbuffers.Offset, originalPostUrlOffset:flatbuffers.Offset, contentRawOffset:flatbuffers.Offset, contentTypeOffset:flatbuffers.Offset, contentOffset:flatbuffers.Offset, contentWarningOffset:flatbuffers.Offset, modState:ModState, modReasonOffset:flatbuffers.Offset):flatbuffers.Offset {
   Comment.startComment(builder);
   Comment.addAuthor(builder, author);
   Comment.addParent(builder, parent);
@@ -243,6 +252,7 @@ static createComment(builder:flatbuffers.Builder, author:bigint, parent:bigint, 
   if (deletedAt !== null)
     Comment.addDeletedAt(builder, deletedAt);
   Comment.addInstance(builder, instance);
+  Comment.addSalt(builder, salt);
   Comment.addActivityUrl(builder, activityUrlOffset);
   Comment.addOriginalPostUrl(builder, originalPostUrlOffset);
   Comment.addContentRaw(builder, contentRawOffset);

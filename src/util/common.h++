@@ -18,7 +18,9 @@
 #include <flatbuffers/string.h>
 
 namespace Ludwig {
+  constexpr std::string_view VERSION = "0.0.1";
   constexpr std::string_view FIRST_RUN_ADMIN_USERNAME = "admin";
+  constexpr uint64_t ID_MIN_USER = 0x10;
   constexpr uint64_t ID_MAX = std::numeric_limits<uint64_t>::max();
   constexpr size_t MiB = 1024 * 1024;
 

@@ -57,8 +57,12 @@ namespace Ludwig {
   }
 
   auto interactive_setup(bool admin_exists, bool default_board_exists) -> FirstRunSetup {
-    FirstRunSetup setup;
     static string name, base_url, admin_name, default_board_name;
+
+    FirstRunSetup setup;
+    setup.javascript_enabled = true;
+    setup.infinite_scroll_enabled = true;
+
     puts("Welcome to Ludwig!");
     puts("------------------\n");
 

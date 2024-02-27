@@ -305,6 +305,13 @@ namespace Ludwig {
       PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
     ) -> PageCursor;
+    auto list_applications(
+      Writer<std::pair<const Application&, LocalUserDetail>> out,
+      ReadTxnBase& txn,
+      Login login = {},
+      std::optional<uint64_t> from = {},
+      uint16_t limit = ITEMS_PER_PAGE
+    ) -> std::optional<uint64_t>;
     auto list_boards(
       Writer<BoardDetail> out,
       ReadTxnBase& txn,
@@ -394,7 +401,9 @@ namespace Ludwig {
       std::optional<std::string_view> email,
       SecretString&& password,
       bool is_bot,
-      std::optional<uint64_t> invite = {}
+      std::optional<uint64_t> invite = {},
+      IsApproved is_approved = IsApproved::No,
+      IsAdmin is_admin = IsAdmin::No
     ) -> uint64_t;
     auto update_local_user(uint64_t id, std::optional<uint64_t> as_user, const LocalUserUpdate& update) -> void;
     auto reset_password(uint64_t user_id) -> std::string;

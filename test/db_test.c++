@@ -16,6 +16,7 @@ static inline auto create_user(WriteTxn& txn, string_view name, string_view disp
   user.add_name(name_s);
   user.add_display_name_type(display_name_types);
   user.add_display_name(display_name_values);
+  user.add_salt(0);
   fbb.Finish(user.Finish());
   return txn.create_user(fbb.GetBufferSpan());
 }
@@ -179,6 +180,7 @@ static inline auto create_thread(WriteTxn& txn, uint64_t user, uint64_t board, c
     {},
     {},
     0,
+    0,
     nullptr,
     nullptr,
     url
@@ -297,6 +299,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
         {},
         {},
         0,
+        0,
         nullptr,
         nullptr,
         "https://example.com"
@@ -323,6 +326,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       comment.add_content_raw(content_raw);
       comment.add_content_type(content_type);
       comment.add_content(content);
+      comment.add_salt(0);
       fbb.Finish(comment.Finish());
       comments[i] = txn.create_comment(fbb.GetBufferSpan());
     }

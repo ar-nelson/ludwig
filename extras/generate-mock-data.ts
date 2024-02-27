@@ -29,7 +29,7 @@ const ludwigDomain = "http://localhost:2023";
 const PASSWORD_SALT = new TextEncoder().encode("0123456789abcdef");
 
 const SCALE = 100;
-let nextId = 0n;
+let nextId = 0x10n;
 
 function genInstance(): { id: bigint; domain: string } {
   return { id: nextId++, domain: `${faker.internet.domainWord()}.test` };
@@ -125,6 +125,7 @@ function genUser(
       null,
       null,
       null,
+      faker.number.int({ min: 0, max: 0xffffffff }),
       avatar ? fbb.createString(avatar) : 0,
       banner ? fbb.createString(banner) : 0,
       faker.datatype.boolean(0.05),
@@ -302,6 +303,7 @@ function genThread(
       null,
       null,
       instance ? instance.id : 0n,
+      faker.number.int({ min: 0, max: 0xffffffff }),
       instance
         ? fbb.createString(
           `https://${instance.domain}/ap/activity/${id.toString(16)}`,
@@ -364,6 +366,7 @@ function genComment(
       null,
       null,
       instance ? instance.id : 0n,
+      faker.number.int({ min: 0, max: 0xffffffff }),
       instance
         ? fbb.createString(
           `https://${instance.domain}/ap/activity/${id.toString(16)}`,

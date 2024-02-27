@@ -17,7 +17,7 @@
 
 using namespace Ludwig;
 using std::lock_guard, std::make_shared, std::mutex, std::optional, std::pair,
-    std::runtime_error, std::shared_ptr, std::stoull, std::thread,
+    std::runtime_error, std::shared_ptr, std::stoull, std::string, std::thread,
     std::unique_ptr, std::vector;
 
 namespace Ludwig {
@@ -35,8 +35,9 @@ namespace Ludwig {
 }
 
 int main(int argc, char** argv) {
-  optparse::OptionParser parser =
-    optparse::OptionParser().description("lemmy but better");
+  auto parser = optparse::OptionParser()
+    .version(string(VERSION))
+    .description("Web forum server, compatible with Lemmy");
   parser.add_option("--setup")
     .dest("setup")
     .nargs(0)

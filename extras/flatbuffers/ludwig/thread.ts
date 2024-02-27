@@ -86,85 +86,90 @@ instance():bigint {
   return offset ? this.bb!.readUint64(this.bb_pos + offset) : BigInt('0');
 }
 
+salt():number {
+  const offset = this.bb!.__offset(this.bb_pos, 22);
+  return offset ? this.bb!.readUint32(this.bb_pos + offset) : 0;
+}
+
 activityUrl():string|null
 activityUrl(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 activityUrl(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 22);
+  const offset = this.bb!.__offset(this.bb_pos, 24);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 originalPostUrl():string|null
 originalPostUrl(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 originalPostUrl(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 24);
+  const offset = this.bb!.__offset(this.bb_pos, 26);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 contentUrl():string|null
 contentUrl(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 contentUrl(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 26);
+  const offset = this.bb!.__offset(this.bb_pos, 28);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 contentTextRaw():string|null
 contentTextRaw(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 contentTextRaw(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 28);
+  const offset = this.bb!.__offset(this.bb_pos, 30);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 contentTextType(index: number):RichText|null {
-  const offset = this.bb!.__offset(this.bb_pos, 30);
+  const offset = this.bb!.__offset(this.bb_pos, 32);
   return offset ? this.bb!.readUint8(this.bb!.__vector(this.bb_pos + offset) + index) : 0;
 }
 
 contentTextTypeLength():number {
-  const offset = this.bb!.__offset(this.bb_pos, 30);
+  const offset = this.bb!.__offset(this.bb_pos, 32);
   return offset ? this.bb!.__vector_len(this.bb_pos + offset) : 0;
 }
 
 contentTextTypeArray():Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 30);
+  const offset = this.bb!.__offset(this.bb_pos, 32);
   return offset ? new Uint8Array(this.bb!.bytes().buffer, this.bb!.bytes().byteOffset + this.bb!.__vector(this.bb_pos + offset), this.bb!.__vector_len(this.bb_pos + offset)) : null;
 }
 
 contentText(index: number, obj:any|string):any|string|null {
-  const offset = this.bb!.__offset(this.bb_pos, 32);
+  const offset = this.bb!.__offset(this.bb_pos, 34);
   return offset ? this.bb!.__union_with_string(obj, this.bb!.__vector(this.bb_pos + offset) + index * 4) : null;
 }
 
 contentTextLength():number {
-  const offset = this.bb!.__offset(this.bb_pos, 32);
+  const offset = this.bb!.__offset(this.bb_pos, 34);
   return offset ? this.bb!.__vector_len(this.bb_pos + offset) : 0;
 }
 
 contentWarning():string|null
 contentWarning(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 contentWarning(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 34);
+  const offset = this.bb!.__offset(this.bb_pos, 36);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 featured():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 36);
+  const offset = this.bb!.__offset(this.bb_pos, 38);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
 modState():ModState {
-  const offset = this.bb!.__offset(this.bb_pos, 38);
+  const offset = this.bb!.__offset(this.bb_pos, 40);
   return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Visible;
 }
 
 modReason():string|null
 modReason(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 modReason(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 40);
+  const offset = this.bb!.__offset(this.bb_pos, 42);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 static startThread(builder:flatbuffers.Builder) {
-  builder.startObject(19);
+  builder.startObject(20);
 }
 
 static addAuthor(builder:flatbuffers.Builder, author:bigint) {
@@ -227,24 +232,28 @@ static addInstance(builder:flatbuffers.Builder, instance:bigint) {
   builder.addFieldInt64(8, instance, BigInt('0'));
 }
 
+static addSalt(builder:flatbuffers.Builder, salt:number) {
+  builder.addFieldInt32(9, salt, 0);
+}
+
 static addActivityUrl(builder:flatbuffers.Builder, activityUrlOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(9, activityUrlOffset, 0);
+  builder.addFieldOffset(10, activityUrlOffset, 0);
 }
 
 static addOriginalPostUrl(builder:flatbuffers.Builder, originalPostUrlOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(10, originalPostUrlOffset, 0);
+  builder.addFieldOffset(11, originalPostUrlOffset, 0);
 }
 
 static addContentUrl(builder:flatbuffers.Builder, contentUrlOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(11, contentUrlOffset, 0);
+  builder.addFieldOffset(12, contentUrlOffset, 0);
 }
 
 static addContentTextRaw(builder:flatbuffers.Builder, contentTextRawOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(12, contentTextRawOffset, 0);
+  builder.addFieldOffset(13, contentTextRawOffset, 0);
 }
 
 static addContentTextType(builder:flatbuffers.Builder, contentTextTypeOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(13, contentTextTypeOffset, 0);
+  builder.addFieldOffset(14, contentTextTypeOffset, 0);
 }
 
 static createContentTextTypeVector(builder:flatbuffers.Builder, data:RichText[]):flatbuffers.Offset {
@@ -260,7 +269,7 @@ static startContentTextTypeVector(builder:flatbuffers.Builder, numElems:number) 
 }
 
 static addContentText(builder:flatbuffers.Builder, contentTextOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(14, contentTextOffset, 0);
+  builder.addFieldOffset(15, contentTextOffset, 0);
 }
 
 static createContentTextVector(builder:flatbuffers.Builder, data:flatbuffers.Offset[]):flatbuffers.Offset {
@@ -276,19 +285,19 @@ static startContentTextVector(builder:flatbuffers.Builder, numElems:number) {
 }
 
 static addContentWarning(builder:flatbuffers.Builder, contentWarningOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(15, contentWarningOffset, 0);
+  builder.addFieldOffset(16, contentWarningOffset, 0);
 }
 
 static addFeatured(builder:flatbuffers.Builder, featured:boolean) {
-  builder.addFieldInt8(16, +featured, +false);
+  builder.addFieldInt8(17, +featured, +false);
 }
 
 static addModState(builder:flatbuffers.Builder, modState:ModState) {
-  builder.addFieldInt8(17, modState, ModState.Visible);
+  builder.addFieldInt8(18, modState, ModState.Visible);
 }
 
 static addModReason(builder:flatbuffers.Builder, modReasonOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(18, modReasonOffset, 0);
+  builder.addFieldOffset(19, modReasonOffset, 0);
 }
 
 static endThread(builder:flatbuffers.Builder):flatbuffers.Offset {
@@ -296,7 +305,7 @@ static endThread(builder:flatbuffers.Builder):flatbuffers.Offset {
   return offset;
 }
 
-static createThread(builder:flatbuffers.Builder, author:bigint, board:bigint, titleTypeOffset:flatbuffers.Offset, titleOffset:flatbuffers.Offset, createdAt:bigint, updatedAt:bigint|null, fetchedAt:bigint|null, deletedAt:bigint|null, instance:bigint, activityUrlOffset:flatbuffers.Offset, originalPostUrlOffset:flatbuffers.Offset, contentUrlOffset:flatbuffers.Offset, contentTextRawOffset:flatbuffers.Offset, contentTextTypeOffset:flatbuffers.Offset, contentTextOffset:flatbuffers.Offset, contentWarningOffset:flatbuffers.Offset, featured:boolean, modState:ModState, modReasonOffset:flatbuffers.Offset):flatbuffers.Offset {
+static createThread(builder:flatbuffers.Builder, author:bigint, board:bigint, titleTypeOffset:flatbuffers.Offset, titleOffset:flatbuffers.Offset, createdAt:bigint, updatedAt:bigint|null, fetchedAt:bigint|null, deletedAt:bigint|null, instance:bigint, salt:number, activityUrlOffset:flatbuffers.Offset, originalPostUrlOffset:flatbuffers.Offset, contentUrlOffset:flatbuffers.Offset, contentTextRawOffset:flatbuffers.Offset, contentTextTypeOffset:flatbuffers.Offset, contentTextOffset:flatbuffers.Offset, contentWarningOffset:flatbuffers.Offset, featured:boolean, modState:ModState, modReasonOffset:flatbuffers.Offset):flatbuffers.Offset {
   Thread.startThread(builder);
   Thread.addAuthor(builder, author);
   Thread.addBoard(builder, board);
@@ -310,6 +319,7 @@ static createThread(builder:flatbuffers.Builder, author:bigint, board:bigint, ti
   if (deletedAt !== null)
     Thread.addDeletedAt(builder, deletedAt);
   Thread.addInstance(builder, instance);
+  Thread.addSalt(builder, salt);
   Thread.addActivityUrl(builder, activityUrlOffset);
   Thread.addOriginalPostUrl(builder, originalPostUrlOffset);
   Thread.addContentUrl(builder, contentUrlOffset);

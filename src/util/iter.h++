@@ -74,7 +74,7 @@ namespace Ludwig {
 
   enum class Dir { Asc, Desc };
 
-  class DBIter final {
+  class DBIter {
   protected:
     MDB_dbi dbi;
     MDB_txn* txn = nullptr;
@@ -167,7 +167,7 @@ namespace Ludwig {
     inline auto is_done() const noexcept -> bool {
       return done;
     }
-    inline auto operator*() noexcept -> uint64_t {
+    virtual inline auto operator*() const noexcept -> uint64_t {
       assert(!done);
       return val_as<uint64_t>(value);
     }
@@ -181,6 +181,15 @@ namespace Ludwig {
     }
     inline friend auto operator!=(const DBIter& lhs, const End& rhs) noexcept -> bool {
       return !lhs.done && lhs.n < rhs.n;
+    }
+  };
+
+  class DBKeyIter : public DBIter {
+  public:
+    using DBIter::DBIter;
+    virtual inline auto operator*() const noexcept -> uint64_t {
+      assert(!done);
+      return val_as<uint64_t>(key);
     }
   };
 }

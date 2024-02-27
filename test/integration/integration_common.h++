@@ -80,7 +80,7 @@ public:
   string get_login_cookie(unique_ptr<const HttpClientResponse>& rsp) {
     const auto set_cookie = string(rsp->header("set-cookie"));
     CHECK_FALSE(set_cookie == "");
-    CHECK(rsp->header("location") == "/");
+    CHECK_FALSE(set_cookie.contains("deleted"));
     std::smatch cookie_match;
     REQUIRE(std::regex_match(set_cookie, cookie_match, std::regex(R"(^(\w+=\w+);.*)")));
     return cookie_match[1].str();

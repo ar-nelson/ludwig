@@ -66,6 +66,7 @@ SCENARIO_METHOD(IntegrationTest, "first-run setup", "[integration]") {
       ).dispatch_and_wait();
       CHECK(login->status() == 303);
       CHECK(login->error().value_or("") == "");
+      CHECK(login->header("location") == "/");
       const auto cookie = get_login_cookie(login);
 
       AND_WHEN("user visits the home page") {
@@ -181,9 +182,12 @@ SCENARIO_METHOD(IntegrationTest, "first-run setup", "[integration]") {
     }
 
     WHEN("user logs in to the web interface as an existing admin user") {
-      auto login = http.post(base_url + "/login").body(TYPE_FORM, "actual_username=myadmin&password=myadminpassword").dispatch_and_wait();
+      auto login = http.post(base_url + "/login")
+        .body(TYPE_FORM, "actual_username=myadmin&password=myadminpassword")
+        .dispatch_and_wait();
       CHECK(login->status() == 303);
       CHECK(login->error().value_or("") == "");
+      CHECK(login->header("location") == "/");
       const auto cookie = get_login_cookie(login);
 
       AND_WHEN("user visits the home page") {
@@ -239,6 +243,7 @@ SCENARIO_METHOD(IntegrationTest, "first-run setup", "[integration]") {
       auto login = http.post(base_url + "/login").body(TYPE_FORM, "actual_username=myuser&password=myuserpassword").dispatch_and_wait();
       CHECK(login->status() == 303);
       CHECK(login->error().value_or("") == "");
+      CHECK(login->header("location") == "/");
       const auto cookie = get_login_cookie(login);
 
       AND_WHEN("user visits the home page") {
