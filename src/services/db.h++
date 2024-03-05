@@ -209,7 +209,7 @@ namespace Ludwig {
     auto list_applications(OptCursor cursor = {}) -> DBKeyIter;
 
     auto get_invite(uint64_t invite_id) -> OptRef<const Invite>;
-    auto list_invites_from_user(uint64_t user_id, OptCursor cursor = {}) -> DBIter;
+    auto list_invites_from_user(uint64_t user_id, OptKV cursor = {}) -> DBIter;
 
     auto get_link_card(std::string_view url) -> OptRef<const LinkCard>;
     auto list_threads_of_domain(std::string_view domain, OptKV cursor = {}) -> DBIter;

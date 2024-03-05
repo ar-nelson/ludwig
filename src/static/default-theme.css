@@ -215,6 +215,13 @@ th, tr:nth-child(even) > td {
   overflow-y: auto;
   white-space: pre-wrap;
 }
+.table-approve {
+  text-align: center;
+  white-space: nowrap;
+}
+.table-approve form {
+  display: inline;
+}
 
 .big-button,
 button,

@@ -14,7 +14,7 @@
   "&javascript_enabled=true" \
   "&infinite_scroll_enabled=true"
 
-SCENARIO_METHOD(IntegrationTest, "first-run setup", "[integration]") {
+SCENARIO_METHOD(IntegrationTest, "first-run setup", "[integration][first_run]") {
 
   GIVEN("a fresh database with no users or configuration") {
 

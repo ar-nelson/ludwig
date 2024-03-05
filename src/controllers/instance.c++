@@ -10,9 +10,10 @@
 #include "models/patch.h++"
 
 using std::function, std::max, std::min, std::nullopt, std::optional, std::pair,
-    std::priority_queue, std::regex, std::regex_match, std::shared_ptr,
-    std::string, std::string_view, std::unique_ptr, std::vector, flatbuffers::Offset,
-    flatbuffers::FlatBufferBuilder, flatbuffers::GetRoot;
+    std::priority_queue, std::regex, std::regex_match, std::runtime_error,
+    std::shared_ptr, std::string, std::string_view, std::unique_ptr,
+    std::vector, flatbuffers::Offset, flatbuffers::FlatBufferBuilder,
+    flatbuffers::GetRoot;
 namespace chrono = std::chrono;
 
 #define SECONDS(N) chrono::system_clock::time_point(chrono::seconds(N))
@@ -327,7 +328,7 @@ namespace Ludwig {
       PASSWORD_HASH_ITERATIONS, EVP_sha256(),
       32, hash
     )) {
-      throw std::runtime_error("Allocation failure when hashing password");
+      throw runtime_error("Allocation failure when hashing password");
     }
   }
 
@@ -550,13 +551,32 @@ namespace Ludwig {
           txn.get_application(id).value().get(),
           LocalUserDetail::get(txn, id, login)
         ));
-      } catch (const std::runtime_error& e) {
+      } catch (const runtime_error& e) {
         spdlog::warn("Application {:x} error: {}", id, e.what());
       }
       if (--limit == 0) break;
     }
     if (iter.is_done()) return {};
     return *iter;
+  }
+  auto InstanceController::list_invites_from_user(
+    Writer<pair<uint64_t, const Invite&>> out,
+    ReadTxnBase& txn,
+    uint64_t user_id,
+    PageCursor from,
+    uint16_t limit
+  ) -> PageCursor {
+    auto iter = txn.list_invites_from_user(user_id, from.next_cursor_desc());
+    for (const auto id : iter) {
+      try {
+        out(pair<uint64_t, const Invite&>(id, txn.get_invite(id).value().get()));
+      } catch (const ApiError& e) {
+        spdlog::warn("Invite {:x} error: {}", id, e.what());
+      }
+      if (--limit == 0) break;
+    }
+    if (iter.is_done()) return {};
+    return PageCursor(iter.get_cursor()->int_field_0(), *iter);
   }
   auto InstanceController::list_boards(
     Writer<BoardDetail> out,
@@ -618,7 +638,10 @@ namespace Ludwig {
       default: return system_clock::time_point::min();
     }
   }
-  static inline auto new_comments_cursor(PageCursor& from, optional<uint64_t> first_k = {}) -> optional<pair<Cursor, uint64_t>> {
+  static inline auto new_comments_cursor(
+    PageCursor& from,
+    optional<uint64_t> first_k = {}
+  ) -> optional<pair<Cursor, uint64_t>> {
     using namespace chrono;
     if (!from) return {};
     const auto time = (uint64_t)duration_cast<seconds>(
@@ -1386,16 +1409,19 @@ namespace Ludwig {
     );
     if (invite_id) {
       const auto invite_opt = txn.get_invite(*invite_id);
-      if (!invite_opt) throw ApiError("Invalid invite code", 410);
+      if (!invite_opt) {
+        spdlog::warn("Invalid invite code: {:X}", *invite_id);
+        throw ApiError("Invalid invite code", 400);
+      }
       const auto& invite = invite_opt->get();
       if (invite.accepted_at()) {
         spdlog::warn("Attempt to use already-used invite code {} (for username {}, email {}, ip {}, user agent {})",
           invite_id_to_code(*invite_id), username, email, ip, user_agent
         );
-        throw ApiError("Expired invite code", 410);
+        throw ApiError("Expired invite code", 400);
       }
       const auto now = now_s();
-      if (invite.expires_at() <= now) throw ApiError("Expired invite code", 410);
+      if (invite.expires_at() <= now) throw ApiError("Expired invite code", 400);
       FlatBufferBuilder fbb;
       InviteBuilder b(fbb);
       b.add_from(invite.from());
@@ -1509,6 +1535,19 @@ namespace Ludwig {
       .accepted_application = true
     }));
     txn.set_local_user(user_id, fbb.GetBufferSpan());
+    txn.commit();
+  }
+  auto InstanceController::reject_local_user_application(uint64_t user_id, std::optional<uint64_t> as_user) -> void {
+    auto txn = db->open_write_txn();
+    if (as_user && !LocalUserDetail::get_login(txn, *as_user).local_user().admin()) {
+      throw ApiError("Only admins can reject user applications", 403);
+    }
+    const auto user_opt = txn.get_local_user(user_id);
+    if (!user_opt) throw ApiError("User does not exist", 410);
+    const auto& user = user_opt->get();
+    if (user.accepted_application()) throw ApiError("User's application has already been accepted", 409);
+    if (!txn.get_application(user_id)) throw ApiError("User does not have an application to reject", 410);
+    txn.delete_user(user_id);
     txn.commit();
   }
   auto InstanceController::reset_password(uint64_t user_id) -> string {

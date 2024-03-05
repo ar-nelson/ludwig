@@ -17,7 +17,6 @@ namespace Ludwig {
   constexpr size_t ITEMS_PER_PAGE = 20;
 
 # define USERNAME_REGEX_SRC R"([a-zA-Z][a-zA-Z0-9_]{0,63})"
-# define INVITE_CODE_REGEX_SRC R"(([0-9A-F]{5})-([0-9A-F]{3})-([0-9A-F]{3})-([0-9A-F]{5}))"
 
   static const std::regex
     username_regex(USERNAME_REGEX_SRC),
@@ -30,7 +29,6 @@ namespace Ludwig {
       R"((?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\]))",
       std::regex::ECMAScript | std::regex::icase
     ),
-    invite_code_regex(INVITE_CODE_REGEX_SRC),
     color_hex_regex(R"(#[0-9a-f]{6})", std::regex::icase);
 
   struct LoginResponse {
@@ -184,20 +182,6 @@ namespace Ludwig {
     std::optional<std::optional<std::string_view>> content_warning;
   };
 
-  static inline auto invite_code_to_id(std::string_view invite_code) -> uint64_t {
-    std::match_results<std::string_view::const_iterator> match;
-    if (std::regex_match(invite_code.begin(), invite_code.end(), match, invite_code_regex)) {
-      return std::stoull(match[1].str() + match[2].str() + match[3].str() + match[4].str());
-    }
-    throw ApiError("Invalid invite code", 400);
-  }
-
-  static inline auto invite_id_to_code(uint64_t id) -> std::string {
-    const auto s = fmt::format("{:016X}", id);
-    const std::string_view v = s;
-    return fmt::format("{}-{}-{}-{}", v.substr(0, 5), v.substr(5, 3), v.substr(8, 3), v.substr(11, 5));
-  }
-
   static auto parse_hex_id(std::string hex_id) -> std::optional<uint64_t> {
     if (hex_id.empty()) return {};
     try { return std::stoull(hex_id, nullptr, 16); }
@@ -312,6 +296,13 @@ namespace Ludwig {
       std::optional<uint64_t> from = {},
       uint16_t limit = ITEMS_PER_PAGE
     ) -> std::optional<uint64_t>;
+    auto list_invites_from_user(
+      Writer<std::pair<uint64_t, const Invite&>> out,
+      ReadTxnBase& txn,
+      uint64_t user_id,
+      PageCursor from = {},
+      uint16_t limit = ITEMS_PER_PAGE
+    ) -> PageCursor;
     auto list_boards(
       Writer<BoardDetail> out,
       ReadTxnBase& txn,
@@ -411,6 +402,7 @@ namespace Ludwig {
     auto change_password(std::string_view reset_token, SecretString&& new_password) -> std::string; // returns username
     auto change_password(uint64_t user_id, SecretString&& old_password, SecretString&& new_password) -> void;
     auto approve_local_user_application(uint64_t user_id, std::optional<uint64_t> as_user) -> void;
+    auto reject_local_user_application(uint64_t user_id, std::optional<uint64_t> as_user) -> void;
     auto create_site_invite(std::optional<uint64_t> as_user) -> uint64_t;
     auto create_local_board(
       uint64_t owner,

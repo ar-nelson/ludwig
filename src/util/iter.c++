@@ -16,7 +16,7 @@ namespace Ludwig {
       done = failed = true;
     } else {
       if (from_key) key = *from_key;
-      int err = mdb_cursor_get(cur, &key, &value, dir == Dir::Asc
+      err = mdb_cursor_get(cur, &key, &value, dir == Dir::Asc
         ? (from_key ? MDB_SET_RANGE : MDB_FIRST)
         : (from_key ? MDB_SET : MDB_LAST)
       );
@@ -47,7 +47,7 @@ namespace Ludwig {
     } else {
       Cursor value_cur(from_kv.second);
       value = value_cur.val();
-      int err = mdb_cursor_get(cur, &key, &value, dir == Dir::Asc ? MDB_GET_BOTH_RANGE : MDB_GET_BOTH);
+      err = mdb_cursor_get(cur, &key, &value, dir == Dir::Asc ? MDB_GET_BOTH_RANGE : MDB_GET_BOTH);
       if (err == MDB_NOTFOUND) {
         key = from_kv.first.val();
         switch (dir) {

@@ -26,7 +26,7 @@ namespace Ludwig {
     UserStats_User,
     LocalUser_User,
     Application_User,
-    InvitesOwned_User,
+    InvitesOwned_UserTime,
     BoardsOwned_User,
     ThreadsOwned_User,
     CommentsOwned_User,
@@ -224,7 +224,7 @@ namespace Ludwig {
     MK_DBI(UserStats_User, MDB_INTEGERKEY)
     MK_DBI(LocalUser_User, MDB_INTEGERKEY)
     MK_DBI(Application_User, MDB_INTEGERKEY)
-    MK_DBI(InvitesOwned_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(InvitesOwned_UserTime, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
     MK_DBI(BoardsOwned_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
     MK_DBI(ThreadsOwned_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
     MK_DBI(CommentsOwned_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
@@ -920,9 +920,8 @@ namespace Ludwig {
     return DBKeyIter(
       db.dbis[Application_User],
       txn,
-      Dir::Asc,
-      cursor.value_or(Cursor(0)),
-      Cursor(ID_MAX)
+      Dir::Desc,
+      cursor
     );
   }
 
@@ -931,12 +930,12 @@ namespace Ludwig {
     if (db_get(txn, db.dbis[Invite_Invite], invite_id, v)) return {};
     return get_fb<Invite>(v);
   }
-  auto ReadTxnBase::list_invites_from_user(uint64_t user_id, OptCursor cursor) -> DBIter {
+  auto ReadTxnBase::list_invites_from_user(uint64_t user_id, OptKV cursor) -> DBIter {
     return DBIter(
-      db.dbis[Application_User],
+      db.dbis[InvitesOwned_UserTime],
       txn,
       Dir::Desc,
-      cursor.value_or(Cursor(user_id, ID_MAX)),
+      cursor.value_or(pair(Cursor(user_id, ID_MAX), 0)),
       Cursor(user_id, 0)
     );
   }
@@ -1109,9 +1108,8 @@ namespace Ludwig {
     uint64_t lifetime_seconds
   ) -> pair<uint64_t, uint64_t> {
     uint64_t id, now = now_s();
-    if (!(++db.session_counter % 4)) {
-      // Every 4 sessions, clean up old sessions.
-      // TODO: Change this to 256; the low number is for testing.
+    if (!(++db.session_counter % 256)) {
+      // Every 256 sessions, clean up old sessions.
       MDBCursor cur(txn, db.dbis[Session_Session]);
       MDB_val k, v;
       int err;
@@ -1257,7 +1255,6 @@ namespace Ludwig {
       }
     }
     db_del(txn, db.dbis[BoardsSubscribed_User], id);
-    db_del(txn, db.dbis[InvitesOwned_User], id);
     db_del(txn, db.dbis[ThreadsOwned_User], id);
     db_del(txn, db.dbis[CommentsOwned_User], id);
     db_del(txn, db.dbis[UpvotePost_User], id);
@@ -1266,6 +1263,7 @@ namespace Ludwig {
     db_del(txn, db.dbis[PostsHidden_User], id);
     db_del(txn, db.dbis[UsersHidden_User], id);
     db_del(txn, db.dbis[BoardsHidden_User], id);
+    delete_range(txn, db.dbis[InvitesOwned_UserTime], Cursor(id, 0), Cursor(id, ID_MAX));
     delete_range(txn, db.dbis[ThreadsTop_UserKarma], Cursor(id, 0), Cursor(id, ID_MAX));
     delete_range(txn, db.dbis[ThreadsNew_UserTime], Cursor(id, 0), Cursor(id, ID_MAX));
     delete_range(txn, db.dbis[CommentsTop_UserKarma], Cursor(id, 0), Cursor(id, ID_MAX));
@@ -1990,6 +1988,7 @@ namespace Ludwig {
   }
 
   auto WriteTxn::create_application(uint64_t user_id, span<uint8_t> span) -> void {
+    spdlog::debug("Creating application for user {:x}", user_id);
     assert_fmt(!!get_local_user(user_id), "create_application: local user {:x} does not exist", user_id);
     db_put(txn, db.dbis[Application_User], user_id, span);
   }
@@ -2007,17 +2006,20 @@ namespace Ludwig {
   auto WriteTxn::set_invite(uint64_t invite_id, span<uint8_t> span) -> void {
     const auto& invite = get_fb<Invite>(span);
     if (const auto old_invite = get_invite(invite_id)) {
+      spdlog::debug("Updating invite {}", invite_id_to_code(invite_id));
       assert_fmt(invite.created_at() == old_invite->get().created_at(), "set_invite: cannot change created_at field of invite");
       assert_fmt(invite.from() == old_invite->get().from(), "set_invite: cannot change from field of invite");
     } else {
+      spdlog::debug("Creating invite {} from user {:x}", invite_id_to_code(invite_id), invite.from());
       assert_fmt(!!get_local_user(invite.from()), "set_invite: local user {:x} does not exist", invite.from());
-      db_put(txn, db.dbis[InvitesOwned_User], invite.from(), invite_id);
+      db_put(txn, db.dbis[InvitesOwned_UserTime], Cursor(invite.from(), invite.created_at()), invite_id);
     }
     db_put(txn, db.dbis[Invite_Invite], invite_id, span);
   }
   auto WriteTxn::delete_invite(uint64_t invite_id) -> void {
+    spdlog::debug("Deleting invite {}", invite_id_to_code(invite_id));
     if (auto invite = get_invite(invite_id)) {
-      db_del(txn, db.dbis[InvitesOwned_User], invite->get().from(), invite_id);
+      db_del(txn, db.dbis[InvitesOwned_UserTime], Cursor(invite->get().from(), invite->get().created_at()), invite_id);
     }
     db_del(txn, db.dbis[Invite_Invite], invite_id);
   }

@@ -1605,7 +1605,7 @@ namespace Ludwig {
       ) noexcept -> ResponseWriter& {
         write_fmt(
           R"(<div class="table-page"><h2>Registration Applications</h2>{}<table>)"
-          R"(<thead><th>Name<th>Email<th>Date<th>IP Addr<th>User Agent<th class="table-reason">Reason<th>Approve</thead>)"
+          R"(<thead><th>Name<th>Email<th>Date<th>IP Addr<th>User Agent<th class="table-reason">Reason<th>Approved</thead>)"
           R"(<tbody id="application-table">)",
           error_banner(error)
         );
@@ -1614,17 +1614,72 @@ namespace Ludwig {
           any_entries = true;
           auto& [application, detail] = p;
           write_fmt(
-            R"(<tr><td>{}<td>{}<td>{:%D}<td>{}<td>{}<td class="table-reason"><div class="reason">{}</div><td><form method="post" action="/site_admin/application/approve/{:x}"><input type="submit" value="Approve"></form></tr>)",
+            R"(<tr><td>{}<td>{}<td>{:%D}<td>{}<td>{}<td class="table-reason"><div class="reason">{}</div><td class="table-approve">)",
             Escape{detail.user().name()},
             Escape{detail.local_user().email()},
             fmt::localtime(detail.created_at()),
             Escape{application.ip()},
             Escape{application.user_agent()},
-            Escape{application.text()},
-            detail.id
+            Escape{application.text()}
           );
+          if (detail.local_user().accepted_application()) {
+            write(R"(<span class="a11y">Approved</span><svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#check"></svg></tr>)");
+          } else {
+            write_fmt(
+              R"(<form method="post"><button type="submit" formaction="/site_admin/applications/approve/{0:x}"><span class="a11y">Approve</span><svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#check"></svg></button>)"
+              R"(&nbsp;<button type="submit" formaction="/site_admin/applications/reject/{0:x}"><span class="a11y">Reject</span><svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#x"></svg></button></form></tr>)",
+              detail.id
+            );
+          }
         }, txn, login, cursor);
         if (!any_entries) write(R"(<tr><td colspan="7">There's nothing here.</tr>)");
+        // TODO: Pagination
+        return write("</tbody></table></div>");
+      }
+
+      auto write_invites_list(
+        InstanceController& instance,
+        ReadTxnBase& txn,
+        const LocalUserDetail& login,
+        string_view cursor = "",
+        optional<string_view> error = {}
+      ) noexcept -> ResponseWriter& {
+        write_fmt(
+          R"(<div class="table-page"><h2>Invite Codes</h2>{})"
+          R"(<form action="invites/new" method="post"><input type="submit" value="Generate New Invite Code"></form><table>)"
+          R"(<thead><th>Code<th>Created<th>Expires<th>Accepted<th>Acceptor</thead>)"
+          R"(<tbody id="invite-table">)",
+          error_banner(error)
+        );
+        bool any_entries = false;
+        instance.list_invites_from_user([&](auto p){
+          any_entries = true;
+          auto& [id, invite] = p;
+          write_fmt(
+            R"(<tr><td>{}<td>{:%D}<td>)",
+            invite_id_to_code(id),
+            fmt::localtime(chrono::system_clock::time_point(chrono::seconds(invite.created_at())))
+          );
+          if (auto to = invite.to()) {
+            write_fmt(
+              R"(N/A<td>{:%D}<td>)",
+              fmt::localtime(chrono::system_clock::time_point(chrono::seconds(*invite.accepted_at())))
+            );
+            try {
+              auto u = UserDetail::get(txn, *to, login);
+              write_user_link(u.user(), login);
+              write("</tr>");
+            } catch (...) {
+              write("[error]</tr>");
+            }
+          } else {
+            write_fmt(
+              R"({:%D}<td>N/A<td>N/A</tr>)",
+              fmt::localtime(chrono::system_clock::time_point(chrono::seconds(invite.expires_at())))
+            );
+          }
+        }, txn, login.id, cursor);
+        if (!any_entries) write(R"(<tr><td colspan="5">There's nothing here.</tr>)");
         // TODO: Pagination
         return write("</tbody></table></div>");
       }
@@ -2426,51 +2481,27 @@ namespace Ludwig {
             .finish();
         }
       })
-      .get("/settings", [self](auto* rsp, auto*, Meta& m) {
-        auto txn = self->controller->open_read_txn();
-        const auto login = m.require_login(txn);
-        self->writer(rsp)
-          .write_html_header(m, {
-            .canonical_path = "/settings",
-            .banner_title = "User Settings",
-          })
-          .write("<main>")
-          .write_user_settings_tabs(m.site, UserSettingsTab::Settings)
-          .write_user_settings_form(m.site, login)
-          .write("</main>")
-          .write_html_footer(m)
+#     define SETTINGS_PAGE(PATH, TAB, CONTENT, M) \
+        self->writer(rsp) \
+          .write_html_header(M, { \
+            .canonical_path = PATH, \
+            .banner_title = "User Settings", \
+          }) \
+          .write("<main>") \
+          .write_user_settings_tabs((M).site, UserSettingsTab::TAB) \
+          .CONTENT \
+          .write("</main>") \
+          .write_html_footer(M) \
           .finish();
+#     define SETTINGS_ROUTE(PATH, TAB, CONTENT) .get(PATH, [self](auto* rsp, auto*, Meta& m) { \
+        auto txn = self->controller->open_read_txn(); \
+        const auto login = m.require_login(txn); \
+        SETTINGS_PAGE(PATH, TAB, CONTENT, m) \
       })
-      .get("/settings/profile", [self](auto* rsp, auto*, Meta& m) {
-        auto txn = self->controller->open_read_txn();
-        const auto login = m.require_login(txn);
-        self->writer(rsp)
-          .write_html_header(m, {
-            .canonical_path = "/settings/profile",
-            .banner_title = "User Settings",
-          })
-          .write("<main>")
-          .write_user_settings_tabs(m.site, UserSettingsTab::Profile)
-          .write_user_settings_profile_form(m.site, login)
-          .write("</main>")
-          .write_html_footer(m)
-          .finish();
-      })
-      .get("/settings/account", [self](auto* rsp, auto*, Meta& m) {
-        auto txn = self->controller->open_read_txn();
-        const auto login = m.require_login(txn);
-        self->writer(rsp)
-          .write_html_header(m, {
-            .canonical_path = "/settings/account",
-            .banner_title = "User Settings",
-          })
-          .write("<main>")
-          .write_user_settings_tabs(m.site, UserSettingsTab::Account)
-          .write_user_settings_account_form(m.site, login)
-          .write("</main>")
-          .write_html_footer(m)
-          .finish();
-      })
+      SETTINGS_ROUTE("/settings", Settings, write_user_settings_form(m.site, login))
+      SETTINGS_ROUTE("/settings/profile", Profile, write_user_settings_profile_form(m.site, login))
+      SETTINGS_ROUTE("/settings/account", Account, write_user_settings_account_form(m.site, login))
+      SETTINGS_ROUTE("/settings/invites", Invites, write_invites_list(*self->controller, txn, login, ""))
       .get("/b/:name/settings", [self](auto* rsp, auto* req, Meta& m) {
         auto txn = self->controller->open_read_txn();
         const auto board_id = board_name_param(txn, req, 0);
@@ -2487,60 +2518,30 @@ namespace Ludwig {
           .write_html_footer(m)
           .finish();
       })
-      .get("/site_admin", [self](auto* rsp, auto*, Meta& m) {
-        auto txn = self->controller->open_read_txn();
-        const auto login = m.require_login(txn);
-        if (!InstanceController::can_change_site_settings(login)) {
-          throw ApiError("Admin login required to view this page", 403);
-        }
-        self->writer(rsp)
-          .write_html_header(m, {
-            .canonical_path = "/site_admin",
-            .banner_title = "Site Admin",
-          })
-          .write("<main>")
-          .write_site_admin_tabs(m.site, SiteAdminTab::Settings)
-          .write_site_admin_form(m.site)
-          .write("</main>")
-          .write_html_footer(m)
+#     define ADMIN_PAGE(PATH, TAB, CONTENT, M) \
+        self->writer(rsp) \
+          .write_html_header(M, { \
+            .canonical_path = PATH, \
+            .banner_title = "Site Admin", \
+          }) \
+          .write("<main>") \
+          .write_site_admin_tabs((M).site, SiteAdminTab::TAB) \
+          .CONTENT \
+          .write("</main>") \
+          .write_html_footer(M) \
           .finish();
+#     define ADMIN_ROUTE(PATH, TAB, CONTENT) .get(PATH, [self](auto* rsp, auto*, Meta& m) { \
+        auto txn = self->controller->open_read_txn(); \
+        const auto login = m.require_login(txn); \
+        if (!InstanceController::can_change_site_settings(login)) { \
+          throw ApiError("Admin login required to view this page", 403); \
+        } \
+        ADMIN_PAGE(PATH, TAB, CONTENT, m) \
       })
-      .get("/site_admin/import_export", [self](auto* rsp, auto*, Meta& m) {
-        auto txn = self->controller->open_read_txn();
-        const auto login = m.require_login(txn);
-        if (!InstanceController::can_change_site_settings(login)) {
-          throw ApiError("Admin login required to view this page", 403);
-        }
-        self->writer(rsp)
-          .write_html_header(m, {
-            .canonical_path = "/site_admin/import_export",
-            .banner_title = "Site Admin",
-          })
-          .write("<main>")
-          .write_site_admin_tabs(m.site, SiteAdminTab::ImportExport)
-          .write_site_admin_import_export_form()
-          .write("</main>")
-          .write_html_footer(m)
-          .finish();
-      })
-      .get("/site_admin/applications", [self](auto* rsp, auto*, Meta& m) {
-        auto txn = self->controller->open_read_txn();
-        const auto login = m.require_login(txn);
-        if (!InstanceController::can_change_site_settings(login)) {
-          throw ApiError("Admin login required to view this page", 403);
-        }
-        self->writer(rsp)
-          .write_html_header(m, {
-            .canonical_path = "/site_admin/applications",
-            .banner_title = "Site Admin",
-          })
-          .write("<main>")
-          .write_site_admin_tabs(m.site, SiteAdminTab::Applications)
-          .write_site_admin_applications_list(*self->controller, txn, m.login, {})
-          .write("</main>")
-          .write_html_footer(m)
-          .finish();
-      })
+      ADMIN_ROUTE("/site_admin", Settings, write_site_admin_form(m.site))
+      ADMIN_ROUTE("/site_admin/import_export", ImportExport, write_site_admin_import_export_form())
+      ADMIN_ROUTE("/site_admin/applications", Applications, write_site_admin_applications_list(*self->controller, txn, m.login, {}))
+      ADMIN_ROUTE("/site_admin/invites", Invites, write_invites_list(*self->controller, txn, login, ""))
 
       // API Actions
       //////////////////////////////////////////////////////
@@ -2623,7 +2624,7 @@ namespace Ludwig {
                 std::move(password),
                 rsp->getRemoteAddressAsText(),
                 user_agent,
-                body.optional_string("invite_code").transform(invite_code_to_id),
+                body.optional_string("invite_code").and_then(invite_code_to_id),
                 body.optional_string("application_reason")
               );
             } catch (ApiError e) {
@@ -2882,14 +2883,31 @@ namespace Ludwig {
           });
         };
       })
-      .post_form("/site_admin", [self](auto*, auto m) {
-        {
-          auto txn = self->controller->open_read_txn();
-          const auto login = m->require_login(txn);
-          if (!InstanceController::can_change_site_settings(login)) {
-            throw ApiError("Admin login required to perform this action", 403);
-          }
+      .post("/settings/invites/new", [self](auto*, auto m) {
+        if (!m->site->registration_invite_required || m->site->invite_admin_only) {
+          throw ApiError("Users cannot generate invite codes on this server", 403);
         }
+        auto txn = self->controller->open_read_txn();
+        const auto login = m->require_login(txn);
+        if (login.mod_state() >= ModState::Locked) {
+          throw ApiError("User does not have permission to create an invite code", 403);
+        }
+        return [self, id=login.id](string, auto&& write) mutable {
+          self->controller->create_site_invite(id);
+          write([](auto* rsp) {
+            write_redirect_back(rsp, "/settings/invites");
+          });
+        };
+      })
+#     define REQUIRE_ADMIN() { \
+        auto txn = self->controller->open_read_txn(); \
+        const auto login = m->require_login(txn); \
+        if (!InstanceController::can_change_site_settings(login)) { \
+          throw ApiError("Admin login required to perform this action", 403); \
+        } \
+      }
+      .post_form("/site_admin", [self](auto*, auto m) {
+        REQUIRE_ADMIN()
         return [self, m=std::move(m)](QueryString<string> body, auto&& write) mutable {
           try {
             self->controller->update_site(form_to_site_update(body), m->logged_in_user_id);
@@ -2899,32 +2917,16 @@ namespace Ludwig {
           } catch (const ApiError& e) {
             write([=, m=std::move(m)](auto* rsp) mutable {
               rsp->writeStatus(http_status(e.http_status));
-              self->writer(rsp)
-                .write_html_header(*m, {
-                  .canonical_path = "/site_admin",
-                  .banner_title = "Site Admin",
-                })
-                .write("<main>")
-                .write_site_admin_tabs(m->site, SiteAdminTab::Settings)
-                .write_site_admin_form(m->site, {e.message})
-                .write("</main>")
-                .write_html_footer(*m)
-                .finish();
+              ADMIN_PAGE("/site_admin", Settings, write_site_admin_form(m->site, {e.message}), *m)
             });
           }
         };
       })
       .post_form("/site_admin/first_run_setup", [self](auto*, auto m) {
-        {
-          if (m->site->setup_done) {
-            throw ApiError("First-run setup is already complete", 403);
-          }
-          auto txn = self->controller->open_read_txn();
-          const auto login = m->require_login(txn);
-          if (!InstanceController::can_change_site_settings(login)) {
-            throw ApiError("Admin login required to perform this action", 403);
-          }
+        if (m->site->setup_done) {
+          throw ApiError("First-run setup is already complete", 403);
         }
+        REQUIRE_ADMIN()
         return [self, m=std::move(m)](QueryString<string> body, auto&& write) mutable {
           try {
             self->controller->first_run_setup({
@@ -2956,13 +2958,7 @@ namespace Ludwig {
         };
       })
       .post("/site_admin/export", [self](auto*, auto m) {
-        {
-          auto txn = self->controller->open_read_txn();
-          const auto login = m->require_login(txn);
-          if (!InstanceController::can_change_site_settings(login)) {
-            throw ApiError("Admin login required to perform this action", 403);
-          }
-        }
+        REQUIRE_ADMIN()
         return [self](string, auto&& write) {
           write([](auto rsp) {
             rsp->writeHeader("Content-Type", "application/zstd")
@@ -2991,17 +2987,19 @@ namespace Ludwig {
           }).detach();
         };
       })
-      .post("/site_admin/applications/approve/:id", [self](auto* req, auto m) {
-        {
-          auto txn = self->controller->open_read_txn();
-          const auto login = m->require_login(txn);
-          if (!InstanceController::can_change_site_settings(login)) {
-            throw ApiError("Admin login required to perform this action", 403);
-          }
-        }
-        return [self, id=hex_id_param(req, 0), m=std::move(m)](string, auto&& write) mutable {
+      .post("/site_admin/applications/:action/:id", [self](auto* req, auto m) {
+        bool is_approve;
+        if (req->getParameter(0) == "approve") is_approve = true;
+        else if (req->getParameter(0) == "reject") is_approve = false;
+        else throw ApiError("Page not found", 404);
+        REQUIRE_ADMIN()
+        return [self, is_approve, id=hex_id_param(req, 1), m=std::move(m)](string, auto&& write) mutable {
           try {
-            self->controller->approve_local_user_application(id, m->logged_in_user_id);
+            if (is_approve) {
+              self->controller->approve_local_user_application(id, m->logged_in_user_id);
+            } else {
+              self->controller->reject_local_user_application(id, m->logged_in_user_id);
+            }
             write([](auto* rsp) {
               write_redirect_back(rsp, "/site_admin/applications");
             });
@@ -3009,19 +3007,18 @@ namespace Ludwig {
             write([=, m=std::move(m)](auto* rsp) mutable {
               rsp->writeStatus(http_status(e.http_status));
               auto txn = self->controller->open_read_txn();
-              self->writer(rsp)
-                .write_html_header(*m, {
-                  .canonical_path = "/site_admin/applications",
-                  .banner_title = "Site Admin",
-                })
-                .write("<main>")
-                .write_site_admin_tabs(m->site, SiteAdminTab::Applications)
-                .write_site_admin_applications_list(*self->controller, txn, m->login, {}, e.message)
-                .write("</main>")
-                .write_html_footer(*m)
-                .finish();
+              ADMIN_PAGE("/site_admin/applications", Applications, write_site_admin_applications_list(*self->controller, txn, m->login, {}, e.message), *m)
             });
           }
+        };
+      })
+      .post("/site_admin/invites/new", [self](auto*, auto m) {
+        REQUIRE_ADMIN()
+        return [self, m=std::move(m)](string, auto&& write) mutable {
+          self->controller->create_site_invite(m->logged_in_user_id);
+          write([](auto* rsp) {
+            write_redirect_back(rsp, "/site_admin/invites");
+          });
         };
       })
       .any("/*", [](auto*, auto*, auto&) {

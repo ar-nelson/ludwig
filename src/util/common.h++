@@ -24,6 +24,9 @@ namespace Ludwig {
   constexpr uint64_t ID_MAX = std::numeric_limits<uint64_t>::max();
   constexpr size_t MiB = 1024 * 1024;
 
+# define INVITE_CODE_REGEX_SRC R"(([0-9A-F]{5})-([0-9A-F]{3})-([0-9A-F]{3})-([0-9A-F]{5}))"
+  const std::regex invite_code_regex(INVITE_CODE_REGEX_SRC);
+
   template<class... Ts> struct overload : Ts... { using Ts::operator()...; };
   template<class... Ts> overload(Ts...) -> overload<Ts...>;
 
@@ -144,6 +147,20 @@ namespace Ludwig {
     password.reserve(length);
     for (uint8_t i = 0; i < length; i++) password.push_back(CHARS[bytes[i] >> 2]);
     return SecretString(password);
+  }
+
+  static inline auto invite_code_to_id(std::string_view invite_code) noexcept -> std::optional<uint64_t> {
+    std::match_results<std::string_view::const_iterator> match;
+    if (std::regex_match(invite_code.begin(), invite_code.end(), match, invite_code_regex)) {
+      try {
+        return std::stoull(fmt::format("{}{}{}{}", match[1].str(), match[2].str(), match[3].str(), match[4].str()), nullptr, 16);
+      } catch (...) {}
+    }
+    return {};
+  }
+
+  static inline auto invite_id_to_code(uint64_t id) noexcept -> std::string {
+    return fmt::format("{:05X}-{:03X}-{:03X}-{:05X}", id >> 44, (id >> 32) & 0xfff, (id >> 20) & 0xfff, id & 0xfffff);
   }
 
   template<typename T, size_t Size> struct ConstArray {
