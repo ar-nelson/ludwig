@@ -235,13 +235,13 @@ namespace Ludwig {
 
     static auto hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void;
 
-    auto validate_session(ReadTxnBase& txn, uint64_t session_id) -> std::optional<uint64_t> {
+    auto validate_session(ReadTxn& txn, uint64_t session_id) -> std::optional<uint64_t> {
       auto session = txn.get_session(session_id);
       if (session) return { session->get().user() };
       return {};
     }
     auto validate_or_regenerate_session(
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t session_id,
       std::string_view ip,
       std::string_view user_agent
@@ -261,7 +261,7 @@ namespace Ludwig {
       return cached_site_detail;
     }
     auto thread_detail(
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t id,
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
@@ -269,20 +269,20 @@ namespace Ludwig {
       uint16_t limit = ITEMS_PER_PAGE
     ) -> std::pair<ThreadDetail, CommentTree>;
     auto comment_detail(
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t id,
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
       PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
     ) -> std::pair<CommentDetail, CommentTree>;
-    auto user_detail(ReadTxnBase& txn, uint64_t id, Login login) -> UserDetail;
-    auto local_user_detail(ReadTxnBase& txn, uint64_t id, Login login) -> LocalUserDetail;
-    auto board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> BoardDetail;
-    auto local_board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> LocalBoardDetail;
+    auto user_detail(ReadTxn& txn, uint64_t id, Login login) -> UserDetail;
+    auto local_user_detail(ReadTxn& txn, uint64_t id, Login login) -> LocalUserDetail;
+    auto board_detail(ReadTxn& txn, uint64_t id, Login login) -> BoardDetail;
+    auto local_board_detail(ReadTxn& txn, uint64_t id, Login login) -> LocalBoardDetail;
     auto list_users(
       Writer<UserDetail> out,
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       UserSortType sort,
       bool local_only,
       Login login = {},
@@ -291,21 +291,21 @@ namespace Ludwig {
     ) -> PageCursor;
     auto list_applications(
       Writer<std::pair<const Application&, LocalUserDetail>> out,
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       Login login = {},
       std::optional<uint64_t> from = {},
       uint16_t limit = ITEMS_PER_PAGE
     ) -> std::optional<uint64_t>;
     auto list_invites_from_user(
       Writer<std::pair<uint64_t, const Invite&>> out,
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t user_id,
       PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
     ) -> PageCursor;
     auto list_boards(
       Writer<BoardDetail> out,
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       BoardSortType sort,
       bool local_only,
       bool subscribed_only,
@@ -315,7 +315,7 @@ namespace Ludwig {
     ) -> PageCursor;
     auto list_board_threads(
       Writer<ThreadDetail> out,
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t board_id,
       SortType sort = SortType::Active,
       Login login = {},
@@ -324,7 +324,7 @@ namespace Ludwig {
     ) -> PageCursor;
     auto list_board_comments(
       Writer<CommentDetail> out,
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t board_id,
       SortType sort = SortType::Active,
       Login login = {},
@@ -333,7 +333,7 @@ namespace Ludwig {
     ) -> PageCursor;
     auto list_feed_threads(
       Writer<ThreadDetail> out,
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t feed_id,
       SortType sort = SortType::Active,
       Login login = {},
@@ -342,7 +342,7 @@ namespace Ludwig {
     ) -> PageCursor;
     auto list_feed_comments(
       Writer<CommentDetail> out,
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t feed_id,
       SortType sort = SortType::Active,
       Login login = {},
@@ -351,7 +351,7 @@ namespace Ludwig {
     ) -> PageCursor;
     auto list_user_threads(
       Writer<ThreadDetail> out,
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
@@ -360,7 +360,7 @@ namespace Ludwig {
     ) -> PageCursor;
     auto list_user_comments(
       Writer<CommentDetail> out,
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
@@ -369,12 +369,12 @@ namespace Ludwig {
     ) -> PageCursor;
     auto search_step_1(SearchQuery query, SearchEngine::Callback&& callback) -> void;
     auto search_step_2(
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       const std::vector<SearchResult>& results,
       size_t max_len,
       Login login
     ) -> std::vector<SearchResultDetail>;
-    auto first_run_setup_options(ReadTxnBase& txn) -> FirstRunSetupOptions;
+    auto first_run_setup_options(ReadTxn& txn) -> FirstRunSetupOptions;
 
     auto first_run_setup(FirstRunSetup&& update) -> void;
     auto update_site(const SiteUpdate& update, std::optional<uint64_t> as_user) -> void;

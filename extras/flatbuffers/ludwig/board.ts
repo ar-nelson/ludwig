@@ -191,7 +191,7 @@ defaultCommentSortType():CommentSortType {
 
 modState():ModState {
   const offset = this.bb!.__offset(this.bb_pos, 50);
-  return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Visible;
+  return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Normal;
 }
 
 modReason():string|null
@@ -346,7 +346,7 @@ static addDefaultCommentSortType(builder:flatbuffers.Builder, defaultCommentSort
 }
 
 static addModState(builder:flatbuffers.Builder, modState:ModState) {
-  builder.addFieldInt8(23, modState, ModState.Visible);
+  builder.addFieldInt8(23, modState, ModState.Normal);
 }
 
 static addModReason(builder:flatbuffers.Builder, modReasonOffset:flatbuffers.Offset) {

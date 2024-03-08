@@ -72,7 +72,7 @@ namespace Ludwig::Lemmy {
   class ApiController {
   private:
     std::shared_ptr<InstanceController> instance;
-    auto validate_jwt(ReadTxnBase& txn, SecretString&& jwt) -> uint64_t;
+    auto validate_jwt(ReadTxn& txn, SecretString&& jwt) -> uint64_t;
     auto validate_jwt(SecretString&& jwt) -> uint64_t {
       auto txn = instance->open_read_txn();
       return validate_jwt(txn, std::move(jwt));
@@ -119,15 +119,15 @@ namespace Ludwig::Lemmy {
     auto to_person_aggregates(const UserDetail& detail) -> PersonAggregates;
     auto to_post_aggregates(const ThreadDetail& detail) -> PostAggregates;
     auto get_site_object() -> Site;
-    auto get_site_view(ReadTxnBase& txn) -> SiteView;
-    auto to_comment_view(ReadTxnBase& txn, const CommentDetail& detail) -> CommentView;
-    auto get_comment_view(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> login_id) -> CommentView {
+    auto get_site_view(ReadTxn& txn) -> SiteView;
+    auto to_comment_view(ReadTxn& txn, const CommentDetail& detail) -> CommentView;
+    auto get_comment_view(ReadTxn& txn, uint64_t id, std::optional<uint64_t> login_id) -> CommentView {
       const auto login = LocalUserDetail::get_login(txn, login_id);
       const auto detail = CommentDetail::get(txn, id, login);
       return to_comment_view(txn, detail);
     }
     auto to_community_view(const BoardDetail& detail) -> CommunityView;
-    auto get_community_view(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> login_id) -> CommunityView {
+    auto get_community_view(ReadTxn& txn, uint64_t id, std::optional<uint64_t> login_id) -> CommunityView {
       const auto login = LocalUserDetail::get_login(txn, login_id);
       const auto detail = BoardDetail::get(txn, id, login);
       return to_community_view(detail);
@@ -138,13 +138,13 @@ namespace Ludwig::Lemmy {
         .person = to_person(detail.id, detail.user(), detail.maybe_local_user())
       };
     }
-    auto get_person_view(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> login_id) -> PersonView {
+    auto get_person_view(ReadTxn& txn, uint64_t id, std::optional<uint64_t> login_id) -> PersonView {
       const auto login = LocalUserDetail::get_login(txn, login_id);
       const auto detail = UserDetail::get(txn, id, login);
       return to_person_view(detail);
     }
-    auto to_post_view(ReadTxnBase& txn, const ThreadDetail& detail) -> PostView;
-    auto get_post_view(ReadTxnBase& txn, uint64_t id, std::optional<uint64_t> login_id) -> PostView {
+    auto to_post_view(ReadTxn& txn, const ThreadDetail& detail) -> PostView;
+    auto get_post_view(ReadTxn& txn, uint64_t id, std::optional<uint64_t> login_id) -> PostView {
       const auto login = LocalUserDetail::get_login(txn, login_id);
       const auto detail = ThreadDetail::get(txn, id, login);
       return to_post_view(txn, detail);

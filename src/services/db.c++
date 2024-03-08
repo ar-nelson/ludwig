@@ -467,22 +467,22 @@ namespace Ludwig {
     return n;
   }
 
-  auto ReadTxnBase::get_setting_str(string_view key) -> string_view {
+  auto ReadTxn::get_setting_str(string_view key) -> string_view {
     MDB_val v;
     if (db_get(txn, db.dbis[Settings], key, v)) return {};
     return string_view(static_cast<const char*>(v.mv_data), v.mv_size);
   }
-  auto ReadTxnBase::get_setting_int(string_view key) -> uint64_t {
+  auto ReadTxn::get_setting_int(string_view key) -> uint64_t {
     MDB_val v;
     if (db_get(txn, db.dbis[Settings], key, v)) return 0;
     return val_as<uint64_t>(v);
   }
-  auto ReadTxnBase::get_jwt_secret() -> JwtSecret {
+  auto ReadTxn::get_jwt_secret() -> JwtSecret {
     MDB_val v;
     if (auto err = db_get(txn, db.dbis[Settings], SettingsKey::jwt_secret, v)) throw DBError("jwt_secret error", err);
     return std::span<uint8_t, JWT_SECRET_SIZE>((uint8_t*)v.mv_data, v.mv_size);
   }
-  auto ReadTxnBase::get_public_key() -> unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> {
+  auto ReadTxn::get_public_key() -> unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> {
     MDB_val v;
     if (auto err = db_get(txn, db.dbis[Settings], SettingsKey::public_key, v)) throw DBError("public_key error", err);
     const unique_ptr<BIO, int(*)(BIO*)> bio(BIO_new_mem_buf(v.mv_data, (ssize_t)v.mv_size), BIO_free);
@@ -490,7 +490,7 @@ namespace Ludwig {
     if (k == nullptr) throw runtime_error("public_key is not valid");
     return unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)>(k, EVP_PKEY_free);
   }
-  auto ReadTxnBase::get_private_key() -> unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> {
+  auto ReadTxn::get_private_key() -> unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> {
     MDB_val v;
     if (auto err = db_get(txn, db.dbis[Settings], SettingsKey::private_key, v)) throw DBError("private_key error", err);
     const unique_ptr<BIO, int(*)(BIO*)> bio(BIO_new_mem_buf(v.mv_data, (ssize_t)v.mv_size), BIO_free);
@@ -498,7 +498,7 @@ namespace Ludwig {
     if (k == nullptr) throw runtime_error("private_key is not valid");
     return unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)>(k, EVP_PKEY_free);
   }
-  auto ReadTxnBase::get_site_stats() -> const SiteStats& {
+  auto ReadTxn::get_site_stats() -> const SiteStats& {
     MDB_val v;
     if (db_get(txn, db.dbis[Settings], SettingsKey::site_stats, v)) {
       static std::atomic<bool> initialized = false;
@@ -511,11 +511,11 @@ namespace Ludwig {
     }
     return get_fb<SiteStats>(v);
   }
-  auto ReadTxnBase::get_admin_list() -> span<uint64_t> {
+  auto ReadTxn::get_admin_list() -> span<uint64_t> {
     const auto s = get_setting_str(SettingsKey::admins);
     return span<uint64_t>((uint64_t*)s.data(), s.length() / sizeof(uint64_t));
   }
-  auto ReadTxnBase::get_session(uint64_t session_id) -> OptRef<Session> {
+  auto ReadTxn::get_session(uint64_t session_id) -> OptRef<Session> {
     MDB_val v;
     if (db_get(txn, db.dbis[Session_Session], session_id, v)) {
       spdlog::debug("Session {:x} does not exist", session_id);
@@ -527,111 +527,111 @@ namespace Ludwig {
     return {};
   }
 
-  auto ReadTxnBase::get_user_id_by_name(string_view name) -> optional<uint64_t> {
+  auto ReadTxn::get_user_id_by_name(string_view name) -> optional<uint64_t> {
     const auto name_lc = to_ascii_lowercase(name);
     MDB_val v;
     if (db_get(txn, db.dbis[User_Name], name_lc, v)) return {};
     return val_as<uint64_t>(v);
   }
-  auto ReadTxnBase::get_user_id_by_email(string_view email) -> optional<uint64_t> {
+  auto ReadTxn::get_user_id_by_email(string_view email) -> optional<uint64_t> {
     const auto email_lc = to_ascii_lowercase(email);
     MDB_val v;
     if (db_get(txn, db.dbis[User_Email], email_lc, v)) return {};
     return val_as<uint64_t>(v);
   }
-  auto ReadTxnBase::get_user(uint64_t id) -> OptRef<User> {
+  auto ReadTxn::get_user(uint64_t id) -> OptRef<User> {
     MDB_val v;
     if (db_get(txn, db.dbis[User_User], id, v)) return {};
     return get_fb<User>(v);
   }
-  auto ReadTxnBase::get_user_stats(uint64_t id) -> OptRef<UserStats> {
+  auto ReadTxn::get_user_stats(uint64_t id) -> OptRef<UserStats> {
     MDB_val v;
     if (db_get(txn, db.dbis[UserStats_User], id, v)) return {};
     return get_fb<UserStats>(v);
   }
-  auto ReadTxnBase::get_local_user(uint64_t id) -> OptRef<LocalUser> {
+  auto ReadTxn::get_local_user(uint64_t id) -> OptRef<LocalUser> {
     MDB_val v;
     if (db_get(txn, db.dbis[LocalUser_User], id, v)) return {};
     return get_fb<LocalUser>(v);
   }
-  auto ReadTxnBase::count_local_users() -> uint64_t {
+  auto ReadTxn::count_local_users() -> uint64_t {
     return count(db.dbis[LocalUser_User], txn);
   }
-  auto ReadTxnBase::list_users_alphabetical(optional<string_view> cursor) -> DBIter {
+  auto ReadTxn::list_users_alphabetical(optional<string_view> cursor) -> DBIter {
     return DBIter(db.dbis[User_Name], txn, Dir::Asc, cursor.transform(λx(MDB_val(x.length(),(void*)x.data()))));
   }
-  auto ReadTxnBase::list_users_new(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_users_new(OptKV cursor) -> DBIter {
     if (cursor) return DBIter(db.dbis[UsersNew_Time], txn, Dir::Desc, *cursor);
     return DBIter(db.dbis[UsersNew_Time], txn, Dir::Desc);
   }
-  auto ReadTxnBase::list_users_old(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_users_old(OptKV cursor) -> DBIter {
     if (cursor) return DBIter(db.dbis[UsersNew_Time], txn, Dir::Asc, *cursor);
     return DBIter(db.dbis[UsersNew_Time], txn, Dir::Asc);
   }
-  auto ReadTxnBase::list_users_new_posts(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_users_new_posts(OptKV cursor) -> DBIter {
     if (cursor) return DBIter(db.dbis[UsersNewPosts_Time], txn, Dir::Desc, *cursor);
     return DBIter(db.dbis[UsersNewPosts_Time], txn, Dir::Desc);
   }
-  auto ReadTxnBase::list_users_most_posts(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_users_most_posts(OptKV cursor) -> DBIter {
     if (cursor) return DBIter(db.dbis[UsersMostPosts_Posts], txn, Dir::Desc, *cursor);
     return DBIter(db.dbis[UsersMostPosts_Posts], txn, Dir::Desc);
   }
-  auto ReadTxnBase::list_subscribers(uint64_t board_id, OptCursor cursor) -> DBIter {
+  auto ReadTxn::list_subscribers(uint64_t board_id, OptCursor cursor) -> DBIter {
     if (cursor) return DBIter(db.dbis[UsersSubscribed_Board], txn, Dir::Asc, pair(Cursor(board_id), cursor->int_field_0()), Cursor(board_id+1));
     return DBIter(db.dbis[UsersSubscribed_Board], txn, Dir::Asc, optional<MDB_val>(), Cursor(board_id+1));
   }
-  auto ReadTxnBase::is_user_subscribed_to_board(uint64_t user_id, uint64_t board_id) -> bool {
+  auto ReadTxn::is_user_subscribed_to_board(uint64_t user_id, uint64_t board_id) -> bool {
     return db_has(txn, db.dbis[UsersSubscribed_Board], board_id, user_id);
   }
 
-  auto ReadTxnBase::get_board_id_by_name(string_view name) -> optional<uint64_t> {
+  auto ReadTxn::get_board_id_by_name(string_view name) -> optional<uint64_t> {
     const auto name_lc = to_ascii_lowercase(name);
     MDB_val v;
     if (db_get(txn, db.dbis[Board_Name], name_lc, v)) return {};
     return val_as<uint64_t>(v);
   }
-  auto ReadTxnBase::get_board(uint64_t id) -> OptRef<Board> {
+  auto ReadTxn::get_board(uint64_t id) -> OptRef<Board> {
     MDB_val v;
     if (db_get(txn, db.dbis[Board_Board], id, v)) return {};
     return get_fb<Board>(v);
   }
-  auto ReadTxnBase::get_board_stats(uint64_t id) -> OptRef<BoardStats> {
+  auto ReadTxn::get_board_stats(uint64_t id) -> OptRef<BoardStats> {
     MDB_val v;
     if (db_get(txn, db.dbis[BoardStats_Board], id, v)) return {};
     return get_fb<BoardStats>(v);
   }
-  auto ReadTxnBase::get_local_board(uint64_t id) -> OptRef<LocalBoard> {
+  auto ReadTxn::get_local_board(uint64_t id) -> OptRef<LocalBoard> {
     MDB_val v;
     if (db_get(txn, db.dbis[LocalBoard_Board], id, v)) return {};
     return get_fb<LocalBoard>(v);
   }
-  auto ReadTxnBase::count_local_boards() -> uint64_t {
+  auto ReadTxn::count_local_boards() -> uint64_t {
     return count(db.dbis[LocalBoard_Board], txn);
   }
-  auto ReadTxnBase::list_boards_alphabetical(optional<string_view> cursor) -> DBIter {
+  auto ReadTxn::list_boards_alphabetical(optional<string_view> cursor) -> DBIter {
     return DBIter(db.dbis[Board_Name], txn, Dir::Asc, cursor.transform(λx(MDB_val(x.length(),(void*)x.data()))));
   }
-  auto ReadTxnBase::list_boards_new(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_boards_new(OptKV cursor) -> DBIter {
     if (cursor) DBIter(db.dbis[BoardsNew_Time], txn, Dir::Desc, *cursor);
     return DBIter(db.dbis[BoardsNew_Time], txn, Dir::Desc);
   }
-  auto ReadTxnBase::list_boards_old(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_boards_old(OptKV cursor) -> DBIter {
     if (cursor) return DBIter(db.dbis[BoardsNew_Time], txn, Dir::Asc, *cursor);
     return DBIter(db.dbis[BoardsNew_Time], txn, Dir::Asc);
   }
-  auto ReadTxnBase::list_boards_new_posts(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_boards_new_posts(OptKV cursor) -> DBIter {
     if (cursor) return DBIter(db.dbis[BoardsNewPosts_Time], txn, Dir::Desc, *cursor);
     return DBIter(db.dbis[BoardsNewPosts_Time], txn, Dir::Desc);
   }
-  auto ReadTxnBase::list_boards_most_posts(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_boards_most_posts(OptKV cursor) -> DBIter {
     if (cursor) return DBIter(db.dbis[BoardsMostPosts_Posts], txn, Dir::Desc, *cursor);
     return DBIter(db.dbis[BoardsMostPosts_Posts], txn, Dir::Desc);
   }
-  auto ReadTxnBase::list_boards_most_subscribers(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_boards_most_subscribers(OptKV cursor) -> DBIter {
     if (cursor) return DBIter(db.dbis[BoardsMostSubscribers_Subscribers], txn, Dir::Desc, *cursor);
     return DBIter(db.dbis[BoardsMostSubscribers_Subscribers], txn, Dir::Desc);
   }
-  auto ReadTxnBase::list_subscribed_boards(uint64_t user_id, OptCursor cursor) -> DBIter {
+  auto ReadTxn::list_subscribed_boards(uint64_t user_id, OptCursor cursor) -> DBIter {
     return DBIter(
       db.dbis[BoardsSubscribed_User],
       txn,
@@ -640,7 +640,7 @@ namespace Ludwig {
       Cursor(user_id + 1)
     );
   }
-  auto ReadTxnBase::list_created_boards(uint64_t user_id, OptCursor cursor) -> DBIter {
+  auto ReadTxn::list_created_boards(uint64_t user_id, OptCursor cursor) -> DBIter {
     return DBIter(
       db.dbis[BoardsOwned_User],
       txn,
@@ -650,17 +650,17 @@ namespace Ludwig {
     );
   }
 
-  auto ReadTxnBase::get_post_stats(uint64_t id) -> OptRef<PostStats> {
+  auto ReadTxn::get_post_stats(uint64_t id) -> OptRef<PostStats> {
     MDB_val v;
     if (db_get(txn, db.dbis[PostStats_Post], id, v)) return {};
     return get_fb<PostStats>(v);
   }
-  auto ReadTxnBase::get_thread(uint64_t id) -> OptRef<Thread> {
+  auto ReadTxn::get_thread(uint64_t id) -> OptRef<Thread> {
     MDB_val v;
     if (db_get(txn, db.dbis[Thread_Thread], id, v)) return {};
     return get_fb<Thread>(v);
   }
-  auto ReadTxnBase::list_threads_new(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_threads_new(OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ThreadsNew_Time],
       txn,
@@ -669,7 +669,7 @@ namespace Ludwig {
       Cursor(0)
     );
   }
-  auto ReadTxnBase::list_threads_old(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_threads_old(OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ThreadsNew_Time],
       txn,
@@ -678,7 +678,7 @@ namespace Ludwig {
       Cursor(ID_MAX)
     );
   }
-  auto ReadTxnBase::list_threads_top(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_threads_top(OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ThreadsTop_Karma],
       txn,
@@ -687,7 +687,7 @@ namespace Ludwig {
       Cursor(0)
     );
   }
-  auto ReadTxnBase::list_threads_most_comments(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_threads_most_comments(OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ThreadsMostComments_Comments],
       txn,
@@ -696,7 +696,7 @@ namespace Ludwig {
       Cursor(0)
     );
   }
-  auto ReadTxnBase::list_threads_of_board_new(uint64_t board_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_threads_of_board_new(uint64_t board_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ThreadsNew_BoardTime],
       txn,
@@ -705,7 +705,7 @@ namespace Ludwig {
       Cursor(board_id, 0)
     );
   }
-  auto ReadTxnBase::list_threads_of_board_old(uint64_t board_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_threads_of_board_old(uint64_t board_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ThreadsNew_BoardTime],
       txn,
@@ -714,7 +714,7 @@ namespace Ludwig {
       Cursor(board_id, ID_MAX)
     );
   }
-  auto ReadTxnBase::list_threads_of_board_top(uint64_t board_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_threads_of_board_top(uint64_t board_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ThreadsTop_BoardKarma],
       txn,
@@ -723,7 +723,7 @@ namespace Ludwig {
       Cursor(board_id, 0)
     );
   }
-  auto ReadTxnBase::list_threads_of_board_most_comments(uint64_t board_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_threads_of_board_most_comments(uint64_t board_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ThreadsMostComments_BoardComments],
       txn,
@@ -732,7 +732,7 @@ namespace Ludwig {
       Cursor(board_id, 0)
     );
   }
-  auto ReadTxnBase::list_threads_of_user_new(uint64_t user_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_threads_of_user_new(uint64_t user_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ThreadsNew_UserTime],
       txn,
@@ -741,7 +741,7 @@ namespace Ludwig {
       Cursor(user_id, 0)
     );
   }
-  auto ReadTxnBase::list_threads_of_user_old(uint64_t user_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_threads_of_user_old(uint64_t user_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ThreadsNew_UserTime],
       txn,
@@ -750,7 +750,7 @@ namespace Ludwig {
       Cursor(user_id, ID_MAX)
     );
   }
-  auto ReadTxnBase::list_threads_of_user_top(uint64_t user_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_threads_of_user_top(uint64_t user_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ThreadsTop_UserKarma],
       txn,
@@ -760,12 +760,12 @@ namespace Ludwig {
     );
   }
 
-  auto ReadTxnBase::get_comment(uint64_t id) -> OptRef<Comment> {
+  auto ReadTxn::get_comment(uint64_t id) -> OptRef<Comment> {
     MDB_val v;
     if (db_get(txn, db.dbis[Comment_Comment], id, v)) return {};
     return get_fb<Comment>(v);
   }
-  auto ReadTxnBase::list_comments_new(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_new(OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[CommentsNew_Time],
       txn,
@@ -774,7 +774,7 @@ namespace Ludwig {
       Cursor(0)
     );
   }
-  auto ReadTxnBase::list_comments_old(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_old(OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[CommentsNew_Time],
       txn,
@@ -783,7 +783,7 @@ namespace Ludwig {
       Cursor(ID_MAX)
     );
   }
-  auto ReadTxnBase::list_comments_top(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_top(OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[CommentsTop_Karma],
       txn,
@@ -792,7 +792,7 @@ namespace Ludwig {
       Cursor(0)
     );
   }
-  auto ReadTxnBase::list_comments_most_comments(OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_most_comments(OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[CommentsMostComments_Comments],
       txn,
@@ -801,7 +801,7 @@ namespace Ludwig {
       Cursor(0)
     );
   }
-  auto ReadTxnBase::list_comments_of_post_new(uint64_t post_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_of_post_new(uint64_t post_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ChildrenNew_PostTime],
       txn,
@@ -810,7 +810,7 @@ namespace Ludwig {
       Cursor(post_id, 0)
     );
   }
-  auto ReadTxnBase::list_comments_of_post_old(uint64_t post_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_of_post_old(uint64_t post_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ChildrenNew_PostTime],
       txn,
@@ -819,7 +819,7 @@ namespace Ludwig {
       Cursor(post_id, ID_MAX)
     );
   }
-  auto ReadTxnBase::list_comments_of_post_top(uint64_t post_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_of_post_top(uint64_t post_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[ChildrenTop_PostKarma],
       txn,
@@ -828,7 +828,7 @@ namespace Ludwig {
       Cursor(post_id, 0)
     );
   }
-  auto ReadTxnBase::list_comments_of_board_new(uint64_t board_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_of_board_new(uint64_t board_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[CommentsNew_BoardTime],
       txn,
@@ -837,7 +837,7 @@ namespace Ludwig {
       Cursor(board_id, 0)
     );
   }
-  auto ReadTxnBase::list_comments_of_board_old(uint64_t board_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_of_board_old(uint64_t board_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[CommentsNew_BoardTime],
       txn,
@@ -846,7 +846,7 @@ namespace Ludwig {
       Cursor(board_id, ID_MAX)
     );
   }
-  auto ReadTxnBase::list_comments_of_board_top(uint64_t board_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_of_board_top(uint64_t board_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[CommentsTop_BoardKarma],
       txn,
@@ -855,7 +855,7 @@ namespace Ludwig {
       Cursor(board_id, 0)
     );
   }
-  auto ReadTxnBase::list_comments_of_board_most_comments(uint64_t board_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_of_board_most_comments(uint64_t board_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[CommentsMostComments_BoardComments],
       txn,
@@ -864,7 +864,7 @@ namespace Ludwig {
       Cursor(board_id, 0)
     );
   }
-  auto ReadTxnBase::list_comments_of_user_new(uint64_t user_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_of_user_new(uint64_t user_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[CommentsNew_UserTime],
       txn,
@@ -873,7 +873,7 @@ namespace Ludwig {
       Cursor(user_id, 0)
     );
   }
-  auto ReadTxnBase::list_comments_of_user_old(uint64_t user_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_of_user_old(uint64_t user_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[CommentsNew_UserTime],
       txn,
@@ -882,7 +882,7 @@ namespace Ludwig {
       Cursor(user_id, ID_MAX)
     );
   }
-  auto ReadTxnBase::list_comments_of_user_top(uint64_t user_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_comments_of_user_top(uint64_t user_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[CommentsTop_UserKarma],
       txn,
@@ -892,31 +892,31 @@ namespace Ludwig {
     );
   }
 
-  auto ReadTxnBase::get_vote_of_user_for_post(uint64_t user_id, uint64_t post_id) -> Vote {
+  auto ReadTxn::get_vote_of_user_for_post(uint64_t user_id, uint64_t post_id) -> Vote {
     if (db_has(txn, db.dbis[UpvotePost_User], user_id, post_id)) return Vote::Upvote;
     if (db_has(txn, db.dbis[DownvotePost_User], user_id, post_id)) return Vote::Downvote;
     return Vote::NoVote;
   }
 
-  auto ReadTxnBase::has_user_saved_post(uint64_t user_id, uint64_t post_id) -> bool {
+  auto ReadTxn::has_user_saved_post(uint64_t user_id, uint64_t post_id) -> bool {
     return db_has(txn, db.dbis[PostsSaved_User], user_id, post_id);
   }
-  auto ReadTxnBase::has_user_hidden_post(uint64_t user_id, uint64_t post_id) -> bool {
+  auto ReadTxn::has_user_hidden_post(uint64_t user_id, uint64_t post_id) -> bool {
     return db_has(txn, db.dbis[PostsHidden_User], user_id, post_id);
   }
-  auto ReadTxnBase::has_user_hidden_user(uint64_t user_id, uint64_t hidden_user_id) -> bool {
+  auto ReadTxn::has_user_hidden_user(uint64_t user_id, uint64_t hidden_user_id) -> bool {
     return db_has(txn, db.dbis[UsersHidden_User], user_id, hidden_user_id);
   }
-  auto ReadTxnBase::has_user_hidden_board(uint64_t user_id, uint64_t board_id) -> bool {
+  auto ReadTxn::has_user_hidden_board(uint64_t user_id, uint64_t board_id) -> bool {
     return db_has(txn, db.dbis[BoardsHidden_User], user_id, board_id);
   }
 
-  auto ReadTxnBase::get_application(uint64_t user_id) -> OptRef<Application> {
+  auto ReadTxn::get_application(uint64_t user_id) -> OptRef<Application> {
     MDB_val v;
     if (db_get(txn, db.dbis[Application_User], user_id, v)) return {};
     return get_fb<Application>(v);
   }
-  auto ReadTxnBase::list_applications(OptCursor cursor) -> DBKeyIter {
+  auto ReadTxn::list_applications(OptCursor cursor) -> DBKeyIter {
     return DBKeyIter(
       db.dbis[Application_User],
       txn,
@@ -925,12 +925,12 @@ namespace Ludwig {
     );
   }
 
-  auto ReadTxnBase::get_invite(uint64_t invite_id) -> OptRef<Invite> {
+  auto ReadTxn::get_invite(uint64_t invite_id) -> OptRef<Invite> {
     MDB_val v;
     if (db_get(txn, db.dbis[Invite_Invite], invite_id, v)) return {};
     return get_fb<Invite>(v);
   }
-  auto ReadTxnBase::list_invites_from_user(uint64_t user_id, OptKV cursor) -> DBIter {
+  auto ReadTxn::list_invites_from_user(uint64_t user_id, OptKV cursor) -> DBIter {
     return DBIter(
       db.dbis[InvitesOwned_UserTime],
       txn,
@@ -940,7 +940,7 @@ namespace Ludwig {
     );
   }
 
-  auto ReadTxnBase::get_link_card(std::string_view url) -> OptRef<LinkCard> {
+  auto ReadTxn::get_link_card(std::string_view url) -> OptRef<LinkCard> {
     MDB_val v;
     if (db_get(txn, db.dbis[LinkCard_Url], url, v)) return {};
     return get_fb<LinkCard>(v);
@@ -963,7 +963,7 @@ namespace Ludwig {
     }
   }
 
-  auto ReadTxnBase::dump(uWS::MoveOnlyFunction<void (const flatbuffers::span<uint8_t>&, bool)> on_data) -> void {
+  auto ReadTxn::dump(uWS::MoveOnlyFunction<void (const flatbuffers::span<uint8_t>&, bool)> on_data) -> void {
     FlatBufferBuilder fbb, fbb2;
     MDB_val k, v, v2;
     MDB_cursor* cur;

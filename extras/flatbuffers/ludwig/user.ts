@@ -162,7 +162,7 @@ bot():boolean {
 
 modState():ModState {
   const offset = this.bb!.__offset(this.bb_pos, 40);
-  return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Visible;
+  return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Normal;
 }
 
 modReason():string|null
@@ -297,7 +297,7 @@ static addBot(builder:flatbuffers.Builder, bot:boolean) {
 }
 
 static addModState(builder:flatbuffers.Builder, modState:ModState) {
-  builder.addFieldInt8(18, modState, ModState.Visible);
+  builder.addFieldInt8(18, modState, ModState.Normal);
 }
 
 static addModReason(builder:flatbuffers.Builder, modReasonOffset:flatbuffers.Offset) {

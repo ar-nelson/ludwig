@@ -45,7 +45,7 @@ namespace Ludwig {
     operator xmlXPathObjectPtr() const noexcept { return ptr; }
     auto empty() const noexcept { return xmlXPathNodeSetIsEmpty(ptr->nodesetval); }
     auto size() const noexcept { return xmlXPathNodeSetGetLength(ptr->nodesetval); }
-    auto operator[](unsigned i) const noexcept { return xmlXPathNodeSetItem(ptr->nodesetval, i); }
+    auto operator[](int i) const noexcept { return xmlXPathNodeSetItem(ptr->nodesetval, i); }
   };
 
   struct LibXmlContext {

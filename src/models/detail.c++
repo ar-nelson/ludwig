@@ -77,22 +77,13 @@ namespace Ludwig {
   const auto LocalUserDetail::temp_admin_stats = GetTemporaryPointer(placeholders.fbb, placeholders.temp_admin_stats);
 
   auto ThreadDetail::can_view(Login login) const noexcept -> bool {
-    if (
-      thread().mod_state() >= ModState::Removed ||
-      board().mod_state() >= ModState::Removed ||
-      author().mod_state() >= ModState::Removed
-    ) {
+    if (mod_state().state >= ModState::Unapproved) {
       if (!login || (login->id != thread().author() && !login->local_user().admin())) return false;
     }
     return true;
   }
   auto CommentDetail::can_view(Login login) const noexcept -> bool {
-    if (
-      comment().mod_state() >= ModState::Removed ||
-      thread().mod_state() >= ModState::Removed ||
-      board().mod_state() >= ModState::Removed ||
-      author().mod_state() >= ModState::Removed
-    ) {
+    if (mod_state().state >= ModState::Unapproved) {
       if (!login || (login->id != comment().author() && !login->local_user().admin())) return false;
     }
     // TODO: Check parent comments
@@ -100,13 +91,13 @@ namespace Ludwig {
   }
   auto UserDetail::can_view(Login login) const noexcept -> bool {
     if (login && login->id == id) return true;
-    if (user().mod_state() >= ModState::Removed || (maybe_local_user() && !maybe_local_user()->get().approved())) {
+    if (mod_state().state >= ModState::Unapproved) {
       if (!login || !login->local_user().admin()) return false;
     }
     return true;
   }
   auto BoardDetail::can_view(Login login) const noexcept -> bool {
-    if (board().mod_state() >= ModState::Removed) {
+    if (mod_state().state >= ModState::Unapproved) {
       if (!login || !login->local_user().admin()) return false;
     }
     // TODO: Handle private boards
@@ -128,8 +119,10 @@ namespace Ludwig {
   auto CommentDetail::should_show(Login login) const noexcept -> bool {
     if (hidden || user_hidden || thread_hidden || board_hidden || !can_view(login)) return false;
     if (login) {
-      if (comment().content_warning() || thread().content_warning() || board().content_warning()) {
-        if (login->local_user().hide_cw_posts()) return false;
+      if (login->local_user().hide_cw_posts()) {
+        if (comment().content_warning() || thread().content_warning() || board().content_warning()) {
+          return false;
+        }
       }
       if (author().bot() && !login->local_user().show_bot_accounts()) {
         return false;
@@ -151,65 +144,59 @@ namespace Ludwig {
     return true;
   }
   auto BoardDetail::can_create_thread(Login login) const noexcept -> bool {
-    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked) return false;
+    if (!login || login->mod_state(id).state >= ModState::Locked) return false;
     return !board().restricted_posting() || login->local_user().admin();
   }
   auto ThreadDetail::can_reply_to(Login login) const noexcept -> bool {
-    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked) return false;
+    if (!login || login->mod_state(thread().board()).state >= ModState::Locked) return false;
     if (login->local_user().admin()) return true;
     return thread().mod_state() < ModState::Locked;
   }
   auto CommentDetail::can_reply_to(Login login) const noexcept -> bool {
-    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked) return false;
+    if (!login || login->mod_state(thread().board()).state >= ModState::Locked) return false;
     if (login->local_user().admin()) return true;
     return comment().mod_state() < ModState::Locked &&
       thread().mod_state() < ModState::Locked;
   }
   auto ThreadDetail::can_edit(Login login) const noexcept -> bool {
-    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked || thread().instance()) return false;
+    if (!login || login->mod_state(thread().board()).state >= ModState::Locked || thread().instance()) return false;
     return login->id == thread().author() || login->local_user().admin();
   }
   auto CommentDetail::can_edit(Login login) const noexcept -> bool {
-    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked || comment().instance()) return false;
+    if (!login || login->mod_state(thread().board()).state >= ModState::Locked || comment().instance()) return false;
     return login->id == comment().author() || login->local_user().admin();
   }
   auto ThreadDetail::can_delete(Login login) const noexcept -> bool {
-    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked || thread().instance()) return false;
+    if (!login || login->mod_state(thread().board()).state >= ModState::Locked || thread().instance()) return false;
     return login->id == thread().author() || login->local_user().admin();
   }
   auto CommentDetail::can_delete(Login login) const noexcept -> bool {
-    if (!login || !login->local_user().approved() || login->user().mod_state() >= ModState::Locked || comment().instance()) return false;
+    if (!login || login->mod_state(thread().board()).state >= ModState::Locked || comment().instance()) return false;
     return login->id == comment().author() || login->local_user().admin();
   }
   auto ThreadDetail::can_upvote(Login login, const SiteDetail* site) const noexcept -> bool {
     return login && can_view(login) &&
-           thread().mod_state() < ModState::Locked &&
-           login->local_user().approved() &&
-           login->user().mod_state() < ModState::Locked &&
+           mod_state().state < ModState::Locked &&
+           login->mod_state(thread().board()).state < ModState::Locked &&
            board().can_upvote() && (board().instance() || site->votes_enabled);
   }
   auto CommentDetail::can_upvote(Login login, const SiteDetail* site) const noexcept -> bool {
     return login && can_view(login) &&
-           comment().mod_state() < ModState::Locked &&
-           thread().mod_state() < ModState::Locked &&
-           login->local_user().approved() &&
-           login->user().mod_state() < ModState::Locked &&
+           mod_state().state < ModState::Locked &&
+           login->mod_state(thread().board()).state < ModState::Locked &&
            board().can_upvote() && (board().instance() || site->votes_enabled);
   }
   auto ThreadDetail::can_downvote(Login login, const SiteDetail* site) const noexcept -> bool {
     return login && can_view(login) &&
-           thread().mod_state() < ModState::Locked &&
-           login->local_user().approved() &&
-           login->user().mod_state() < ModState::Locked &&
+           mod_state().state < ModState::Locked &&
+           login->mod_state(thread().board()).state < ModState::Locked &&
            board().can_downvote() &&
            (board().instance() || site->downvotes_enabled);
   }
   auto CommentDetail::can_downvote(Login login, const SiteDetail* site) const noexcept -> bool {
     return login && can_view(login) &&
-           comment().mod_state() < ModState::Locked &&
-           thread().mod_state() < ModState::Locked &&
-           login->local_user().approved() &&
-           login->user().mod_state() < ModState::Locked &&
+           mod_state().state < ModState::Locked &&
+           login->mod_state(thread().board()).state < ModState::Locked &&
            board().can_downvote() &&
            (board().instance() || site->downvotes_enabled);
   }
@@ -241,7 +228,7 @@ namespace Ludwig {
     return string(s);
   }
 
-  auto SiteDetail::get(ReadTxnBase& txn) -> SiteDetail {
+  auto SiteDetail::get(ReadTxn& txn) -> SiteDetail {
     const auto name = txn.get_setting_str(SettingsKey::name),
       base_url = txn.get_setting_str(SettingsKey::base_url);
     return {
@@ -275,7 +262,7 @@ namespace Ludwig {
     };
   }
 
-  auto UserDetail::get(ReadTxnBase& txn, uint64_t id, Login login) -> UserDetail {
+  auto UserDetail::get(ReadTxn& txn, uint64_t id, Login login) -> UserDetail {
     const auto user = txn.get_user(id);
     const auto user_stats = txn.get_user_stats(id);
     if (!user || !user_stats) throw ApiError("User does not exist", 410);
@@ -284,13 +271,13 @@ namespace Ludwig {
     return { id, *user, local_user, *user_stats, hidden };
   }
 
-  auto LocalUserDetail::get(ReadTxnBase& txn, uint64_t id, Login login) -> LocalUserDetail {
+  auto LocalUserDetail::get(ReadTxn& txn, uint64_t id, Login login) -> LocalUserDetail {
     const auto detail = UserDetail::get(txn, id, login);
     if (!detail.maybe_local_user()) throw ApiError("Local user does not exist", 410);
     return { std::move(detail) };
   }
 
-  auto LocalUserDetail::get_login(ReadTxnBase& txn, uint64_t id) -> LocalUserDetail {
+  auto LocalUserDetail::get_login(ReadTxn& txn, uint64_t id) -> LocalUserDetail {
     try { return get(txn, id, {}); }
     catch (const ApiError& e) {
       if (e.http_status == 410) throw ApiError("Logged in user does not exist", 401);
@@ -298,7 +285,7 @@ namespace Ludwig {
     }
   }
 
-  auto BoardDetail::get(ReadTxnBase& txn, uint64_t id, Login login) -> BoardDetail {
+  auto BoardDetail::get(ReadTxn& txn, uint64_t id, Login login) -> BoardDetail {
     const auto board = txn.get_board(id);
     const auto board_stats = txn.get_board_stats(id);
     if (!board || !board_stats) throw ApiError("Board does not exist", 410);
@@ -308,14 +295,14 @@ namespace Ludwig {
     return { id, *board, local_board, *board_stats, hidden, subscribed };
   }
 
-  auto LocalBoardDetail::get(ReadTxnBase& txn, uint64_t id, Login login) -> LocalBoardDetail {
+  auto LocalBoardDetail::get(ReadTxn& txn, uint64_t id, Login login) -> LocalBoardDetail {
     const auto detail = BoardDetail::get(txn, id, login);
     if (!detail.maybe_local_board()) throw ApiError("Local user does not exist", 410);
     return { std::move(detail) };
   }
 
   auto ThreadDetail::get(
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     uint64_t thread_id,
     Login login,
     OptRef<User> author,
@@ -353,6 +340,7 @@ namespace Ludwig {
       .user_hidden = is_author_hidden,
       .board_hidden = is_board_hidden,
       .board_subscribed = login && txn.is_user_subscribed_to_board(login->id, thread->get().board()),
+      .user_is_admin = txn.get_local_user(thread->get().author()).transform([](auto u){return u.get().admin();}).value_or(false),
       ._thread = *thread,
       ._stats = *stats,
       ._link_card = card,
@@ -362,7 +350,7 @@ namespace Ludwig {
   }
 
   auto CommentDetail::get(
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     uint64_t comment_id,
     Login login,
     OptRef<User> author,
@@ -415,6 +403,7 @@ namespace Ludwig {
       .user_hidden = is_author_hidden,
       .board_hidden = is_board_hidden,
       .board_subscribed = login && txn.is_user_subscribed_to_board(login->id, thread->get().board()),
+      .user_is_admin = txn.get_local_user(comment->get().author()).transform([](auto u){return u.get().admin();}).value_or(false),
       ._comment = *comment,
       ._stats = *stats,
       ._author = author,
@@ -422,5 +411,67 @@ namespace Ludwig {
       ._board = board,
       .path = path
     };
+  }
+
+  auto ThreadDetail::mod_state(PostContext context) const noexcept -> ModStateDetail {
+    // TODO: Board-specific user mod state
+    ModStateDetail d;
+    if (context != PostContext::Board && board().mod_state() > ModState::Normal && board().mod_state() >= d.state) {
+      d = { ModStateSubject::Board, board().mod_state(), opt_sv(board().mod_reason()) };
+    }
+    if (context != PostContext::User && author().mod_state() > ModState::Normal && author().mod_state() >= d.state) {
+      d = { ModStateSubject::User, author().mod_state(), opt_sv(author().mod_reason()) };
+    }
+    if (thread().board_mod_state() > ModState::Normal && thread().board_mod_state() >= d.state) {
+      d = { ModStateSubject::ThreadInBoard, thread().board_mod_state(), opt_sv(thread().board_mod_reason()) };
+    }
+    if (thread().mod_state() > ModState::Normal && thread().mod_state() >= d.state) {
+      d = { ModStateSubject::Thread, thread().mod_state(), opt_sv(thread().mod_reason()) };
+    }
+    return d;
+  }
+
+  auto CommentDetail::mod_state(PostContext context) const noexcept -> ModStateDetail {
+    // TODO: Board-specific user mod state
+    ModStateDetail d;
+    if (context != PostContext::Board && context != PostContext::Reply && board().mod_state() > ModState::Normal && board().mod_state() >= d.state) {
+      d = { ModStateSubject::Board, board().mod_state(), opt_sv(board().mod_reason()) };
+    }
+    if (context != PostContext::User && author().mod_state() > ModState::Normal && author().mod_state() >= d.state) {
+      d = { ModStateSubject::User, author().mod_state(), opt_sv(author().mod_reason()) };
+    }
+    if (context != PostContext::Reply && thread().board_mod_state() > ModState::Normal && thread().board_mod_state() >= d.state) {
+      d = { ModStateSubject::ThreadInBoard, thread().board_mod_state(), opt_sv(thread().board_mod_reason()) };
+    }
+    if (context != PostContext::Reply && thread().mod_state() > ModState::Normal && thread().mod_state() >= d.state) {
+      d = { ModStateSubject::Thread, thread().mod_state(), opt_sv(thread().mod_reason()) };
+    }
+    if (comment().board_mod_state() > ModState::Normal && comment().board_mod_state() >= d.state) {
+      d = { ModStateSubject::CommentInBoard, comment().board_mod_state(), opt_sv(comment().board_mod_reason()) };
+    }
+    if (comment().mod_state() > ModState::Normal && comment().mod_state() >= d.state) {
+      d = { ModStateSubject::Comment, comment().mod_state(), opt_sv(comment().mod_reason()) };
+    }
+    return d;
+  }
+
+  auto ThreadDetail::content_warning(PostContext context) const noexcept -> optional<ContentWarningDetail> {
+    if (thread().content_warning()) {
+      return {{ ContentWarningSubject::Thread, thread().content_warning()->string_view() }};
+    } else if (context != PostContext::Board && context != PostContext::View && board().content_warning()) {
+      return {{ ContentWarningSubject::Board, board().content_warning()->string_view() }};
+    }
+    return {};
+  }
+
+  auto CommentDetail::content_warning(PostContext context) const noexcept -> optional<ContentWarningDetail> {
+    if (comment().content_warning()) {
+      return {{ ContentWarningSubject::Comment, comment().content_warning()->string_view() }};
+    } else if (context != PostContext::Reply && thread().content_warning()) {
+      return {{ ContentWarningSubject::Thread, thread().content_warning()->string_view() }};
+    } else if (context != PostContext::Board && context != PostContext::View && context != PostContext::Reply && board().content_warning()) {
+      return {{ ContentWarningSubject::Board, board().content_warning()->string_view() }};
+    }
+    return {};
   }
 }

@@ -36,7 +36,7 @@ namespace Ludwig::Lemmy {
     }
   }
 
-  auto ApiController::validate_jwt(ReadTxnBase& txn, SecretString&& jwt) -> uint64_t {
+  auto ApiController::validate_jwt(ReadTxn& txn, SecretString&& jwt) -> uint64_t {
     if (auto parsed_jwt = parse_jwt(jwt.data, txn.get_jwt_secret())) {
       if (auto user_id = instance->validate_session(txn, parsed_jwt->sub)) return *user_id;
       throw ApiError("Invalid or expired session associated with auth token", 401);
@@ -278,7 +278,7 @@ namespace Ludwig::Lemmy {
     };
   }
 
-  auto ApiController::get_site_view(ReadTxnBase& txn) -> SiteView {
+  auto ApiController::get_site_view(ReadTxn& txn) -> SiteView {
     const auto site = instance->site_detail();
     const auto& stats = txn.get_site_stats();
     const chrono::system_clock::time_point
@@ -343,7 +343,7 @@ namespace Ludwig::Lemmy {
     };
   }
 
-  auto ApiController::to_comment_view(ReadTxnBase& txn, const CommentDetail& detail) -> CommentView {
+  auto ApiController::to_comment_view(ReadTxn& txn, const CommentDetail& detail) -> CommentView {
     string path = "0.";
     for (uint64_t n : detail.path) fmt::format_to(std::back_inserter(path), "{}.", n);
     path += std::to_string(detail.id);
@@ -361,7 +361,7 @@ namespace Ludwig::Lemmy {
     };
   }
 
-  auto ApiController::to_post_view(ReadTxnBase& txn, const ThreadDetail& detail) -> PostView {
+  auto ApiController::to_post_view(ReadTxn& txn, const ThreadDetail& detail) -> PostView {
     return {
       .community = to_community(detail.thread().board(), detail.board(), detail.board_hidden),
       .counts = to_post_aggregates(detail),

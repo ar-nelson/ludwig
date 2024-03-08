@@ -2,11 +2,9 @@
 
 /* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */
 
-export enum ModState {
-  Approved = 1,
-  Normal = 2,
-  Flagged = 3,
-  Locked = 4,
-  Unapproved = 5,
-  Removed = 6
+export enum ModActionTargetType {
+  User = 0,
+  Board = 1,
+  Thread = 2,
+  Comment = 3
 }

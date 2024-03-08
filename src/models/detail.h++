@@ -12,6 +12,42 @@ namespace Ludwig {
     SingleBoard
   };
 
+  enum class PostContext : uint8_t {
+    Feed,
+    User,
+    Board,
+    View,
+    Reply
+  };
+
+  enum class ModStateSubject : uint8_t {
+    Instance,
+    Board,
+    UserInBoard,
+    User,
+    ThreadInBoard,
+    Thread,
+    CommentInBoard,
+    Comment
+  };
+
+  enum class ContentWarningSubject : uint8_t {
+    Board,
+    Thread,
+    Comment
+  };
+
+  struct ModStateDetail {
+    ModStateSubject subject = ModStateSubject::Instance;
+    ModState state = ModState::Normal;
+    std::optional<std::string_view> reason = {};
+  };
+
+  struct ContentWarningDetail {
+    ContentWarningSubject subject = ContentWarningSubject::Board;
+    std::string_view content_warning = "NSFW";
+  };
+
   struct SiteDetail {
     static inline const std::string
       DEFAULT_COLOR_ACCENT = "#1077c1", // hsl(205, 85%, 41%)
@@ -30,7 +66,7 @@ namespace Ludwig {
         registration_application_required, registration_invite_required,
         invite_admin_only;
 
-    static auto get(ReadTxnBase& txn) -> SiteDetail;
+    static auto get(ReadTxn& txn) -> SiteDetail;
   };
 
   struct LocalUserDetail;
@@ -46,7 +82,13 @@ namespace Ludwig {
     auto user() const noexcept -> const User& { return _user; }
     auto maybe_local_user() const noexcept -> OptRef<const LocalUser> { return _local_user; }
     auto stats() const noexcept -> const UserStats& { return _stats; }
-    auto mod_state() const noexcept -> ModState { return user().mod_state(); }
+    auto mod_state(uint64_t /* in_board_id */ = 0) const noexcept -> ModStateDetail {
+      // TODO: Board-specific mod state
+      if (user().mod_state() > ModState::Normal) {
+        return { ModStateSubject::User, user().mod_state(), opt_sv(user().mod_reason()) };
+      }
+      return {};
+    }
     auto created_at() const noexcept -> std::chrono::system_clock::time_point {
       return std::chrono::system_clock::time_point(std::chrono::seconds(user().created_at()));
     }
@@ -56,7 +98,7 @@ namespace Ludwig {
     auto can_change_settings(Login login) const noexcept -> bool;
 
     static constexpr std::string_view noun = "user";
-    static auto get(ReadTxnBase& txn, uint64_t id, Login login) -> UserDetail;
+    static auto get(ReadTxn& txn, uint64_t id, Login login) -> UserDetail;
   };
 
   struct BoardDetail {
@@ -69,7 +111,12 @@ namespace Ludwig {
     auto board() const noexcept -> const Board& { return _board; }
     auto maybe_local_board() const noexcept -> OptRef<const LocalBoard> { return _local_board; }
     auto stats() const noexcept -> const BoardStats& { return _stats; }
-    auto mod_state() const noexcept -> ModState { return board().mod_state(); }
+    auto mod_state() const noexcept -> ModStateDetail {
+      if (board().mod_state() > ModState::Normal) {
+        return { ModStateSubject::Board, board().mod_state(), opt_sv(board().mod_reason()) };
+      }
+      return {};
+    }
     auto created_at() const noexcept -> std::chrono::system_clock::time_point {
       return std::chrono::system_clock::time_point(std::chrono::seconds(board().created_at()));
     }
@@ -80,7 +127,7 @@ namespace Ludwig {
     auto can_change_settings(Login login) const noexcept -> bool;
 
     static constexpr std::string_view noun = "board";
-    static auto get(ReadTxnBase& txn, uint64_t id, Login login) -> BoardDetail;
+    static auto get(ReadTxn& txn, uint64_t id, Login login) -> BoardDetail;
   };
 
   struct ThreadDetail {
@@ -91,7 +138,7 @@ namespace Ludwig {
     uint64_t id;
     double rank;
     Vote your_vote;
-    bool saved, hidden, user_hidden, board_hidden, board_subscribed;
+    bool saved, hidden, user_hidden, board_hidden, board_subscribed, user_is_admin;
     std::reference_wrapper<const Thread> _thread;
     std::reference_wrapper<const PostStats> _stats;
     OptRef<LinkCard> _link_card;
@@ -109,11 +156,18 @@ namespace Ludwig {
     auto board() const noexcept -> const Board& {
       return _board ? _board->get() : *null_board;
     }
-    auto mod_state() const noexcept -> ModState { return thread().mod_state(); }
+    auto mod_state(PostContext context = PostContext::View) const noexcept -> ModStateDetail;
+    auto content_warning(PostContext context = PostContext::View) const noexcept -> std::optional<ContentWarningDetail>;
     auto created_at() const noexcept -> std::chrono::system_clock::time_point {
       return std::chrono::system_clock::time_point(std::chrono::seconds(thread().created_at()));
     }
     auto author_id() const noexcept -> uint64_t { return thread().author(); }
+    auto has_text_content() const noexcept -> bool {
+      return thread().content_text() && thread().content_text()->size() &&
+             !(thread().content_text()->size() == 1 &&
+               thread().content_text_type()->GetEnum<RichText>(0) == RichText::Text &&
+               !thread().content_text()->GetAsString(0)->size());
+    }
 
     auto can_view(Login login) const noexcept -> bool;
     auto should_show(Login login) const noexcept -> bool;
@@ -127,7 +181,7 @@ namespace Ludwig {
 
     static constexpr std::string_view noun = "thread";
     static auto get(
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t thread_id,
       Login login,
       OptRef<User> author = {},
@@ -136,7 +190,7 @@ namespace Ludwig {
       bool is_board_hidden = false
     ) -> ThreadDetail;
     static auto get_created_at(
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t id
     ) -> std::chrono::system_clock::time_point {
       using namespace std::chrono;
@@ -154,7 +208,7 @@ namespace Ludwig {
     uint64_t id;
     double rank;
     Vote your_vote;
-    bool saved, hidden, thread_hidden, user_hidden, board_hidden, board_subscribed;
+    bool saved, hidden, thread_hidden, user_hidden, board_hidden, board_subscribed, user_is_admin;
     std::reference_wrapper<const Comment> _comment;
     std::reference_wrapper<const PostStats> _stats;
     OptRef<User> _author;
@@ -173,7 +227,8 @@ namespace Ludwig {
     auto board() const noexcept -> const Board& {
       return _board ? _board->get() : *null_board;
     }
-    auto mod_state() const noexcept -> ModState { return comment().mod_state(); }
+    auto mod_state(PostContext context = PostContext::View) const noexcept -> ModStateDetail;
+    auto content_warning(PostContext context = PostContext::View) const noexcept -> std::optional<ContentWarningDetail>;
     auto created_at() const noexcept -> std::chrono::system_clock::time_point {
       return std::chrono::system_clock::time_point(std::chrono::seconds(comment().created_at()));
     }
@@ -190,7 +245,7 @@ namespace Ludwig {
 
     static constexpr std::string_view noun = "comment";
     static auto get(
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t comment_id,
       Login login,
       OptRef<User> author = {},
@@ -201,7 +256,7 @@ namespace Ludwig {
       bool is_board_hidden = false
     ) -> CommentDetail;
     static auto get_created_at(
-      ReadTxnBase& txn,
+      ReadTxn& txn,
       uint64_t id
     ) -> std::chrono::system_clock::time_point {
       using namespace std::chrono;
@@ -221,9 +276,9 @@ namespace Ludwig {
 
     inline auto local_user() const -> const LocalUser& { return _local_user->get(); }
 
-    static auto get(ReadTxnBase& txn, uint64_t id, Login login) -> LocalUserDetail;
-    static auto get_login(ReadTxnBase& txn, uint64_t id) -> LocalUserDetail;
-    static auto get_login(ReadTxnBase& txn, std::optional<uint64_t> id) -> std::optional<LocalUserDetail> {
+    static auto get(ReadTxn& txn, uint64_t id, Login login) -> LocalUserDetail;
+    static auto get_login(ReadTxn& txn, uint64_t id) -> LocalUserDetail;
+    static auto get_login(ReadTxn& txn, std::optional<uint64_t> id) -> std::optional<LocalUserDetail> {
       return id.transform([&](auto id){return get_login(txn, id);});
     }
   };
@@ -231,6 +286,6 @@ namespace Ludwig {
   struct LocalBoardDetail : BoardDetail {
     inline auto local_board() const -> const LocalBoard& { return _local_board->get(); }
 
-    static auto get(ReadTxnBase& txn, uint64_t id, Login login) -> LocalBoardDetail;
+    static auto get(ReadTxn& txn, uint64_t id, Login login) -> LocalBoardDetail;
   };
 }

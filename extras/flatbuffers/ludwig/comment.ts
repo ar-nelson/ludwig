@@ -126,7 +126,7 @@ contentWarning(optionalEncoding?:any):string|Uint8Array|null {
 
 modState():ModState {
   const offset = this.bb!.__offset(this.bb_pos, 34);
-  return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Visible;
+  return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Normal;
 }
 
 modReason():string|null
@@ -136,8 +136,20 @@ modReason(optionalEncoding?:any):string|Uint8Array|null {
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
+boardModState():ModState {
+  const offset = this.bb!.__offset(this.bb_pos, 38);
+  return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Normal;
+}
+
+boardModReason():string|null
+boardModReason(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
+boardModReason(optionalEncoding?:any):string|Uint8Array|null {
+  const offset = this.bb!.__offset(this.bb_pos, 40);
+  return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
+}
+
 static startComment(builder:flatbuffers.Builder) {
-  builder.startObject(17);
+  builder.startObject(19);
 }
 
 static addAuthor(builder:flatbuffers.Builder, author:bigint) {
@@ -225,11 +237,19 @@ static addContentWarning(builder:flatbuffers.Builder, contentWarningOffset:flatb
 }
 
 static addModState(builder:flatbuffers.Builder, modState:ModState) {
-  builder.addFieldInt8(15, modState, ModState.Visible);
+  builder.addFieldInt8(15, modState, ModState.Normal);
 }
 
 static addModReason(builder:flatbuffers.Builder, modReasonOffset:flatbuffers.Offset) {
   builder.addFieldOffset(16, modReasonOffset, 0);
+}
+
+static addBoardModState(builder:flatbuffers.Builder, boardModState:ModState) {
+  builder.addFieldInt8(17, boardModState, ModState.Normal);
+}
+
+static addBoardModReason(builder:flatbuffers.Builder, boardModReasonOffset:flatbuffers.Offset) {
+  builder.addFieldOffset(18, boardModReasonOffset, 0);
 }
 
 static endComment(builder:flatbuffers.Builder):flatbuffers.Offset {
@@ -239,7 +259,7 @@ static endComment(builder:flatbuffers.Builder):flatbuffers.Offset {
   return offset;
 }
 
-static createComment(builder:flatbuffers.Builder, author:bigint, parent:bigint, thread:bigint, createdAt:bigint, updatedAt:bigint|null, fetchedAt:bigint|null, deletedAt:bigint|null, instance:bigint, salt:number, activityUrlOffset:flatbuffers.Offset, originalPostUrlOffset:flatbuffers.Offset, contentRawOffset:flatbuffers.Offset, contentTypeOffset:flatbuffers.Offset, contentOffset:flatbuffers.Offset, contentWarningOffset:flatbuffers.Offset, modState:ModState, modReasonOffset:flatbuffers.Offset):flatbuffers.Offset {
+static createComment(builder:flatbuffers.Builder, author:bigint, parent:bigint, thread:bigint, createdAt:bigint, updatedAt:bigint|null, fetchedAt:bigint|null, deletedAt:bigint|null, instance:bigint, salt:number, activityUrlOffset:flatbuffers.Offset, originalPostUrlOffset:flatbuffers.Offset, contentRawOffset:flatbuffers.Offset, contentTypeOffset:flatbuffers.Offset, contentOffset:flatbuffers.Offset, contentWarningOffset:flatbuffers.Offset, modState:ModState, modReasonOffset:flatbuffers.Offset, boardModState:ModState, boardModReasonOffset:flatbuffers.Offset):flatbuffers.Offset {
   Comment.startComment(builder);
   Comment.addAuthor(builder, author);
   Comment.addParent(builder, parent);
@@ -261,6 +281,8 @@ static createComment(builder:flatbuffers.Builder, author:bigint, parent:bigint, 
   Comment.addContentWarning(builder, contentWarningOffset);
   Comment.addModState(builder, modState);
   Comment.addModReason(builder, modReasonOffset);
+  Comment.addBoardModState(builder, boardModState);
+  Comment.addBoardModReason(builder, boardModReasonOffset);
   return Comment.endComment(builder);
 }
 }

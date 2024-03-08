@@ -158,7 +158,7 @@ featured():boolean {
 
 modState():ModState {
   const offset = this.bb!.__offset(this.bb_pos, 40);
-  return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Visible;
+  return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Normal;
 }
 
 modReason():string|null
@@ -168,8 +168,20 @@ modReason(optionalEncoding?:any):string|Uint8Array|null {
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
+boardModState():ModState {
+  const offset = this.bb!.__offset(this.bb_pos, 44);
+  return offset ? this.bb!.readUint8(this.bb_pos + offset) : ModState.Normal;
+}
+
+boardModReason():string|null
+boardModReason(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
+boardModReason(optionalEncoding?:any):string|Uint8Array|null {
+  const offset = this.bb!.__offset(this.bb_pos, 46);
+  return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
+}
+
 static startThread(builder:flatbuffers.Builder) {
-  builder.startObject(20);
+  builder.startObject(22);
 }
 
 static addAuthor(builder:flatbuffers.Builder, author:bigint) {
@@ -293,11 +305,19 @@ static addFeatured(builder:flatbuffers.Builder, featured:boolean) {
 }
 
 static addModState(builder:flatbuffers.Builder, modState:ModState) {
-  builder.addFieldInt8(18, modState, ModState.Visible);
+  builder.addFieldInt8(18, modState, ModState.Normal);
 }
 
 static addModReason(builder:flatbuffers.Builder, modReasonOffset:flatbuffers.Offset) {
   builder.addFieldOffset(19, modReasonOffset, 0);
+}
+
+static addBoardModState(builder:flatbuffers.Builder, boardModState:ModState) {
+  builder.addFieldInt8(20, boardModState, ModState.Normal);
+}
+
+static addBoardModReason(builder:flatbuffers.Builder, boardModReasonOffset:flatbuffers.Offset) {
+  builder.addFieldOffset(21, boardModReasonOffset, 0);
 }
 
 static endThread(builder:flatbuffers.Builder):flatbuffers.Offset {
@@ -305,7 +325,7 @@ static endThread(builder:flatbuffers.Builder):flatbuffers.Offset {
   return offset;
 }
 
-static createThread(builder:flatbuffers.Builder, author:bigint, board:bigint, titleTypeOffset:flatbuffers.Offset, titleOffset:flatbuffers.Offset, createdAt:bigint, updatedAt:bigint|null, fetchedAt:bigint|null, deletedAt:bigint|null, instance:bigint, salt:number, activityUrlOffset:flatbuffers.Offset, originalPostUrlOffset:flatbuffers.Offset, contentUrlOffset:flatbuffers.Offset, contentTextRawOffset:flatbuffers.Offset, contentTextTypeOffset:flatbuffers.Offset, contentTextOffset:flatbuffers.Offset, contentWarningOffset:flatbuffers.Offset, featured:boolean, modState:ModState, modReasonOffset:flatbuffers.Offset):flatbuffers.Offset {
+static createThread(builder:flatbuffers.Builder, author:bigint, board:bigint, titleTypeOffset:flatbuffers.Offset, titleOffset:flatbuffers.Offset, createdAt:bigint, updatedAt:bigint|null, fetchedAt:bigint|null, deletedAt:bigint|null, instance:bigint, salt:number, activityUrlOffset:flatbuffers.Offset, originalPostUrlOffset:flatbuffers.Offset, contentUrlOffset:flatbuffers.Offset, contentTextRawOffset:flatbuffers.Offset, contentTextTypeOffset:flatbuffers.Offset, contentTextOffset:flatbuffers.Offset, contentWarningOffset:flatbuffers.Offset, featured:boolean, modState:ModState, modReasonOffset:flatbuffers.Offset, boardModState:ModState, boardModReasonOffset:flatbuffers.Offset):flatbuffers.Offset {
   Thread.startThread(builder);
   Thread.addAuthor(builder, author);
   Thread.addBoard(builder, board);
@@ -330,6 +350,8 @@ static createThread(builder:flatbuffers.Builder, author:bigint, board:bigint, ti
   Thread.addFeatured(builder, featured);
   Thread.addModState(builder, modState);
   Thread.addModReason(builder, modReasonOffset);
+  Thread.addBoardModState(builder, boardModState);
+  Thread.addBoardModReason(builder, boardModReasonOffset);
   return Thread.endThread(builder);
 }
 }

@@ -35,6 +35,17 @@ function genInstance(): { id: bigint; domain: string } {
   return { id: nextId++, domain: `${faker.internet.domainWord()}.test` };
 }
 
+function randomModState(fbb: flatbuffers.Builder): [ModState, number] {
+  const mod_state = faker.helpers.maybe(
+    () => faker.helpers.arrayElement([ModState.Flagged, ModState.Locked, ModState.Removed]),
+    { probability: 0.05 }
+  ) ?? ModState.Normal;
+  return [
+    mod_state,
+    mod_state == ModState.Normal ? faker.helpers.maybe(() => fbb.createString(faker.company.catchPhrase())) ?? 0 : 0
+  ]
+}
+
 function genImageUrl(
   width: number,
   height: number = width,
@@ -129,10 +140,7 @@ function genUser(
       avatar ? fbb.createString(avatar) : 0,
       banner ? fbb.createString(banner) : 0,
       faker.datatype.boolean(0.05),
-      faker.helpers.maybe(() => faker.helpers.enumValue(ModState), {
-        probability: 0.05,
-      }) ?? ModState.Visible,
-      0,
+      ...randomModState(fbb)
     ),
   );
   return { id, data: fbb.asUint8Array() };
@@ -157,7 +165,6 @@ function genLocalUser(
   LocalUser.addEmail(fbb, email);
   LocalUser.addPasswordHash(fbb, Hash.createHash(fbb, [...hash]));
   LocalUser.addPasswordSalt(fbb, Salt.createSalt(fbb, [...PASSWORD_SALT]));
-  LocalUser.addApproved(fbb, true);
   LocalUser.addShowAvatars(fbb, isAdmin || faker.datatype.boolean(0.8));
   LocalUser.addShowKarma(fbb, isAdmin || faker.datatype.boolean(0.8));
   LocalUser.addHideCwPosts(fbb, !isAdmin && faker.datatype.boolean(0.5));
@@ -246,10 +253,7 @@ function genBoard(
       true,
       SortType.Active,
       CommentSortType.Hot,
-      faker.helpers.maybe(() => faker.helpers.enumValue(ModState), {
-        probability: 0.05,
-      }) ?? ModState.Visible,
-      0,
+      ...randomModState(fbb)
     ),
   );
   return { id, data: fbb.asUint8Array() };
@@ -325,10 +329,9 @@ function genThread(
         ? fbb.createString(faker.company.catchPhrase())
         : 0,
       false,
-      faker.helpers.maybe(() => faker.helpers.enumValue(ModState), {
-        probability: 0.05,
-      }) ?? ModState.Visible,
-      0,
+      ...randomModState(fbb),
+      ModState.Normal,
+      0
     ),
   );
   return { id, data: fbb.asUint8Array() };
@@ -386,10 +389,9 @@ function genComment(
       faker.datatype.boolean(0.05)
         ? fbb.createString(faker.company.catchPhrase())
         : 0,
-      faker.helpers.maybe(() => faker.helpers.enumValue(ModState), {
-        probability: 0.05,
-      }) ?? ModState.Visible,
-      0,
+      ...randomModState(fbb),
+      ModState.Normal,
+      0
     ),
   );
   return { id, data: fbb.asUint8Array() };

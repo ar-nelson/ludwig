@@ -11,7 +11,7 @@ namespace Ludwig {
   ) -> DB;
 
   auto zstd_db_dump_export(
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     uWS::MoveOnlyFunction<void (std::unique_ptr<uint8_t[]>&&, size_t)>&& callback
   ) -> void;
 }

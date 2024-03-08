@@ -50,120 +50,115 @@ admin():boolean {
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
-approved():boolean {
+acceptedApplication():boolean {
   const offset = this.bb!.__offset(this.bb_pos, 12);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
-acceptedApplication():boolean {
+emailVerified():boolean {
   const offset = this.bb!.__offset(this.bb_pos, 14);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
-emailVerified():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 16);
-  return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
-}
-
 invite():bigint {
-  const offset = this.bb!.__offset(this.bb_pos, 18);
+  const offset = this.bb!.__offset(this.bb_pos, 16);
   return offset ? this.bb!.readUint64(this.bb_pos + offset) : BigInt('0');
 }
 
 openLinksInNewTab():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 20);
+  const offset = this.bb!.__offset(this.bb_pos, 18);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
 sendNotificationsToEmail():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 22);
+  const offset = this.bb!.__offset(this.bb_pos, 20);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
 showAvatars():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 24);
+  const offset = this.bb!.__offset(this.bb_pos, 22);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : true;
 }
 
 showImagesThreads():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 26);
+  const offset = this.bb!.__offset(this.bb_pos, 24);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : true;
 }
 
 showImagesComments():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 28);
+  const offset = this.bb!.__offset(this.bb_pos, 26);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : true;
 }
 
 showBotAccounts():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 30);
+  const offset = this.bb!.__offset(this.bb_pos, 28);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : true;
 }
 
 showNewPostNotifs():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 32);
+  const offset = this.bb!.__offset(this.bb_pos, 30);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : true;
 }
 
 hideCwPosts():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 34);
+  const offset = this.bb!.__offset(this.bb_pos, 32);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
 expandCwPosts():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 36);
+  const offset = this.bb!.__offset(this.bb_pos, 34);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
 expandCwImages():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 38);
+  const offset = this.bb!.__offset(this.bb_pos, 36);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : false;
 }
 
 showReadPosts():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 40);
+  const offset = this.bb!.__offset(this.bb_pos, 38);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : true;
 }
 
 showKarma():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 42);
+  const offset = this.bb!.__offset(this.bb_pos, 40);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : true;
 }
 
 javascriptEnabled():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 44);
+  const offset = this.bb!.__offset(this.bb_pos, 42);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : true;
 }
 
 infiniteScrollEnabled():boolean {
-  const offset = this.bb!.__offset(this.bb_pos, 46);
+  const offset = this.bb!.__offset(this.bb_pos, 44);
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : true;
 }
 
 theme():bigint {
-  const offset = this.bb!.__offset(this.bb_pos, 48);
+  const offset = this.bb!.__offset(this.bb_pos, 46);
   return offset ? this.bb!.readUint64(this.bb_pos + offset) : BigInt('0');
 }
 
 lemmyTheme():string|null
 lemmyTheme(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 lemmyTheme(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 50);
+  const offset = this.bb!.__offset(this.bb_pos, 48);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 defaultSortType():SortType {
-  const offset = this.bb!.__offset(this.bb_pos, 52);
+  const offset = this.bb!.__offset(this.bb_pos, 50);
   return offset ? this.bb!.readUint8(this.bb_pos + offset) : SortType.Active;
 }
 
 defaultCommentSortType():CommentSortType {
-  const offset = this.bb!.__offset(this.bb_pos, 54);
+  const offset = this.bb!.__offset(this.bb_pos, 52);
   return offset ? this.bb!.readUint8(this.bb_pos + offset) : CommentSortType.Hot;
 }
 
 static startLocalUser(builder:flatbuffers.Builder) {
-  builder.startObject(26);
+  builder.startObject(25);
 }
 
 static addEmail(builder:flatbuffers.Builder, emailOffset:flatbuffers.Offset) {
@@ -182,92 +177,88 @@ static addAdmin(builder:flatbuffers.Builder, admin:boolean) {
   builder.addFieldInt8(3, +admin, +false);
 }
 
-static addApproved(builder:flatbuffers.Builder, approved:boolean) {
-  builder.addFieldInt8(4, +approved, +false);
-}
-
 static addAcceptedApplication(builder:flatbuffers.Builder, acceptedApplication:boolean) {
-  builder.addFieldInt8(5, +acceptedApplication, +false);
+  builder.addFieldInt8(4, +acceptedApplication, +false);
 }
 
 static addEmailVerified(builder:flatbuffers.Builder, emailVerified:boolean) {
-  builder.addFieldInt8(6, +emailVerified, +false);
+  builder.addFieldInt8(5, +emailVerified, +false);
 }
 
 static addInvite(builder:flatbuffers.Builder, invite:bigint) {
-  builder.addFieldInt64(7, invite, BigInt('0'));
+  builder.addFieldInt64(6, invite, BigInt('0'));
 }
 
 static addOpenLinksInNewTab(builder:flatbuffers.Builder, openLinksInNewTab:boolean) {
-  builder.addFieldInt8(8, +openLinksInNewTab, +false);
+  builder.addFieldInt8(7, +openLinksInNewTab, +false);
 }
 
 static addSendNotificationsToEmail(builder:flatbuffers.Builder, sendNotificationsToEmail:boolean) {
-  builder.addFieldInt8(9, +sendNotificationsToEmail, +false);
+  builder.addFieldInt8(8, +sendNotificationsToEmail, +false);
 }
 
 static addShowAvatars(builder:flatbuffers.Builder, showAvatars:boolean) {
-  builder.addFieldInt8(10, +showAvatars, +true);
+  builder.addFieldInt8(9, +showAvatars, +true);
 }
 
 static addShowImagesThreads(builder:flatbuffers.Builder, showImagesThreads:boolean) {
-  builder.addFieldInt8(11, +showImagesThreads, +true);
+  builder.addFieldInt8(10, +showImagesThreads, +true);
 }
 
 static addShowImagesComments(builder:flatbuffers.Builder, showImagesComments:boolean) {
-  builder.addFieldInt8(12, +showImagesComments, +true);
+  builder.addFieldInt8(11, +showImagesComments, +true);
 }
 
 static addShowBotAccounts(builder:flatbuffers.Builder, showBotAccounts:boolean) {
-  builder.addFieldInt8(13, +showBotAccounts, +true);
+  builder.addFieldInt8(12, +showBotAccounts, +true);
 }
 
 static addShowNewPostNotifs(builder:flatbuffers.Builder, showNewPostNotifs:boolean) {
-  builder.addFieldInt8(14, +showNewPostNotifs, +true);
+  builder.addFieldInt8(13, +showNewPostNotifs, +true);
 }
 
 static addHideCwPosts(builder:flatbuffers.Builder, hideCwPosts:boolean) {
-  builder.addFieldInt8(15, +hideCwPosts, +false);
+  builder.addFieldInt8(14, +hideCwPosts, +false);
 }
 
 static addExpandCwPosts(builder:flatbuffers.Builder, expandCwPosts:boolean) {
-  builder.addFieldInt8(16, +expandCwPosts, +false);
+  builder.addFieldInt8(15, +expandCwPosts, +false);
 }
 
 static addExpandCwImages(builder:flatbuffers.Builder, expandCwImages:boolean) {
-  builder.addFieldInt8(17, +expandCwImages, +false);
+  builder.addFieldInt8(16, +expandCwImages, +false);
 }
 
 static addShowReadPosts(builder:flatbuffers.Builder, showReadPosts:boolean) {
-  builder.addFieldInt8(18, +showReadPosts, +true);
+  builder.addFieldInt8(17, +showReadPosts, +true);
 }
 
 static addShowKarma(builder:flatbuffers.Builder, showKarma:boolean) {
-  builder.addFieldInt8(19, +showKarma, +true);
+  builder.addFieldInt8(18, +showKarma, +true);
 }
 
 static addJavascriptEnabled(builder:flatbuffers.Builder, javascriptEnabled:boolean) {
-  builder.addFieldInt8(20, +javascriptEnabled, +true);
+  builder.addFieldInt8(19, +javascriptEnabled, +true);
 }
 
 static addInfiniteScrollEnabled(builder:flatbuffers.Builder, infiniteScrollEnabled:boolean) {
-  builder.addFieldInt8(21, +infiniteScrollEnabled, +true);
+  builder.addFieldInt8(20, +infiniteScrollEnabled, +true);
 }
 
 static addTheme(builder:flatbuffers.Builder, theme:bigint) {
-  builder.addFieldInt64(22, theme, BigInt('0'));
+  builder.addFieldInt64(21, theme, BigInt('0'));
 }
 
 static addLemmyTheme(builder:flatbuffers.Builder, lemmyThemeOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(23, lemmyThemeOffset, 0);
+  builder.addFieldOffset(22, lemmyThemeOffset, 0);
 }
 
 static addDefaultSortType(builder:flatbuffers.Builder, defaultSortType:SortType) {
-  builder.addFieldInt8(24, defaultSortType, SortType.Active);
+  builder.addFieldInt8(23, defaultSortType, SortType.Active);
 }
 
 static addDefaultCommentSortType(builder:flatbuffers.Builder, defaultCommentSortType:CommentSortType) {
-  builder.addFieldInt8(25, defaultCommentSortType, CommentSortType.Hot);
+  builder.addFieldInt8(24, defaultCommentSortType, CommentSortType.Hot);
 }
 
 static endLocalUser(builder:flatbuffers.Builder):flatbuffers.Offset {

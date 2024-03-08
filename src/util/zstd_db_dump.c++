@@ -49,7 +49,7 @@ namespace Ludwig {
     }, search, map_size_mb);
   }
 
-  auto zstd_db_dump_export(ReadTxnBase& txn, uWS::MoveOnlyFunction<void (std::unique_ptr<uint8_t[]>&&, size_t)>&& callback) -> void {
+  auto zstd_db_dump_export(ReadTxn& txn, uWS::MoveOnlyFunction<void (std::unique_ptr<uint8_t[]>&&, size_t)>&& callback) -> void {
     unique_ptr<ZSTD_CCtx, void(*)(ZSTD_CCtx*)> cctx(ZSTD_createCCtx(), [](auto* c) { ZSTD_freeCCtx(c); });
     if (cctx == nullptr) throw runtime_error("zstd init failed");
     const size_t in_buf_size = ZSTD_CStreamInSize(), out_buf_size = ZSTD_CStreamOutSize();
