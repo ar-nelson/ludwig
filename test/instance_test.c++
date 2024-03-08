@@ -54,7 +54,6 @@ struct PopulatedInstance {
       LocalUserBuilder lu(fbb);
       lu.add_email(email);
       lu.add_admin(true);
-      lu.add_approved(true);
       fbb.Finish(lu.Finish());
     }
     txn.set_local_user(users[0], fbb.GetBufferSpan());
@@ -87,7 +86,6 @@ struct PopulatedInstance {
       auto email = fbb.CreateString("rando@ludwig.test");
       LocalUserBuilder lu(fbb);
       lu.add_email(email);
-      lu.add_approved(true);
       lu.add_show_bot_accounts(false);
       fbb.Finish(lu.Finish());
     }
@@ -116,7 +114,6 @@ struct PopulatedInstance {
       auto email = fbb.CreateString("troll@ludwig.test");
       LocalUserBuilder lu(fbb);
       lu.add_email(email);
-      lu.add_approved(true);
       fbb.Finish(lu.Finish());
     }
     txn.set_local_user(users[2], fbb.GetBufferSpan());
@@ -143,7 +140,6 @@ struct PopulatedInstance {
       auto email = fbb.CreateString("robot@ludwig.test");
       LocalUserBuilder lu(fbb);
       lu.add_email(email);
-      lu.add_approved(true);
       fbb.Finish(lu.Finish());
     }
     txn.set_local_user(users[3], fbb.GetBufferSpan());
@@ -170,6 +166,7 @@ struct PopulatedInstance {
       UserBuilder u(fbb);
       u.add_name(name);
       u.add_created_at(epoch + DAY * 5);
+      u.add_mod_state(ModState::Unapproved);
       fbb.Finish(u.Finish());
     }
     users[5] = txn.create_user(fbb.GetBufferSpan());
@@ -178,7 +175,6 @@ struct PopulatedInstance {
       const auto email = fbb.CreateString("unapproved@ludwig.test");
       LocalUserBuilder lu(fbb);
       lu.add_email(email);
-      lu.add_approved(false);
       fbb.Finish(lu.Finish());
     }
     txn.set_local_user(users[5], fbb.GetBufferSpan());
@@ -426,7 +422,7 @@ TEST_CASE_METHOD(Instance, "register and login", "[instance]") {
     REQUIRE(u.id == id);
     CHECK(u.user().name()->string_view() == "somebody");
     CHECK(u.local_user().email()->string_view() == "somebody@example.test");
-    CHECK(u.local_user().approved());
+    CHECK(u.user().mod_state() == ModState::Normal);
     CHECK_FALSE(u.local_user().accepted_application());
     CHECK_FALSE(u.local_user().email_verified());
     CHECK_FALSE(u.local_user().invite());
@@ -509,7 +505,7 @@ TEST_CASE_METHOD(Instance, "register with application", "[instance]") {
     REQUIRE(u.id == id);
     CHECK(u.user().name()->string_view() == "somebody");
     CHECK(u.local_user().email()->string_view() == "somebody@example.test");
-    CHECK_FALSE(u.local_user().approved());
+    CHECK(u.user().mod_state() == ModState::Unapproved);
     CHECK_FALSE(u.local_user().accepted_application());
     CHECK_FALSE(u.local_user().email_verified());
     CHECK_FALSE(u.local_user().invite());
@@ -529,7 +525,7 @@ TEST_CASE_METHOD(Instance, "register with application", "[instance]") {
     const auto u = LocalUserDetail::get_login(txn, id);
     CHECK(u.user().name()->string_view() == "somebody");
     CHECK(u.local_user().email()->string_view() == "somebody@example.test");
-    CHECK(u.local_user().approved());
+    CHECK(u.user().mod_state() == ModState::Approved);
     CHECK(u.local_user().accepted_application());
   }
 }
@@ -577,7 +573,7 @@ TEST_CASE_METHOD(PopulatedInstance, "register with invite", "[instance]") {
   REQUIRE(u.id == id);
   CHECK(u.user().name()->string_view() == "somebody");
   CHECK(u.local_user().email()->string_view() == "somebody@example.test");
-  CHECK(u.local_user().approved());
+  CHECK(u.user().mod_state() == ModState::Normal);
   CHECK_FALSE(u.local_user().accepted_application());
   CHECK_FALSE(u.local_user().email_verified());
   CHECK(u.local_user().invite() == optional(invite));

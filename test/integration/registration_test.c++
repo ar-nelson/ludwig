@@ -115,8 +115,8 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
                 CHECK(page.xpath_exists(R"(//nav//a[@href="/u/myuser"][contains(text(),"myuser")])"));
               }
 
-              THEN("the 'account is not yet approved' banner is not present") {
-                CHECK_FALSE(page.xpath_exists(R"(//div[@id="banner-not-approved"])"));
+              THEN("the 'account is locked' banner is not present") {
+                CHECK_FALSE(page.xpath_exists(R"(//div[@id="banner-locked"])"));
               }
             }
           }
@@ -204,8 +204,8 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
                 CHECK(page.xpath_exists(R"(//nav//a[@href="/u/myuser"][contains(text(),"myuser")])"));
               }
 
-              THEN("the 'account is not yet approved' banner is present") {
-                CHECK(page.xpath_exists(R"(//div[@id="banner-not-approved"])"));
+              THEN("the 'account is locked' banner is present") {
+                CHECK(page.xpath_exists(R"(//div[@id="banner-locked"])"));
               }
             }
           }
@@ -259,8 +259,8 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
                   CHECK(home->error().value_or("") == "");
                   auto page = html(home);
 
-                  THEN("the 'account is not yet approved' banner is not present") {
-                    CHECK_FALSE(page.xpath_exists(R"(//div[@id="banner-not-approved"])"));
+                  THEN("the 'account is locked' banner is not present") {
+                    CHECK_FALSE(page.xpath_exists(R"(//div[@id="banner-locked"])"));
                   }
                 }
               }
@@ -366,8 +366,8 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
                         CHECK(page.xpath_exists(R"(//nav//a[@href="/u/myuser"][contains(text(),"myuser")])"));
                       }
 
-                      THEN("the 'account is not yet approved' banner is not present") {
-                        CHECK_FALSE(page.xpath_exists(R"(//div[@id="banner-not-approved"])"));
+                      THEN("the 'account is locked' banner is not present") {
+                        CHECK_FALSE(page.xpath_exists(R"(//div[@id="banner-locked"])"));
                       }
                     }
                   }
@@ -484,8 +484,8 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
                         CHECK(page.xpath_exists(R"(//nav//a[@href="/u/myuser"][contains(text(),"myuser")])"));
                       }
 
-                      THEN("the 'account is not yet approved' banner is not present") {
-                        CHECK_FALSE(page.xpath_exists(R"(//div[@id="banner-not-approved"])"));
+                      THEN("the 'account is locked' banner is not present") {
+                        CHECK_FALSE(page.xpath_exists(R"(//div[@id="banner-locked"])"));
                       }
                     }
                   }

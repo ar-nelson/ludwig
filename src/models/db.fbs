@@ -29,7 +29,14 @@ enum BoardSortType : ubyte { New, Old, MostSubscribers, MostPosts, NewPosts }
 
 enum UserSortType : ubyte { New, Old, MostPosts, NewPosts }
 
-enum ModState : ubyte { Visible, Flagged, Locked, Removed }
+enum ModState : ubyte {
+  Approved = 1,
+  Normal = 2,
+  Flagged = 3,
+  Locked = 4,
+  Unapproved = 5,
+  Removed = 6
+}
 
 table RichTextImage {
   src: string (required);
@@ -71,7 +78,7 @@ table User {
   avatar_url: string;
   banner_url: string;
   bot: bool = false;
-  mod_state: ModState = Visible;
+  mod_state: ModState = Normal;
   mod_reason: string;
 }
 
@@ -97,7 +104,6 @@ table LocalUser {
   password_hash: Hash;
   password_salt: Salt;
   admin: bool = false;
-  approved: bool = false;
   accepted_application: bool = false;
   email_verified: bool = false;
   invite: uint64 = 0;
@@ -149,7 +155,7 @@ table Board {
   can_downvote: bool = true;
   default_sort_type: SortType = Active;
   default_comment_sort_type: CommentSortType = Hot;
-  mod_state: ModState = Visible;
+  mod_state: ModState = Normal;
   mod_reason: string;
 }
 
@@ -188,8 +194,10 @@ table Thread {
   content_text: [RichText];
   content_warning: string;
   featured: bool;
-  mod_state: ModState = Visible;
+  mod_state: ModState = Normal;
   mod_reason: string;
+  board_mod_state: ModState = Normal;
+  board_mod_reason: string;
 }
 
 table PostStats {
@@ -217,8 +225,10 @@ table Comment {
   content_raw: string;
   content: [RichText] (required);
   content_warning: string;
-  mod_state: ModState = Visible;
+  mod_state: ModState = Normal;
   mod_reason: string;
+  board_mod_state: ModState = Normal;
+  board_mod_reason: string;
 }
 
 table LinkCard {
@@ -238,29 +248,39 @@ table Media {
   blurhash: string;
 }
 
-enum ModActionType : byte {
-  EditPost,
-  HidePost,
-  RemovePost,
-  PurgePost,
-
-  EditBoard,
-  RemoveBoard,
-  PurgeBoard,
-
-  EditUser,
-  TempBanUserFromBoard,
-  PermBanUserFromBoard,
-  TemBanUserFromInstance,
-  PermBanUserFromInstance,
-  PurgeUser
+table ModActionEdit {
+  old_value: string;
+  new_value: string;
 }
 
-table ModAction {
-  type: ModActionType;
-  author: uint64;
+table ModActionSetState {
+  old_value: ModState = Normal;
+  new_value: ModState = Normal;
+}
+
+table ModActionPurge {
+  also_purged: [uint64];
+}
+
+union ModAction {
+  ModActionEdit,
+  ModActionSetState,
+  ModActionPurge
+}
+
+enum ModActionTargetType : byte {
+  User,
+  Board,
+  Thread,
+  Comment
+}
+
+table ModActionRecord {
+  mod: uint64;
+  timestamp: uint64;
+  target_type: ModActionTargetType;
   target: uint64;
-  content: string;
+  action: ModAction (required);
 }
 
 table Report {

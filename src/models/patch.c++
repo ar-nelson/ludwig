@@ -9,12 +9,20 @@ using flatbuffers::FlatBufferBuilder, flatbuffers::Offset, flatbuffers::String,
 
 namespace Ludwig {
 
-  static inline auto update_opt_str(FlatBufferBuilder& fbb, optional<string_view> updated, const String* existing) -> Offset<String> {
+  static inline auto update_opt_str(
+    FlatBufferBuilder& fbb,
+    optional<string_view> updated,
+    const String* existing
+  ) -> Offset<String> {
     if (!updated) return fbb.CreateString(existing);
     else return fbb.CreateString(*updated);
   }
 
-  static inline auto update_opt_str(FlatBufferBuilder& fbb, optional<optional<string_view>> updated, const String* existing) -> Offset<String> {
+  static inline auto update_opt_str(
+    FlatBufferBuilder& fbb,
+    optional<optional<string_view>> updated,
+    const String* existing
+  ) -> Offset<String> {
     if (!updated) return fbb.CreateString(existing);
     else if (!*updated) return 0;
     else return fbb.CreateString(**updated);
@@ -28,7 +36,7 @@ namespace Ludwig {
   ) {
     return updated
       .transform([](optional<string_view> sv) { return sv.transform(λx(string(x))); })
-      .value_or(types->size()
+      .value_or(types && types->size()
         ? optional(rich_text_to_plain_text(types, values))
         : nullopt)
       .transform([&](string s) { return plain_text_with_emojis_to_rich_text(fbb, s); })
@@ -49,11 +57,7 @@ namespace Ludwig {
       .value_or(tuple(0, 0, 0));
   }
 
-  auto patch_user(
-    FlatBufferBuilder& fbb,
-    const User& old,
-    const UserPatch& patch
-  ) -> Offset<User> {
+  auto patch_user(FlatBufferBuilder& fbb, const User& old, const UserPatch& patch) -> Offset<User> {
     const auto name = fbb.CreateString(old.name()),
       actor_id = fbb.CreateString(old.actor_id()),
       inbox_url = fbb.CreateString(old.inbox_url()),
@@ -88,11 +92,7 @@ namespace Ludwig {
     return b.Finish();
   }
 
-  auto patch_local_user(
-    FlatBufferBuilder& fbb,
-    const LocalUser& old,
-    LocalUserPatch&& patch
-  ) -> Offset<LocalUser> {
+  auto patch_local_user(FlatBufferBuilder& fbb, const LocalUser& old, LocalUserPatch&& patch) -> Offset<LocalUser> {
     const auto email = update_opt_str(fbb, patch.email, old.email()),
       lemmy_theme = update_opt_str(fbb, patch.lemmy_theme, old.lemmy_theme());
     LocalUserBuilder b(fbb);
@@ -111,7 +111,6 @@ namespace Ludwig {
       b.add_password_salt(old.password_salt());
     }
     b.add_admin(patch.admin.value_or(old.admin()));
-    b.add_approved(patch.approved.value_or(old.approved()));
     b.add_accepted_application(patch.accepted_application.value_or(old.accepted_application()));
     b.add_email_verified(patch.email_verified.value_or(old.email_verified()));
     b.add_invite(patch.invite.value_or(old.invite()));
@@ -136,11 +135,7 @@ namespace Ludwig {
     return b.Finish();
   }
 
-  auto patch_board(
-    FlatBufferBuilder& fbb,
-    const Board& old,
-    const BoardPatch& patch
-  ) -> Offset<Board> {
+  auto patch_board(FlatBufferBuilder& fbb, const Board& old, const BoardPatch& patch) -> Offset<Board> {
     const auto name = fbb.CreateString(old.name()),
       actor_id = fbb.CreateString(old.actor_id()),
       inbox_url = fbb.CreateString(old.inbox_url()),
@@ -196,16 +191,13 @@ namespace Ludwig {
     return b.Finish();
   }
 
-  auto patch_thread(
-    FlatBufferBuilder& fbb,
-    const Thread& old,
-    const ThreadPatch& patch
-  ) -> Offset<Thread> {
+  auto patch_thread(FlatBufferBuilder& fbb, const Thread& old, const ThreadPatch& patch) -> Offset<Thread> {
     const auto activity_url = fbb.CreateString(old.activity_url()),
       original_post_url = fbb.CreateString(old.original_post_url()),
       content_url = update_opt_str(fbb, patch.content_url, old.content_url()),
       content_warning = update_opt_str(fbb, patch.content_warning, old.content_warning()),
-      mod_reason = update_opt_str(fbb, patch.mod_reason, old.mod_reason());
+      mod_reason = update_opt_str(fbb, patch.mod_reason, old.mod_reason()),
+      board_mod_reason = update_opt_str(fbb, patch.board_mod_reason, old.board_mod_reason());
     const auto [title_type, title] =
       update_rich_text_emojis_only(fbb, patch.title, old.title_type(), old.title());
     const auto [content_text_raw, content_text_type, content_text] =
@@ -230,18 +222,17 @@ namespace Ludwig {
     b.add_featured(patch.featured.value_or(old.featured()));
     b.add_mod_state(patch.mod_state.value_or(old.mod_state()));
     b.add_mod_reason(mod_reason);
+    b.add_board_mod_state(patch.board_mod_state.value_or(old.board_mod_state()));
+    b.add_board_mod_reason(board_mod_reason);
     return b.Finish();
   }
 
-  auto patch_comment(
-    FlatBufferBuilder& fbb,
-    const Comment& old,
-    const CommentPatch& patch
-  ) -> Offset<Comment> {
+  auto patch_comment(FlatBufferBuilder& fbb, const Comment& old, const CommentPatch& patch) -> Offset<Comment> {
     const auto activity_url = fbb.CreateString(old.activity_url()),
       original_post_url = fbb.CreateString(old.original_post_url()),
       content_warning = update_opt_str(fbb, patch.content_warning, old.content_warning()),
-      mod_reason = update_opt_str(fbb, patch.mod_reason, old.mod_reason());
+      mod_reason = update_opt_str(fbb, patch.mod_reason, old.mod_reason()),
+      board_mod_reason = update_opt_str(fbb, patch.board_mod_reason, old.board_mod_reason());
     const auto [content_raw, content_type, content] =
       update_rich_text(fbb, patch.content, old.content_raw());
     CommentBuilder b(fbb);
@@ -261,6 +252,8 @@ namespace Ludwig {
     b.add_content_warning(content_warning);
     b.add_mod_state(patch.mod_state.value_or(old.mod_state()));
     b.add_mod_reason(mod_reason);
+    b.add_board_mod_state(patch.board_mod_state.value_or(old.board_mod_state()));
+    b.add_board_mod_reason(board_mod_reason);
     return b.Finish();
   }
 }

@@ -14,12 +14,12 @@ namespace Ludwig {
   struct LocalUserPatch {
     std::optional<std::optional<std::string_view>> email, lemmy_theme;
     std::optional<SecretString> password;
-    std::optional<bool>
-      admin, approved, accepted_application, email_verified,
+    std::optional<bool> admin, accepted_application, email_verified,
       open_links_in_new_tab, send_notifications_to_email, show_avatars,
       show_images_threads, show_images_comments, show_bot_accounts,
       show_new_post_notifs, hide_cw_posts, expand_cw_posts, expand_cw_images,
-      show_read_posts, show_karma, javascript_enabled, infinite_scroll_enabled;
+      show_read_posts, show_karma, javascript_enabled,
+      infinite_scroll_enabled;
     std::optional<uint64_t> invite, theme;
     std::optional<SortType> default_sort_type;
     std::optional<CommentSortType> default_comment_sort_type;
@@ -45,18 +45,19 @@ namespace Ludwig {
     // TODO: Allow moving between boards?
     std::optional<std::string_view> title;
     std::optional<std::optional<std::string_view>>
-      content_url, content_text, content_warning, mod_reason;
+      content_url, content_text, content_warning, mod_reason, board_mod_reason;
     std::optional<uint64_t> updated_at, fetched_at, deleted_at;
     std::optional<bool> featured;
-    std::optional<ModState> mod_state;
+    std::optional<ModState> mod_state, board_mod_state;
   };
 
   struct CommentPatch {
     // TODO: Allow moving between threads?
     std::optional<std::string_view> content;
-    std::optional<std::optional<std::string_view>> content_warning, mod_reason;
+    std::optional<std::optional<std::string_view>>
+      content_warning, mod_reason, board_mod_reason;
     std::optional<uint64_t> updated_at, fetched_at, deleted_at;
-    std::optional<ModState> mod_state;
+    std::optional<ModState> mod_state, board_mod_state;
   };
 
   auto patch_user(

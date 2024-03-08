@@ -74,7 +74,7 @@ namespace Ludwig {
     }
   };
 
-  class ReadTxnBase;
+  class ReadTxn;
   class ReadTxnImpl;
   class WriteTxn;
 
@@ -108,22 +108,22 @@ namespace Ludwig {
     auto open_read_txn() -> ReadTxnImpl;
     auto open_write_txn() -> WriteTxn;
 
-    friend class ReadTxnBase;
+    friend class ReadTxn;
     friend class ReadTxnImpl;
     friend class WriteTxn;
   };
 
-  class ReadTxnBase {
+  class ReadTxn {
   protected:
     DB& db;
     MDB_txn* txn;
-    ReadTxnBase(DB& db) : db(db) {}
+    ReadTxn(DB& db) : db(db) {}
   public:
-    ReadTxnBase(const ReadTxnBase& from) = delete;
-    auto operator=(const ReadTxnBase&) = delete;
-    ReadTxnBase(ReadTxnBase&& from) : db(from.db), txn(from.txn) { from.txn = nullptr; }
-    ReadTxnBase& operator=(ReadTxnBase&& from) = delete;
-    virtual ~ReadTxnBase() = default;
+    ReadTxn(const ReadTxn& from) = delete;
+    auto operator=(const ReadTxn&) = delete;
+    ReadTxn(ReadTxn&& from) : db(from.db), txn(from.txn) { from.txn = nullptr; }
+    ReadTxn& operator=(ReadTxn&& from) = delete;
+    virtual ~ReadTxn() = default;
 
     using OptCursor = const std::optional<Cursor>&;
     using OptKV = const std::optional<std::pair<Cursor, uint64_t>>&;
@@ -221,15 +221,15 @@ namespace Ludwig {
     friend class ReadTxnImpl;
   };
 
-  class ReadTxnImpl : public ReadTxnBase {
+  class ReadTxnImpl : public ReadTxn {
   protected:
-    ReadTxnImpl(DB& db) : ReadTxnBase(db) {
+    ReadTxnImpl(DB& db) : ReadTxn(db) {
       if (auto err = mdb_txn_begin(db.env, nullptr, MDB_RDONLY, &txn)) {
         throw DBError("Failed to open read transaction", err);
       }
     }
   public:
-    ReadTxnImpl(ReadTxnImpl&& from) : ReadTxnBase(std::move(from)) {};
+    ReadTxnImpl(ReadTxnImpl&& from) : ReadTxn(std::move(from)) {};
     ~ReadTxnImpl() {
       if (txn != nullptr) mdb_txn_abort(txn);
     }
@@ -237,18 +237,18 @@ namespace Ludwig {
     friend class DB;
   };
 
-  class WriteTxn : public ReadTxnBase {
+  class WriteTxn : public ReadTxn {
   protected:
     bool committed = false;
     auto delete_child_comment(uint64_t id, uint64_t board_id) -> uint64_t;
 
-    WriteTxn(DB& db): ReadTxnBase(db) {
+    WriteTxn(DB& db): ReadTxn(db) {
       if (auto err = mdb_txn_begin(db.env, nullptr, 0, &txn)) {
         throw DBError("Failed to open write transaction", err);
       }
     };
   public:
-    WriteTxn(WriteTxn&& from) : ReadTxnBase(std::move(from)), committed(from.committed) {}
+    WriteTxn(WriteTxn&& from) : ReadTxn(std::move(from)), committed(from.committed) {}
     ~WriteTxn() {
       if (!committed) {
         spdlog::warn("Aborting uncommitted write transaction");

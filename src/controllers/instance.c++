@@ -65,7 +65,7 @@ namespace Ludwig {
   template <class T>
   static inline auto ranked_active(
     Writer<T> out,
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     DBIter iter_by_new,
     DBIter iter_by_top,
     function<optional<T> (uint64_t)> get_entry,
@@ -109,7 +109,7 @@ namespace Ludwig {
   template <class T>
   static inline auto ranked_hot(
     Writer<T> out,
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     DBIter iter_by_new,
     DBIter iter_by_top,
     function<optional<T> (uint64_t)> get_entry,
@@ -149,7 +149,7 @@ namespace Ludwig {
   template <class T>
   static inline auto ranked_new_comments(
     Writer<T> out,
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     DBIter iter_by_new,
     function<optional<T> (uint64_t)> get_entry,
     optional<chrono::system_clock::time_point> from = {},
@@ -191,7 +191,7 @@ namespace Ludwig {
   }
 
   static auto comment_tree(
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     CommentTree& tree,
     uint64_t parent,
     CommentSortType sort,
@@ -282,7 +282,7 @@ namespace Ludwig {
     }
   }
 
-  static inline auto expect_post_stats(ReadTxnBase& txn, uint64_t post_id) -> const PostStats& {
+  static inline auto expect_post_stats(ReadTxn& txn, uint64_t post_id) -> const PostStats& {
     const auto stats = txn.get_post_stats(post_id);
     if (!stats) {
       spdlog::error("Post {:x} has no corresponding post_stats (database is inconsistent!)", post_id);
@@ -338,13 +338,12 @@ namespace Ludwig {
 
   auto InstanceController::can_create_board(Login login) -> bool {
     return login && ((!site_detail()->board_creation_admin_only &&
-                      login->local_user().approved() &&
-                      login->user().mod_state() < ModState::Locked) ||
+                      login->mod_state().state < ModState::Locked) ||
                      login->local_user().admin());
   }
 
   auto InstanceController::validate_or_regenerate_session(
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     uint64_t session_id,
     string_view ip,
     string_view user_agent
@@ -441,7 +440,7 @@ namespace Ludwig {
     return { .user_id = user_id, .session_id = session_id, .expiration = SECONDS(expiration) };
   }
   auto InstanceController::thread_detail(
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     uint64_t id,
     CommentSortType sort,
     Login login,
@@ -460,7 +459,7 @@ namespace Ludwig {
     return p;
   }
   auto InstanceController::comment_detail(
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     uint64_t id,
     CommentSortType sort,
     Login login,
@@ -477,29 +476,29 @@ namespace Ludwig {
     );
     return p;
   }
-  auto InstanceController::user_detail(ReadTxnBase& txn, uint64_t id, Login login) -> UserDetail {
+  auto InstanceController::user_detail(ReadTxn& txn, uint64_t id, Login login) -> UserDetail {
     const auto detail = UserDetail::get(txn, id, login);
     if (!detail.can_view(login)) throw ApiError("Cannot view this user", 403);
     return detail;
   }
-  auto InstanceController::local_user_detail(ReadTxnBase& txn, uint64_t id, Login login) -> LocalUserDetail {
+  auto InstanceController::local_user_detail(ReadTxn& txn, uint64_t id, Login login) -> LocalUserDetail {
     const auto detail = LocalUserDetail::get(txn, id, {});
     if (!detail.can_view(login)) throw ApiError("Cannot view this user", 403);
     return detail;
   }
-  auto InstanceController::board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> BoardDetail {
+  auto InstanceController::board_detail(ReadTxn& txn, uint64_t id, Login login) -> BoardDetail {
     const auto detail = BoardDetail::get(txn, id, {});
     if (!detail.can_view(login)) throw ApiError("Cannot view this board", 403);
     return detail;
   }
-  auto InstanceController::local_board_detail(ReadTxnBase& txn, uint64_t id, Login login) -> LocalBoardDetail {
+  auto InstanceController::local_board_detail(ReadTxn& txn, uint64_t id, Login login) -> LocalBoardDetail {
     const auto detail = LocalBoardDetail::get(txn, id, {});
     if (!detail.can_view(login)) throw ApiError("Cannot view this board", 403);
     return detail;
   }
   auto InstanceController::list_users(
     Writer<UserDetail> out,
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     UserSortType sort,
     bool local_only,
     Login login,
@@ -538,7 +537,7 @@ namespace Ludwig {
   }
   auto InstanceController::list_applications(
     Writer<pair<const Application&, LocalUserDetail>> out,
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     Login login,
     optional<uint64_t> from,
     uint16_t limit
@@ -561,7 +560,7 @@ namespace Ludwig {
   }
   auto InstanceController::list_invites_from_user(
     Writer<pair<uint64_t, const Invite&>> out,
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     uint64_t user_id,
     PageCursor from,
     uint16_t limit
@@ -580,7 +579,7 @@ namespace Ludwig {
   }
   auto InstanceController::list_boards(
     Writer<BoardDetail> out,
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     BoardSortType sort,
     bool local_only,
     bool subscribed_only,
@@ -651,7 +650,7 @@ namespace Ludwig {
   }
   auto InstanceController::list_board_threads(
     Writer<ThreadDetail> out,
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     uint64_t board_id,
     SortType sort,
     Login login,
@@ -742,7 +741,7 @@ namespace Ludwig {
   }
   auto InstanceController::list_board_comments(
     Writer<CommentDetail> out,
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     uint64_t board_id,
     SortType sort,
     Login login,
@@ -827,7 +826,7 @@ namespace Ludwig {
   }
   auto InstanceController::list_feed_threads(
     Writer<ThreadDetail> out,
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     uint64_t feed_id,
     SortType sort,
     Login login,
@@ -934,7 +933,7 @@ namespace Ludwig {
   }
   auto InstanceController::list_feed_comments(
     Writer<CommentDetail> out,
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     uint64_t feed_id,
     SortType sort,
     Login login,
@@ -1037,7 +1036,7 @@ namespace Ludwig {
   }
   auto InstanceController::list_user_threads(
     Writer<ThreadDetail> out,
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     uint64_t user_id,
     UserPostSortType sort,
     Login login,
@@ -1077,7 +1076,7 @@ namespace Ludwig {
   }
   auto InstanceController::list_user_comments(
     Writer<CommentDetail> out,
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     uint64_t user_id,
     UserPostSortType sort,
     Login login,
@@ -1116,7 +1115,7 @@ namespace Ludwig {
     (*search_engine)->search(query, std::forward<SearchEngine::Callback>(callback));
   }
   auto InstanceController::search_step_2(
-    ReadTxnBase& txn,
+    ReadTxn& txn,
     const vector<SearchResult>& results,
     size_t max_len,
     Login login
@@ -1271,7 +1270,7 @@ namespace Ludwig {
     txn.commit();
     event_bus->dispatch(Event::SiteUpdate);
   }
-  auto InstanceController::first_run_setup_options(ReadTxnBase& txn) -> FirstRunSetupOptions {
+  auto InstanceController::first_run_setup_options(ReadTxn& txn) -> FirstRunSetupOptions {
     return {
       .admin_exists = !txn.get_admin_list().empty(),
       .default_board_exists = !!txn.get_setting_int(SettingsKey::default_board_id),
@@ -1358,6 +1357,12 @@ namespace Ludwig {
       b.add_name(name_s);
       b.add_bot(is_bot);
       b.add_salt(salt.n);
+      if (is_approved == IsApproved::Yes) {
+        b.add_mod_state(ModState::Approved);
+      } else {
+        const auto* site = site_detail();
+        if (site->registration_application_required) b.add_mod_state(ModState::Unapproved);
+      }
       fbb.Finish(b.Finish());
     }
     const auto user_id = txn.create_user(fbb.GetBufferSpan());
@@ -1373,7 +1378,6 @@ namespace Ludwig {
       if (email_s) b.add_email(*email_s);
       b.add_password_hash(&hash_struct);
       b.add_password_salt(&salt_struct);
-      b.add_approved(is_approved == IsApproved::Yes);
       b.add_admin(is_admin == IsAdmin::Yes);
       if (invite) b.add_invite(*invite);
       fbb.Finish(b.Finish());
@@ -1403,9 +1407,8 @@ namespace Ludwig {
       }
     }
     auto txn = db->open_write_txn();
-    const bool approved = !site->registration_application_required;
     const auto user_id = create_local_user_internal(
-      txn, username, email, std::move(password), false, approved ? IsApproved::Yes : IsApproved::No, IsAdmin::No, invite_id
+      txn, username, email, std::move(password), false, IsApproved::No, IsAdmin::No, invite_id
     );
     if (invite_id) {
       const auto invite_opt = txn.get_invite(*invite_id);
@@ -1444,6 +1447,7 @@ namespace Ludwig {
       fbb.Finish(b.Finish());
       txn.create_application(user_id, fbb.GetBufferSpan());
     }
+    bool approved = txn.get_user(user_id).value().get().mod_state() < ModState::Unapproved;
     txn.commit();
     return { user_id, approved };
   }
@@ -1520,21 +1524,26 @@ namespace Ludwig {
   }
   auto InstanceController::approve_local_user_application(uint64_t user_id, optional<uint64_t> as_user) -> void {
     FlatBufferBuilder fbb;
-    LocalUserPatch patch { .accepted_application = true };
     auto txn = db->open_write_txn();
     if (as_user && !LocalUserDetail::get_login(txn, *as_user).local_user().admin()) {
       throw ApiError("Only admins can approve user applications", 403);
     }
     const auto old_opt = txn.get_local_user(user_id);
-    if (!old_opt) throw ApiError("User does not exist", 410);
+    if (!old_opt) throw ApiError("User does not exist", 400);
     const auto& old = old_opt->get();
     if (old.accepted_application()) throw ApiError("User's application has already been accepted", 409);
-    if (!txn.get_application(user_id)) throw ApiError("User does not have an application to approve", 410);
-    fbb.Finish(patch_local_user(fbb, old, {
-      .approved = old.approved() || site_detail()->registration_application_required,
-      .accepted_application = true
-    }));
+    if (!txn.get_application(user_id)) throw ApiError("User does not have an application to approve", 400);
+    fbb.Finish(patch_local_user(fbb, old, { .accepted_application = true }));
     txn.set_local_user(user_id, fbb.GetBufferSpan());
+    if (site_detail()->registration_application_required) {
+      const auto old_opt = txn.get_user(user_id);
+      if (!old_opt) throw ApiError("User does not exist", 400);
+      const auto& old = old_opt->get();
+      fbb.Clear();
+      // TODO: Check for other approval requirements, like email verification
+      fbb.Finish(patch_user(fbb, old, { .mod_state = ModState::Approved }));
+      txn.set_user(user_id, fbb.GetBufferSpan());
+    }
     txn.commit();
   }
   auto InstanceController::reject_local_user_application(uint64_t user_id, std::optional<uint64_t> as_user) -> void {
@@ -1543,10 +1552,10 @@ namespace Ludwig {
       throw ApiError("Only admins can reject user applications", 403);
     }
     const auto user_opt = txn.get_local_user(user_id);
-    if (!user_opt) throw ApiError("User does not exist", 410);
+    if (!user_opt) throw ApiError("User does not exist", 400);
     const auto& user = user_opt->get();
     if (user.accepted_application()) throw ApiError("User's application has already been accepted", 409);
-    if (!txn.get_application(user_id)) throw ApiError("User does not have an application to reject", 410);
+    if (!txn.get_application(user_id)) throw ApiError("User does not have an application to reject", 400);
     txn.delete_user(user_id);
     txn.commit();
   }
@@ -1585,7 +1594,7 @@ namespace Ludwig {
       if (site_detail()->invite_admin_only && !user->local_user().admin()) {
         throw ApiError("Only admins can create invite codes", 403);
       }
-      if (user->mod_state() >= ModState::Locked) {
+      if (user->mod_state().state >= ModState::Locked) {
         throw ApiError("User does not have permission to create invite codes", 403);
       }
     }
