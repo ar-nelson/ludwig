@@ -213,14 +213,13 @@ namespace Ludwig {
     return maybe_local_board() && login && (login->local_user().admin() || login->id == maybe_local_board()->get().owner());
   }
   auto ThreadDetail::should_fetch_card() const noexcept -> bool {
-    using namespace chrono;
     if (!thread().content_url()) return false;
     const auto url = Url::parse(thread().content_url()->str());
     if (!url || !url->is_http_s()) return false;
     const auto& card = link_card();
     return !card.fetch_complete() &&
       card.fetch_tries() < FETCH_MAX_TRIES &&
-      system_clock::now() > system_clock::time_point(seconds(card.last_fetch_at().value_or(0))) + FETCH_BACKOFF_DELAYS[card.fetch_tries()];
+      now_t() > uint_to_timestamp(card.last_fetch_at().value_or(0)) + FETCH_BACKOFF_DELAYS[card.fetch_tries()];
   }
 
   static inline auto opt_str(string_view s) -> optional<string> {
@@ -245,6 +244,7 @@ namespace Ludwig {
       .home_page_type = static_cast<HomePageType>(txn.get_setting_int(SettingsKey::home_page_type)),
       .default_board_id = txn.get_setting_int(SettingsKey::default_board_id),
       .post_max_length = txn.get_setting_int(SettingsKey::post_max_length),
+      .remote_post_max_length = txn.get_setting_int(SettingsKey::remote_post_max_length),
       .created_at = txn.get_setting_int(SettingsKey::created_at),
       .updated_at = txn.get_setting_int(SettingsKey::updated_at),
       .setup_done = !!txn.get_setting_int(SettingsKey::setup_done),

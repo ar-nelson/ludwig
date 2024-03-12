@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.4.1)
+cmake_minimum_required (VERSION 3.5)
 
 project (ludwig VERSION 0.1 LANGUAGES C CXX ASM)
 
@@ -97,15 +97,17 @@ if (${CMAKE_BUILD_TYPE} MATCHES Debug)
   if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
     # ubsan doesn't work on android
     set (buildtype_compile_options
+      -D_FORTIFY_SOURCE=0
       -DLUDWIG_DEBUG=1
       -g
       -O0
       -fno-omit-frame-pointer
       -fsanitize=address
     )
-    set (link_options -fsanitize=address -stdlib=libc++ -lc++abi)
+    set (link_options -fuse-ld=mold -fsanitize=address)
   else ()
     set (buildtype_compile_options
+      -D_FORTIFY_SOURCE=0
       -DLUDWIG_DEBUG=1
       -g
       -O0
@@ -113,14 +115,35 @@ if (${CMAKE_BUILD_TYPE} MATCHES Debug)
       -fsanitize=address,undefined
       -fno-sanitize=alignment
     )
-    set (link_options -fsanitize=address,undefined -fno-sanitize=alignment -stdlib=libc++ -lc++abi)
+    set (link_options
+      -fuse-ld=mold
+      -fsanitize=address,undefined
+      -fno-sanitize=alignment
+    )
   endif ()
 else ()
-  set (buildtype_compile_options -O3)
-  set (link_options -stdlib=libc++ -lc++abi)
+  set (buildtype_compile_options
+    -D_FORTIFY_SOURCE=3
+    -D_GLIBCXX_ASSERTIONS
+    -O3
+    -fstrict-flex-arrays=3
+    -fstack-clash-protection
+    -fstack-protector-strong
+    -flto
+    -fPIE
+  )
+  set (link_options
+    -fuse-ld=mold
+    -flto
+    -Wl,-z,nodlopen
+    -Wl,-z,noexecstack
+    -Wl,-z,relro
+    -Wl,-z,now
+  )
 endif ()
 
 set (compile_options
+  -U_FORTIFY_SOURCE
   ${buildtype_compile_options}
   -Wall
   -Wextra
@@ -156,22 +179,23 @@ set (ludwig_common_src
 )
 
 set (ludwig_libs
-  asio
+  vendor-misc
   crypto
-  flatbuffers
+  ssl
   giflib
-  imagedec
   jpeg
+  png_static
+  webp
+  imagedec
+  asio
+  flatbuffers
   LibXml2
   libzstd_static
-  png_static
   sentencepiece-static
   simdjson_static
   spdlog
-  ssl
   uWS
-  webp
-  vendor-misc
+  -static
 )
 
 add_executable(ludwig src/ludwig.c++ ${ludwig_common_src})
@@ -179,11 +203,6 @@ add_dependencies(ludwig static_generated flatbuffers_generated)
 target_compile_options(ludwig PRIVATE ${compile_options})
 target_link_options(ludwig PRIVATE ${link_options})
 target_include_directories(ludwig PUBLIC src/ "${PROJECT_BINARY_DIR}/generated/")
-if (${CMAKE_BUILD_TYPE} MATCHES Release)
-  # Only build a fully static binary in release mode.
-  # Debug mode needs to dynamically link asan.
-  target_link_libraries(ludwig PRIVATE "-static")
-endif ()
 target_link_libraries(ludwig PRIVATE ${ludwig_libs})
 
 if (${CMAKE_BUILD_TYPE} MATCHES Debug)
@@ -191,6 +210,7 @@ if (${CMAKE_BUILD_TYPE} MATCHES Debug)
   # Unfortunately, Catch2's templates are so complex that building tests will
   # frequently trigger Android's OOM killer and crash Termux.
   if (NOT ${CMAKE_SYSTEM_NAME} MATCHES "Android")
+    find_package(Catch2 3 REQUIRED)
     file(GLOB_RECURSE test_files "test/*.c++")
     add_executable(test ${ludwig_common_src} ${test_files})
     add_dependencies(test static_generated flatbuffers_generated)

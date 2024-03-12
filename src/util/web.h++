@@ -503,19 +503,19 @@ namespace fmt {
         if (i > start) std::copy(e.str.begin() + start, e.str.begin() + i, ctx.out());
         switch (e.str[i]) {
           case '<':
-            format_to(ctx.out(), "&lt;");
+            fmt::format_to(ctx.out(), "&lt;");
             break;
           case '>':
-            format_to(ctx.out(), "&gt;");
+            fmt::format_to(ctx.out(), "&gt;");
             break;
           case '\'':
-            format_to(ctx.out(), "&apos;");
+            fmt::format_to(ctx.out(), "&apos;");
             break;
           case '"':
-            format_to(ctx.out(), "&quot;");
+            fmt::format_to(ctx.out(), "&quot;");
             break;
           case '&':
-            format_to(ctx.out(), "&amp;");
+            fmt::format_to(ctx.out(), "&amp;");
             break;
         }
       }

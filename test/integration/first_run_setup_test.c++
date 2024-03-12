@@ -10,7 +10,7 @@
   "&registation_enabled=true" \
   "&registation_application_required=true" \
   "&application_question=Who are you" \
-  "&max_post_length=100000" \
+  "&post_max_length=100000" \
   "&javascript_enabled=true" \
   "&infinite_scroll_enabled=true"
 
@@ -99,7 +99,7 @@ SCENARIO_METHOD(IntegrationTest, "first-run setup", "[integration][first_run]") 
             "&registation_enabled=true"
             "&registation_application_required=true"
             "&application_question=Who are you"
-            "&max_post_length=100000"
+            "&post_max_length=100000"
             "&javascript_enabled=true"
             "&infinite_scroll_enabled=true"
           ).dispatch_and_wait();

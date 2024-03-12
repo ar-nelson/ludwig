@@ -1712,7 +1712,7 @@ namespace Ludwig {
     const auto& thread = thread_opt->get();
     const auto author_id = comment.author(), board_id = thread.board(), parent_id = comment.parent(),
       created_at = comment.created_at(), instance = comment.instance();
-    const system_clock::time_point created_at_t{seconds(created_at)};
+    const auto created_at_t = uint_to_timestamp(created_at);
     if (const auto old_comment_opt = get_comment(id)) {
       spdlog::debug("Updating comment {:x} (parent {:x}, author {:x})", id, parent_id, author_id);
       assert(!!stats_opt);
@@ -1753,11 +1753,11 @@ namespace Ludwig {
       for (OptRef<Comment> comment_opt = {comment}; comment_opt; comment_opt = get_comment(comment_opt->get().parent())) {
         const auto parent = comment_opt->get().parent();
         if (const auto parent_stats_opt = get_post_stats(parent)) {
-          system_clock::time_point parent_created_at;
+          Timestamp parent_created_at;
           if (const auto parent_opt = get_comment(parent)) {
-            parent_created_at = system_clock::time_point(seconds(parent_opt->get().created_at()));
+            parent_created_at = uint_to_timestamp(parent_opt->get().created_at());
           } else if (parent == comment.thread()) {
-            parent_created_at = system_clock::time_point(seconds(thread.created_at()));
+            parent_created_at = uint_to_timestamp(thread.created_at());
           } else continue;
           const auto& s = parent_stats_opt->get();
           const bool is_active = created_at_t >= parent_created_at &&

@@ -1,8 +1,13 @@
 #pragma once
 #include <util/common.h++>
 #include <spdlog/fmt/chrono.h>
-#include <flatbuffers/util.h>
 #include <simdjson.h>
+
+// util.h clearly wasn't meant to be accessed like this, so this undef is
+// necessary to build with musl because it no longer has the config
+// information from cmake and doesn't know that musl doesn't define strtoull_l.
+#undef FLATBUFFERS_LOCALE_INDEPENDENT
+#include <flatbuffers/util.h>
 
 namespace Ludwig {
   static inline auto pad_json_string(std::string& str) -> void {
@@ -54,11 +59,11 @@ namespace Ludwig {
     static auto to_json(double v, std::string& out) { out += flatbuffers::NumToString(v); }
     static auto from_json(simdjson::ondemand::value value) -> double { return value.get_double().value(); }
   };
-  template <> struct JsonSerialize<std::chrono::system_clock::time_point> {
-    static auto to_json(std::chrono::system_clock::time_point v, std::string& out) {
+  template <> struct JsonSerialize<Timestamp> {
+    static auto to_json(Timestamp v, std::string& out) {
       fmt::format_to(std::back_inserter(out), "\"{:%FT%TZ}\"", fmt::gmtime(v));
     }
-    static auto from_json(simdjson::ondemand::value value) -> std::chrono::system_clock::time_point {
+    static auto from_json(simdjson::ondemand::value value) -> Timestamp {
       std::string str(std::string(value.get_string().value()));
       std::istringstream ss(str);
       std::tm t = {};

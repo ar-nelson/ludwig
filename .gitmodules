@@ -1,6 +1,3 @@
-[submodule "vendor/catch2"]
-	path = vendor/catch2
-	url = https://github.com/catchorg/Catch2.git
 [submodule "vendor/flatbuffers"]
 	path = vendor/flatbuffers
 	url = https://github.com/google/flatbuffers.git

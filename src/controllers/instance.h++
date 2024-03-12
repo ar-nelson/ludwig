@@ -33,7 +33,7 @@ namespace Ludwig {
 
   struct LoginResponse {
     uint64_t user_id, session_id;
-    std::chrono::system_clock::time_point expiration;
+    Timestamp expiration;
   };
 
   struct PageCursor {
@@ -109,7 +109,7 @@ namespace Ludwig {
         color_accent_dim, color_accent_hover;
     std::optional<std::optional<std::string_view>> icon_url, banner_url,
         application_question;
-    std::optional<uint64_t> max_post_length;
+    std::optional<uint64_t> post_max_length, remote_post_max_length;
     std::optional<HomePageType> home_page_type;
     std::optional<bool> javascript_enabled, infinite_scroll_enabled,
         votes_enabled, downvotes_enabled, cws_enabled, require_login_to_view,
@@ -128,8 +128,11 @@ namespace Ludwig {
           if (!url->is_http_s()) throw ApiError("Banner URL must be HTTP(S)", 400);
         } else throw ApiError("Banner URL is not a valid URL", 400);
       }
-      if (max_post_length && *max_post_length < 512) {
+      if (post_max_length && *post_max_length < 512) {
         throw ApiError("Max post length cannot be less than 512", 400);
+      }
+      if (remote_post_max_length && *remote_post_max_length < 512) {
+        throw ApiError("Max remote post length cannot be less than 512", 400);
       }
       if (
         (color_accent && !regex_match(color_accent->begin(), color_accent->end(), color_hex_regex)) ||
@@ -197,7 +200,7 @@ namespace Ludwig {
     std::optional<std::shared_ptr<SearchEngine>> search_engine;
     std::optional<std::pair<Hash, Salt>> first_run_admin_password;
     std::atomic<const SiteDetail*> cached_site_detail;
-    std::map<uint64_t, std::pair<uint64_t, std::chrono::system_clock::time_point>> password_reset_tokens;
+    std::map<uint64_t, std::pair<uint64_t, Timestamp>> password_reset_tokens;
     std::mutex password_reset_tokens_mutex;
 
     auto create_local_user_internal(
@@ -209,6 +212,31 @@ namespace Ludwig {
       IsApproved is_approved,
       IsAdmin is_admin,
       std::optional<uint64_t> invite
+    ) -> uint64_t;
+    auto create_thread_internal(
+      WriteTxn& txn,
+      uint64_t author,
+      uint64_t board,
+      std::optional<std::string_view> remote_post_url,
+      std::optional<std::string_view> remote_activity_url,
+      Timestamp created_at,
+      std::optional<Timestamp> updated_at,
+      std::string_view title,
+      std::optional<std::string_view> submission_url,
+      std::optional<std::string_view> text_content_markdown,
+      std::optional<std::string_view> content_warning = {}
+    ) -> uint64_t;
+    auto create_comment_internal(
+      WriteTxn& txn,
+      uint64_t author,
+      uint64_t parent,
+      uint64_t thread,
+      std::optional<std::string_view> remote_post_url,
+      std::optional<std::string_view> remote_activity_url,
+      Timestamp created_at,
+      std::optional<Timestamp> updated_at,
+      std::string_view text_content_markdown,
+      std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
 
     class SearchFunctor;
@@ -414,6 +442,18 @@ namespace Ludwig {
       bool is_local_only = false
     ) -> uint64_t;
     auto update_local_board(uint64_t id, std::optional<uint64_t> as_user, const LocalBoardUpdate& update) -> void;
+    auto create_thread(
+      uint64_t author,
+      uint64_t board,
+      std::optional<std::string_view> remote_post_url,
+      std::optional<std::string_view> remote_activity_url,
+      Timestamp created_at,
+      std::optional<Timestamp> updated_at,
+      std::string_view title,
+      std::optional<std::string_view> submission_url,
+      std::optional<std::string_view> text_content_markdown,
+      std::optional<std::string_view> content_warning = {}
+    ) -> uint64_t;
     auto create_local_thread(
       uint64_t author,
       uint64_t board,
@@ -422,14 +462,24 @@ namespace Ludwig {
       std::optional<std::string_view> text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
-    auto update_local_thread(uint64_t id, std::optional<uint64_t> as_user, const ThreadUpdate& update) -> void;
+    auto update_thread(uint64_t id, std::optional<uint64_t> as_user, const ThreadUpdate& update) -> void;
+    auto create_comment(
+      uint64_t author,
+      uint64_t parent,
+      std::optional<std::string_view> remote_post_url,
+      std::optional<std::string_view> remote_activity_url,
+      Timestamp created_at,
+      std::optional<Timestamp> updated_at,
+      std::string_view text_content_markdown,
+      std::optional<std::string_view> content_warning = {}
+    ) -> uint64_t;
     auto create_local_comment(
       uint64_t author,
       uint64_t parent,
       std::string_view text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
-    auto update_local_comment(uint64_t id, std::optional<uint64_t> as_user, const CommentUpdate& update) -> void;
+    auto update_comment(uint64_t id, std::optional<uint64_t> as_user, const CommentUpdate& update) -> void;
     auto vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;
     auto subscribe(uint64_t user_id, uint64_t board_id, bool subscribed = true) -> void;
     auto save_post(uint64_t user_id, uint64_t post_id, bool saved = true) -> void;

@@ -16,7 +16,7 @@ namespace Ludwig {
 
   auto make_jwt(JwtPayload payload, JwtSecret secret) -> std::string;
 
-  auto make_jwt(uint64_t session_id, std::chrono::system_clock::time_point expiration, JwtSecret secret) -> std::string;
+  auto make_jwt(uint64_t session_id, Timestamp expiration, JwtSecret secret) -> std::string;
 
   auto parse_jwt(std::string_view jwt, JwtSecret secret) -> std::optional<JwtPayload>;
 }

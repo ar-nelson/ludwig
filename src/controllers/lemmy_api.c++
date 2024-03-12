@@ -112,8 +112,8 @@ namespace Ludwig::Lemmy {
       .hot_rank = detail.rank, // TODO: distinguish hot_rank and hot_rank_active
       .hot_rank_active = detail.rank,
       .published = detail.created_at(),
-      .newest_comment_time = chrono::system_clock::time_point(chrono::seconds(detail.stats().latest_comment())),
-      .newest_comment_time_necro = chrono::system_clock::time_point(chrono::seconds(detail.stats().latest_comment_necro())),
+      .newest_comment_time = uint_to_timestamp(detail.stats().latest_comment()),
+      .newest_comment_time_necro = uint_to_timestamp(detail.stats().latest_comment_necro()),
       .featured_community = detail.thread().featured(),
       .featured_local = false
     };
@@ -135,8 +135,8 @@ namespace Ludwig::Lemmy {
         : fmt::format("{}/ap/activity/{:x}", site->base_url, id),
       .content = comment.content_raw()->str(),
       .path = path.empty() ? fmt::format("0.{}", id) : path,
-      .published = chrono::system_clock::time_point(chrono::seconds(comment.created_at())),
-      .updated = comment.updated_at().transform(λx(chrono::system_clock::time_point(chrono::seconds(x)))),
+      .published = uint_to_timestamp(comment.created_at()),
+      .updated = comment.updated_at().transform(uint_to_timestamp),
       .deleted = !!comment.deleted_at(),
       .distinguished = false,
       .local = !comment.instance(),
@@ -164,8 +164,8 @@ namespace Ludwig::Lemmy {
       .inbox_url = board.inbox_url()
         ? board.inbox_url()->str()
         : fmt::format("{}/ap/actor/{:x}/inbox", site->base_url, id),
-      .published = chrono::system_clock::time_point(chrono::seconds(board.created_at())),
-      .updated = board.updated_at().transform(λx(chrono::system_clock::time_point(chrono::seconds(x)))),
+      .published = uint_to_timestamp(board.created_at()),
+      .updated = board.updated_at().transform(uint_to_timestamp),
       .icon = board.icon_url()
         ? optional(fmt::format("{}/media/board/{}/icon.webp", site->base_url, board.name()->string_view()))
         : nullopt,
@@ -196,8 +196,8 @@ namespace Ludwig::Lemmy {
       .ap_id = thread.activity_url()
         ? thread.activity_url()->str()
         : fmt::format("{}/ap/activity/{:x}", site->base_url, id),
-      .published = chrono::system_clock::time_point(chrono::seconds(thread.created_at())),
-      .updated = thread.updated_at().transform(λx(chrono::system_clock::time_point(chrono::seconds(x)))),
+      .published = uint_to_timestamp(thread.created_at()),
+      .updated = thread.updated_at().transform(uint_to_timestamp),
       .body = opt_str(thread.content_text_raw()),
       .embed_description = link_card.and_then(λx(opt_str(x.get().description()))),
       .embed_title = link_card.and_then(λx(opt_str(x.get().title()))),
@@ -234,8 +234,8 @@ namespace Ludwig::Lemmy {
       .inbox_url = user.inbox_url()
         ? user.inbox_url()->str()
         : fmt::format("{}/ap/actor/{:x}/inbox", site->base_url, id),
-      .published = chrono::system_clock::time_point(chrono::seconds(user.created_at())),
-      .updated = user.updated_at().transform(λx(chrono::system_clock::time_point(chrono::seconds(x)))),
+      .published = uint_to_timestamp(user.created_at()),
+      .updated = user.updated_at().transform(uint_to_timestamp),
       // TODO: ban_expires
       .avatar = user.avatar_url()
         ? optional(fmt::format("{}/media/user/{}/avatar.webp", site->base_url, user.name()->string_view()))
@@ -258,9 +258,9 @@ namespace Ludwig::Lemmy {
 
   auto ApiController::get_site_object() -> Site {
     const auto site = instance->site_detail();
-    const chrono::system_clock::time_point
-      published(chrono::seconds(site->created_at)),
-      updated(chrono::seconds(site->updated_at));
+    const auto
+      published = uint_to_timestamp(site->created_at),
+      updated = uint_to_timestamp(site->updated_at);
     return {
       .id = 0,
       .name = site->name,
@@ -281,9 +281,9 @@ namespace Ludwig::Lemmy {
   auto ApiController::get_site_view(ReadTxn& txn) -> SiteView {
     const auto site = instance->site_detail();
     const auto& stats = txn.get_site_stats();
-    const chrono::system_clock::time_point
-      published(chrono::seconds(site->created_at)),
-      updated(chrono::seconds(site->updated_at));
+    const auto
+      published = uint_to_timestamp(site->created_at),
+      updated = uint_to_timestamp(site->updated_at);
     return {
       .site = get_site_object(),
       .local_site = {
@@ -518,7 +518,7 @@ namespace Ludwig::Lemmy {
   auto ApiController::edit_comment(EditComment& form, optional<SecretString>&& auth) -> CommentResponse {
     const auto user_id = require_auth(form, std::move(auth));
     // TODO: Use language_id
-    instance->update_local_comment(form.comment_id, user_id, {
+    instance->update_comment(form.comment_id, user_id, {
       .text_content = form.content.transform(λx(x.c_str()))
     });
     auto txn = instance->open_read_txn();
@@ -553,7 +553,7 @@ namespace Ludwig::Lemmy {
     if (form.url) throw ApiError("Updating thread URLs is not yet implemented", 500);
     // TODO: Use language_id
     // TODO: Update url
-    instance->update_local_thread(form.post_id, user_id, {
+    instance->update_thread(form.post_id, user_id, {
       .title = form.name.transform(λx(x.c_str())),
       .text_content = form.body.transform(λx(x.c_str())),
       .content_warning = form.nsfw ? optional("NSFW") : nullopt
@@ -827,7 +827,7 @@ namespace Ludwig::Lemmy {
               .person_id = l.id,
               .interface_language = "en",
               .theme = opt_str(l.local_user().lemmy_theme()).value_or("browser"),
-              .validator_time = chrono::system_clock::now(),
+              .validator_time = now_t(),
               .email = opt_str(l.local_user().email()),
               .accepted_application = l.local_user().accepted_application(),
               .email_verified = l.local_user().email_verified(),

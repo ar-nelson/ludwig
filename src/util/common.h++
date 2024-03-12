@@ -39,11 +39,19 @@ namespace Ludwig {
     return out;
   }
 
+  using Timestamp = std::chrono::system_clock::time_point;
+
+  static inline auto timestamp_to_uint(Timestamp ts) noexcept -> uint64_t {
+    return std::chrono::duration_cast<std::chrono::duration<uint64_t>>(ts.time_since_epoch()).count();
+  }
+  static inline auto uint_to_timestamp(uint64_t seconds) noexcept -> Timestamp {
+    return Timestamp(std::chrono::duration<uint64_t>(seconds));
+  }
+  static inline auto now_t() -> Timestamp {
+    return std::chrono::system_clock::now();
+  }
   static inline auto now_s() -> uint64_t {
-    using namespace std::chrono;
-    return static_cast<uint64_t>(
-      duration_cast<seconds>(system_clock::now().time_since_epoch()).count()
-    );
+    return timestamp_to_uint(now_t());
   }
 
   struct SecretString {

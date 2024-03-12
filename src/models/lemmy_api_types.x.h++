@@ -7,7 +7,6 @@
 
 #define String std::string
 #define StringView std::string_view
-#define Timestamp std::chrono::system_clock::time_point
 #define Option std::optional
 #define Vector std::vector
 

@@ -24,7 +24,7 @@ namespace chrono = std::chrono;
 
 namespace Ludwig {
   struct Suffixed { int64_t n; };
-  struct RelativeTime { chrono::system_clock::time_point t; };
+  struct RelativeTime { Timestamp t; };
 }
 
 namespace fmt {
@@ -33,13 +33,13 @@ namespace fmt {
     auto format(Ludwig::Suffixed x, format_context& ctx) const {
       static constexpr auto SUFFIXES = "KMBTqQ";
       auto n = x.n;
-      if (-1000 < n && n < 1000) return format_to(ctx.out(), "{:d}", n);
+      if (-1000 < n && n < 1000) return fmt::format_to(ctx.out(), "{:d}", n);
       uint8_t i = 0;
       while (n <= -999'950 || n >= 999'950) {
         n /= 1000;
         i++;
       }
-      return format_to(ctx.out(), "{:.3g}{:c}", (double)n / 1000.0, SUFFIXES[i]);
+      return fmt::format_to(ctx.out(), "{:.3g}{:c}", (double)n / 1000.0, SUFFIXES[i]);
       // SUFFIXES[i] can never overflow, max 64-bit int is ~18 quintillion (Q)
     }
   };
@@ -51,22 +51,22 @@ namespace fmt {
 
     auto format(Ludwig::RelativeTime x, format_context& ctx) const {
       using namespace chrono;
-      const auto now = system_clock::now();
+      const auto now = Ludwig::now_t();
       if (x.t > now) return write(ctx, "in the future");
       const auto diff = now - x.t;
       if (diff < 1min) return write(ctx, "just now");
       if (diff < 2min) return write(ctx, "1 minute ago");
-      if (diff < 1h) return format_to(ctx.out(), "{:d} minutes ago", duration_cast<minutes>(diff).count());
+      if (diff < 1h) return fmt::format_to(ctx.out(), "{:d} minutes ago", duration_cast<minutes>(diff).count());
       if (diff < 2h) return write(ctx, "1 hour ago");
-      if (diff < days{1}) return format_to(ctx.out(), "{:d} hours ago", duration_cast<hours>(diff).count());
+      if (diff < days{1}) return fmt::format_to(ctx.out(), "{:d} hours ago", duration_cast<hours>(diff).count());
       if (diff < days{2}) return write(ctx, "1 day ago");
-      if (diff < weeks{1}) return format_to(ctx.out(), "{:d} days ago", duration_cast<days>(diff).count());
+      if (diff < weeks{1}) return fmt::format_to(ctx.out(), "{:d} days ago", duration_cast<days>(diff).count());
       if (diff < weeks{2}) return write(ctx, "1 week ago");
-      if (diff < months{1}) return format_to(ctx.out(), "{:d} weeks ago", duration_cast<weeks>(diff).count());
+      if (diff < months{1}) return fmt::format_to(ctx.out(), "{:d} weeks ago", duration_cast<weeks>(diff).count());
       if (diff < months{2}) return write(ctx, "1 month ago");
-      if (diff < years{1}) return format_to(ctx.out(), "{:d} months ago", duration_cast<months>(diff).count());
+      if (diff < years{1}) return fmt::format_to(ctx.out(), "{:d} months ago", duration_cast<months>(diff).count());
       if (diff < years{2}) return write(ctx, "1 year ago");
-      return format_to(ctx.out(), "{:d} years ago", duration_cast<years>(diff).count());
+      return fmt::format_to(ctx.out(), "{:d} years ago", duration_cast<years>(diff).count());
     }
   };
 }
@@ -165,7 +165,7 @@ namespace Ludwig {
     }
 
     struct Meta {
-      chrono::time_point<chrono::steady_clock> start;
+      chrono::steady_clock::time_point start;
       optional<uint64_t> logged_in_user_id;
       optional<string> session_cookie;
       string ip;
@@ -611,7 +611,7 @@ namespace Ludwig {
         return write("</section></aside>");
       }
 
-      auto write_datetime(chrono::system_clock::time_point timestamp) noexcept -> ResponseWriter& {
+      auto write_datetime(Timestamp timestamp) noexcept -> ResponseWriter& {
         return write_fmt(R"(<time datetime="{:%FT%TZ}" title="{:%D %r %Z}">{}</time>)",
           fmt::gmtime(timestamp), fmt::localtime(timestamp), RelativeTime{timestamp});
       }
@@ -709,7 +709,7 @@ namespace Ludwig {
           rich_text_to_html(entry.board().description_type(), entry.board().description()),
           entry.stats().subscriber_count(),
           entry.stats().thread_count(),
-          RelativeTime{chrono::system_clock::time_point(chrono::seconds(entry.stats().latest_post_time()))}
+          RelativeTime{uint_to_timestamp(entry.stats().latest_post_time())}
         );
       }
 
@@ -727,7 +727,7 @@ namespace Ludwig {
           rich_text_to_html(entry.user().bio_type(), entry.user().bio()),
           entry.stats().thread_count(),
           entry.stats().comment_count(),
-          RelativeTime{chrono::system_clock::time_point(chrono::seconds(entry.stats().latest_post_time()))}
+          RelativeTime{uint_to_timestamp(entry.stats().latest_post_time())}
         );
       }
 
@@ -1679,7 +1679,7 @@ namespace Ludwig {
           HTML_CHECKBOX("registation_invite_required", "Require invite codes for registration?", R"( {} autocomplete="off")")
           HTML_CHECKBOX("not_invite_admin_only", "Allow non-admin users to generate invite codes?", R"( {} autocomplete="off")")
           R"(<details><summary>Advanced</summary><fieldset><legend class="a11y">Advanced</legend>)"
-            HTML_FIELD("max_post_length", "Max post length (bytes)", "number", R"( min="512" value="{:d}" autocomplete="off")")
+            HTML_FIELD("post_max_length", "Max post length (bytes)", "number", R"( min="512" value="{:d}" autocomplete="off")")
             HTML_CHECKBOX("javascript_enabled", "Enable JavaScript?", R"( {} autocomplete="off")")
             HTML_CHECKBOX("infinite_scroll_enabled", "Enable infinite scroll?", R"( {} autocomplete="off")")
           R"(</fieldset></details><input type="submit" value="Submit"></form>)",
@@ -1766,12 +1766,12 @@ namespace Ludwig {
           write_fmt(
             R"(<tr><td>{}<td>{:%D}<td>)",
             invite_id_to_code(id),
-            fmt::localtime(chrono::system_clock::time_point(chrono::seconds(invite.created_at())))
+            fmt::localtime(uint_to_timestamp(invite.created_at()))
           );
           if (auto to = invite.to()) {
             write_fmt(
               R"(N/A<td>{:%D}<td>)",
-              fmt::localtime(chrono::system_clock::time_point(chrono::seconds(*invite.accepted_at())))
+              fmt::localtime(uint_to_timestamp(*invite.accepted_at()))
             );
             try {
               auto u = LocalUserDetail::get(txn, *to, login);
@@ -1783,7 +1783,7 @@ namespace Ludwig {
           } else {
             write_fmt(
               R"({:%D}<td>N/A<td>N/A</tr>)",
-              fmt::localtime(chrono::system_clock::time_point(chrono::seconds(invite.expires_at())))
+              fmt::localtime(uint_to_timestamp(invite.expires_at()))
             );
           }
         }, txn, login.id, cursor);
@@ -1818,7 +1818,7 @@ namespace Ludwig {
           HTML_CHECKBOX("registation_invite_required", "Require invite codes for registration?", R"( autocomplete="off")")
           HTML_CHECKBOX("not_invite_admin_only", "Allow non-admin users to generate invite codes?", R"( autocomplete="off")")
           R"(<details><summary>Advanced</summary><fieldset><legend class="a11y">Advanced</legend><blockquote>)"
-            HTML_FIELD("max_post_length", "Max post length (bytes)", "number", R"( min="512" value="1048576" autocomplete="off")")
+            HTML_FIELD("post_max_length", "Max post length (bytes)", "number", R"( min="512" value="1048576" autocomplete="off")")
             HTML_CHECKBOX("javascript_enabled", "Enable JavaScript?", R"( checked autocomplete="off")")
             HTML_CHECKBOX("infinite_scroll_enabled", "Enable infinite scroll?", R"( checked autocomplete="off")")
           R"(</blockquote></fieldset></details>{}{}<input type="submit" value="Submit"></form>)",
@@ -2206,7 +2206,8 @@ namespace Ludwig {
         .icon_url = body.optional_string("icon_url"),
         .banner_url = body.optional_string("banner_url"),
         .application_question = body.optional_string("application_question"),
-        .max_post_length = body.optional_uint("max_post_length"),
+        .post_max_length = body.optional_uint("post_max_length"),
+        .remote_post_max_length = body.optional_uint("remote_post_max_length"),
         .home_page_type = body.optional_string("home_page_type").transform(parse_home_page_type),
         .javascript_enabled = body.optional_bool("javascript_enabled"),
         .infinite_scroll_enabled = body.optional_bool("infinite_scroll_enabled"),
@@ -3080,7 +3081,7 @@ namespace Ludwig {
                 "Content-Disposition",
                 fmt::format(
                   R"(attachment; filename="ludwig-{:%F-%H%M%S}.dbdump.zst")",
-                  fmt::localtime(chrono::system_clock::now())
+                  fmt::localtime(now_t())
                 )
               );
           });

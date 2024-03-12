@@ -59,7 +59,7 @@ namespace Ludwig {
     std::string name, base_url, description, public_key_pem, color_accent, color_accent_dim, color_accent_hover;
     std::optional<std::string> icon_url, banner_url, application_question;
     HomePageType home_page_type;
-    uint64_t default_board_id, post_max_length, created_at, updated_at;
+    uint64_t default_board_id, post_max_length, remote_post_max_length, created_at, updated_at;
     bool setup_done, javascript_enabled, infinite_scroll_enabled, votes_enabled,
         downvotes_enabled, cws_enabled, require_login_to_view,
         board_creation_admin_only, registration_enabled,
@@ -89,8 +89,8 @@ namespace Ludwig {
       }
       return {};
     }
-    auto created_at() const noexcept -> std::chrono::system_clock::time_point {
-      return std::chrono::system_clock::time_point(std::chrono::seconds(user().created_at()));
+    auto created_at() const noexcept -> Timestamp {
+      return uint_to_timestamp(user().created_at());
     }
 
     auto can_view(Login login) const noexcept -> bool;
@@ -117,8 +117,8 @@ namespace Ludwig {
       }
       return {};
     }
-    auto created_at() const noexcept -> std::chrono::system_clock::time_point {
-      return std::chrono::system_clock::time_point(std::chrono::seconds(board().created_at()));
+    auto created_at() const noexcept -> Timestamp {
+      return uint_to_timestamp(board().created_at());
     }
 
     auto can_view(Login login) const noexcept -> bool;
@@ -158,8 +158,8 @@ namespace Ludwig {
     }
     auto mod_state(PostContext context = PostContext::View) const noexcept -> ModStateDetail;
     auto content_warning(PostContext context = PostContext::View) const noexcept -> std::optional<ContentWarningDetail>;
-    auto created_at() const noexcept -> std::chrono::system_clock::time_point {
-      return std::chrono::system_clock::time_point(std::chrono::seconds(thread().created_at()));
+    auto created_at() const noexcept -> Timestamp {
+      return uint_to_timestamp(thread().created_at());
     }
     auto author_id() const noexcept -> uint64_t { return thread().author(); }
     auto has_text_content() const noexcept -> bool {
@@ -192,11 +192,10 @@ namespace Ludwig {
     static auto get_created_at(
       ReadTxn& txn,
       uint64_t id
-    ) -> std::chrono::system_clock::time_point {
-      using namespace std::chrono;
+    ) -> Timestamp {
       const auto thread = txn.get_thread(id);
-      if (!thread) return system_clock::time_point::min();
-      return system_clock::time_point(seconds(thread->get().created_at()));
+      if (!thread) return Timestamp::min();
+      return uint_to_timestamp(thread->get().created_at());
     }
   };
 
@@ -229,8 +228,8 @@ namespace Ludwig {
     }
     auto mod_state(PostContext context = PostContext::View) const noexcept -> ModStateDetail;
     auto content_warning(PostContext context = PostContext::View) const noexcept -> std::optional<ContentWarningDetail>;
-    auto created_at() const noexcept -> std::chrono::system_clock::time_point {
-      return std::chrono::system_clock::time_point(std::chrono::seconds(comment().created_at()));
+    auto created_at() const noexcept -> Timestamp {
+      return uint_to_timestamp(comment().created_at());
     }
     auto author_id() const noexcept -> uint64_t { return comment().author(); }
 
@@ -258,11 +257,10 @@ namespace Ludwig {
     static auto get_created_at(
       ReadTxn& txn,
       uint64_t id
-    ) -> std::chrono::system_clock::time_point {
-      using namespace std::chrono;
+    ) -> Timestamp {
       const auto comment = txn.get_comment(id);
-      if (!comment) return system_clock::time_point::min();
-      return system_clock::time_point(seconds(comment->get().created_at()));
+      if (!comment) return Timestamp::min();
+      return uint_to_timestamp(comment->get().created_at());
     }
   };
 

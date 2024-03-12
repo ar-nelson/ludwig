@@ -24,12 +24,12 @@ namespace Ludwig {
     return buf;
   }
 
-  auto make_jwt(uint64_t session_id, std::chrono::system_clock::time_point expiration, JwtSecret secret) -> string {
+  auto make_jwt(uint64_t session_id, Timestamp expiration, JwtSecret secret) -> string {
     const auto iat = now_s();
     return make_jwt({
       .sub = session_id,
       .iat = iat,
-      .exp = (uint64_t)std::chrono::duration_cast<std::chrono::seconds>(expiration.time_since_epoch()).count()
+      .exp = timestamp_to_uint(expiration)
     }, secret);
   }
 

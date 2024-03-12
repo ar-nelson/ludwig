@@ -40,8 +40,8 @@ namespace Ludwig {
     {
       if (!url.is_http_s()) throw std::runtime_error("Not an HTTP(S) URL: " + url_str);
       fmt::format_to(
-        std::back_inserter(request), "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nUser-Agent: ludwig",
-        method, url.path.empty() ? "/" : url.path, url.host + (url.port.empty() ? "" : ":" + url.port)
+        std::back_inserter(request), "{} {}{} HTTP/1.1\r\nHost: {}{}\r\nConnection: close\r\nUser-Agent: ludwig",
+        method, url.path.empty() ? "/" : url.path, url.query, url.host, url.port.empty() ? "" : ":" + url.port
       );
     }
 

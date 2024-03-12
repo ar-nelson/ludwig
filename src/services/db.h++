@@ -46,6 +46,7 @@ namespace Ludwig {
       icon_url {"icon_url"},
       banner_url {"banner_url"},
       post_max_length {"post_max_length"},
+      remote_post_max_length {"remote_post_max_length"},
       home_page_type {"home_page_type"},
       media_upload_enabled {"media_upload_enabled"},
       image_max_bytes {"image_max_bytes"},

@@ -1,4 +1,5 @@
 #pragma once
+#include <stdint.h>
 #include <algorithm>
 #include <string>
 #include <cstring>

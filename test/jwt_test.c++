@@ -35,7 +35,7 @@ TEST_CASE("make_jwt -> parse_jwt roundtrip", "[jwt]") {
   const uint64_t user = 1234;
   uint8_t secret[Ludwig::JWT_SECRET_SIZE];
   const auto len = Base64::decode(SECRET_BASE64, secret, Ludwig::JWT_SECRET_SIZE);
-  const auto encoded = Ludwig::make_jwt(user, std::chrono::system_clock::now() + 60s, secret);
+  const auto encoded = Ludwig::make_jwt(user, now_t() + 60s, secret);
   REQUIRE(encoded.starts_with(Ludwig::JWT_HEADER));
   const auto decoded = Ludwig::parse_jwt(encoded, secret);
   REQUIRE(!!decoded);
@@ -46,7 +46,7 @@ TEST_CASE("make_jwt -> parse_jwt roundtrip fails with wrong secret", "[jwt]") {
   const uint64_t user = 1234;
   uint8_t secret[Ludwig::JWT_SECRET_SIZE];
   const auto len = Base64::decode(SECRET_BASE64, secret, Ludwig::JWT_SECRET_SIZE);
-  const auto encoded = Ludwig::make_jwt(user, std::chrono::system_clock::now() + 60s, secret);
+  const auto encoded = Ludwig::make_jwt(user, now_t() + 60s, secret);
   secret[0]++;
   const auto decoded = Ludwig::parse_jwt(encoded, secret);
   REQUIRE(!decoded);
