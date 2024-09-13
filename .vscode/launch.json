@@ -1,0 +1,3 @@
+{
+  "envFile": "${workspaceFolder}/${config:mesonbuild.buildFolder}/meson-vscode.env"
+}

@@ -4,7 +4,6 @@
 #include "models/db.h++"
 #include "libxml/HTMLparser.h"
 #include "libxml/xpath.h"
-#include <map>
 
 namespace Ludwig {
   struct LibXmlContext;

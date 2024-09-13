@@ -1,21 +1,20 @@
 #include "views/webapp.h++"
-#include "util/web.h++"
-#include "util/zstd_db_dump.h++"
 #include "models/enums.h++"
 #include "static/default-theme.css.h++"
+#include "static/feather-sprite.svg.h++"
 #include "static/htmx.min.js.h++"
 #include "static/ludwig.js.h++"
-#include "static/feather-sprite.svg.h++"
 #include "static/twemoji-piano.ico.h++"
+#include "util/lambda_macros.h++"
+#include "util/web.h++"
+#include "util/zstd_db_dump.h++"
 #include <iterator>
 #include <regex>
-#include <spdlog/fmt/chrono.h>
 #include <xxhash.h>
-#include "util/lambda_macros.h++"
 
-using std::bind, std::match_results, std::monostate, std::nullopt,
-    std::optional, std::regex, std::regex_search, std::shared_ptr, std::stoull,
-    std::string, std::string_view, std::variant, std::visit;
+using std::bind, std::match_results, std::monostate, std::nullopt, std::optional, std::regex,
+    std::regex_search, std::shared_ptr, std::stoull, std::string, std::string_view, std::variant,
+    std::visit;
 
 using namespace std::placeholders;
 namespace chrono = std::chrono;
@@ -23,52 +22,70 @@ namespace chrono = std::chrono;
 #define COOKIE_NAME "ludwig_session"
 
 namespace Ludwig {
-  struct Suffixed { int64_t n; };
-  struct RelativeTime { Timestamp t; };
-}
+struct Suffixed {
+  int64_t n;
+};
+struct RelativeTime {
+  Timestamp t;
+};
+} // namespace Ludwig
 
 namespace fmt {
-  template <> struct formatter<Ludwig::Suffixed> : public Ludwig::CustomFormatter {
-    // Adapted from https://programming.guide/java/formatting-byte-size-to-human-readable-format.html
-    auto format(Ludwig::Suffixed x, format_context& ctx) const {
-      static constexpr auto SUFFIXES = "KMBTqQ";
-      auto n = x.n;
-      if (-1000 < n && n < 1000) return fmt::format_to(ctx.out(), "{:d}", n);
-      uint8_t i = 0;
-      while (n <= -999'950 || n >= 999'950) {
-        n /= 1000;
-        i++;
-      }
-      return fmt::format_to(ctx.out(), "{:.3g}{:c}", (double)n / 1000.0, SUFFIXES[i]);
-      // SUFFIXES[i] can never overflow, max 64-bit int is ~18 quintillion (Q)
+template <> struct formatter<Ludwig::Suffixed> : public Ludwig::CustomFormatter {
+  // Adapted from https://programming.guide/java/formatting-byte-size-to-human-readable-format.html
+  auto format(Ludwig::Suffixed x, format_context &ctx) const {
+    static constexpr auto SUFFIXES = "KMBTqQ";
+    auto n = x.n;
+    if (-1000 < n && n < 1000)
+      return fmt::format_to(ctx.out(), "{:d}", n);
+    uint8_t i = 0;
+    while (n <= -999'950 || n >= 999'950) {
+      n /= 1000;
+      i++;
     }
-  };
+    return fmt::format_to(ctx.out(), "{:.3g}{:c}", (double)n / 1000.0, SUFFIXES[i]);
+    // SUFFIXES[i] can never overflow, max 64-bit int is ~18 quintillion (Q)
+  }
+};
 
-  template <> struct formatter<Ludwig::RelativeTime> : public Ludwig::CustomFormatter {
-    static auto write(format_context& ctx, const char s[]) {
-      return std::copy(s, s + std::char_traits<char>::length(s), ctx.out());
-    }
+template <> struct formatter<Ludwig::RelativeTime> : public Ludwig::CustomFormatter {
+  static auto write(format_context &ctx, const char s[]) {
+    return std::copy(s, s + std::char_traits<char>::length(s), ctx.out());
+  }
 
-    auto format(Ludwig::RelativeTime x, format_context& ctx) const {
-      using namespace chrono;
-      const auto now = Ludwig::now_t();
-      if (x.t > now) return write(ctx, "in the future");
-      const auto diff = now - x.t;
-      if (diff < 1min) return write(ctx, "just now");
-      if (diff < 2min) return write(ctx, "1 minute ago");
-      if (diff < 1h) return fmt::format_to(ctx.out(), "{:d} minutes ago", duration_cast<minutes>(diff).count());
-      if (diff < 2h) return write(ctx, "1 hour ago");
-      if (diff < days{1}) return fmt::format_to(ctx.out(), "{:d} hours ago", duration_cast<hours>(diff).count());
-      if (diff < days{2}) return write(ctx, "1 day ago");
-      if (diff < weeks{1}) return fmt::format_to(ctx.out(), "{:d} days ago", duration_cast<days>(diff).count());
-      if (diff < weeks{2}) return write(ctx, "1 week ago");
-      if (diff < months{1}) return fmt::format_to(ctx.out(), "{:d} weeks ago", duration_cast<weeks>(diff).count());
-      if (diff < months{2}) return write(ctx, "1 month ago");
-      if (diff < years{1}) return fmt::format_to(ctx.out(), "{:d} months ago", duration_cast<months>(diff).count());
-      if (diff < years{2}) return write(ctx, "1 year ago");
-      return fmt::format_to(ctx.out(), "{:d} years ago", duration_cast<years>(diff).count());
-    }
-  };
+  auto format(Ludwig::RelativeTime x, format_context &ctx) const {
+    using namespace chrono;
+    const auto now = Ludwig::now_t();
+    if (x.t > now)
+      return write(ctx, "in the future");
+    const auto diff = now - x.t;
+    if (diff < 1min)
+      return write(ctx, "just now");
+    if (diff < 2min)
+      return write(ctx, "1 minute ago");
+    if (diff < 1h)
+      return fmt::format_to(ctx.out(), "{:d} minutes ago", duration_cast<minutes>(diff).count());
+    if (diff < 2h)
+      return write(ctx, "1 hour ago");
+    if (diff < days{1})
+      return fmt::format_to(ctx.out(), "{:d} hours ago", duration_cast<hours>(diff).count());
+    if (diff < days{2})
+      return write(ctx, "1 day ago");
+    if (diff < weeks{1})
+      return fmt::format_to(ctx.out(), "{:d} days ago", duration_cast<days>(diff).count());
+    if (diff < weeks{2})
+      return write(ctx, "1 week ago");
+    if (diff < months{1})
+      return fmt::format_to(ctx.out(), "{:d} weeks ago", duration_cast<weeks>(diff).count());
+    if (diff < months{2})
+      return write(ctx, "1 month ago");
+    if (diff < years{1})
+      return fmt::format_to(ctx.out(), "{:d} months ago", duration_cast<months>(diff).count());
+    if (diff < years{2})
+      return write(ctx, "1 year ago");
+    return fmt::format_to(ctx.out(), "{:d} years ago", duration_cast<years>(diff).count());
+  }
+};
 }
 
 namespace Ludwig {
@@ -613,7 +630,7 @@ namespace Ludwig {
 
       auto write_datetime(Timestamp timestamp) noexcept -> ResponseWriter& {
         return write_fmt(R"(<time datetime="{:%FT%TZ}" title="{:%D %r %Z}">{}</time>)",
-          fmt::gmtime(timestamp), fmt::localtime(timestamp), RelativeTime{timestamp});
+          fmt::gmtime(timestamp), timestamp, RelativeTime{timestamp});
       }
 
       auto write_user_avatar(const User& user, Login login = {}) noexcept -> ResponseWriter& {
@@ -1723,7 +1740,7 @@ namespace Ludwig {
             R"(<tr><td>{}<td>{}<td>{:%D}<td>{}<td>{}<td class="table-reason"><div class="reason">{}</div><td class="table-approve">)",
             Escape{detail.user().name()},
             Escape{detail.local_user().email()},
-            fmt::localtime(detail.created_at()),
+            detail.created_at(),
             Escape{application.ip()},
             Escape{application.user_agent()},
             Escape{application.text()}
@@ -1766,12 +1783,12 @@ namespace Ludwig {
           write_fmt(
             R"(<tr><td>{}<td>{:%D}<td>)",
             invite_id_to_code(id),
-            fmt::localtime(uint_to_timestamp(invite.created_at()))
+            uint_to_timestamp(invite.created_at())
           );
           if (auto to = invite.to()) {
             write_fmt(
               R"(N/A<td>{:%D}<td>)",
-              fmt::localtime(uint_to_timestamp(*invite.accepted_at()))
+              uint_to_timestamp(*invite.accepted_at())
             );
             try {
               auto u = LocalUserDetail::get(txn, *to, login);
@@ -1783,7 +1800,7 @@ namespace Ludwig {
           } else {
             write_fmt(
               R"({:%D}<td>N/A<td>N/A</tr>)",
-              fmt::localtime(uint_to_timestamp(invite.expires_at()))
+              uint_to_timestamp(invite.expires_at())
             );
           }
         }, txn, login.id, cursor);
@@ -3081,7 +3098,7 @@ namespace Ludwig {
                 "Content-Disposition",
                 fmt::format(
                   R"(attachment; filename="ludwig-{:%F-%H%M%S}.dbdump.zst")",
-                  fmt::localtime(now_t())
+                  now_t()
                 )
               );
           });

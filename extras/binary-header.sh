@@ -24,8 +24,8 @@ else
 fi
 
 path="$(realpath --relative-to="$root_dir" "$in_file")"
-out_h="${binary_dir%/}/generated/$path.h++"
-out_S="${binary_dir%/}/generated/$path.S"
+out_h="${binary_dir%/}/$(basename "$in_file").h++"
+out_S="${binary_dir%/}/$(basename "$in_file").S"
 sym="$(basename "$in_file" | sed -E -e 's/[^[:alnum:]]+/_/g' -e 's/^_+|_+$//g')"
 
 mkdir -p "$(dirname "$out_h")"

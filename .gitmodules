@@ -1,39 +1,6 @@
-[submodule "vendor/flatbuffers"]
-	path = vendor/flatbuffers
-	url = https://github.com/google/flatbuffers.git
-[submodule "vendor/xxHash"]
-	path = vendor/xxHash
-	url = https://github.com/Cyan4973/xxHash.git
-[submodule "vendor/spdlog"]
-	path = vendor/spdlog
-	url = https://github.com/gabime/spdlog.git
-[submodule "vendor/csprng"]
-	path = vendor/csprng
-	url = https://github.com/Duthomhas/CSPRNG.git
-[submodule "vendor/boringssl"]
-	path = vendor/boringssl
-	url = https://boringssl.googlesource.com/boringssl
-[submodule "vendor/zlib"]
-	path = vendor/zlib
-	url = https://github.com/madler/zlib.git
-[submodule "vendor/libwebp"]
-	path = vendor/libwebp
-	url = https://chromium.googlesource.com/webm/libwebp
-[submodule "vendor/libpng"]
-	path = vendor/libpng
-	url = https://github.com/glennrp/libpng.git
-[submodule "vendor/simdjson"]
-	path = vendor/simdjson
-	url = https://github.com/simdjson/simdjson.git
-[submodule "vendor/sentencepiece"]
-	path = vendor/sentencepiece
+[submodule "subprojects/sentencepiece"]
+	path = subprojects/sentencepiece
 	url = https://github.com/google/sentencepiece.git
-[submodule "vendor/libxml2"]
-	path = vendor/libxml2
-	url = https://gitlab.gnome.org/GNOME/libxml2.git
-[submodule "vendor/zstd"]
-	path = vendor/zstd
-	url = https://github.com/facebook/zstd.git
-[submodule "vendor/cpu_features"]
-	path = vendor/cpu_features
-	url = https://github.com/google/cpu_features.git
+[submodule "subprojects/boringssl"]
+	path = subprojects/boringssl
+	url = https://boringssl.googlesource.com/boringssl

@@ -1,4 +1,5 @@
 #pragma once
+#include "flatbuffers/flatbuffer_builder.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <algorithm>
@@ -10,11 +11,12 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <spdlog/fmt/fmt.h>
+#include <fmt/core.h>
 #include <spdlog/spdlog.h>
 #include <uWebSockets/MoveOnlyFunction.h>
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
+#include <flatbuffers/flatbuffers.h>
 #include <flatbuffers/string.h>
 
 namespace Ludwig {
@@ -126,7 +128,8 @@ namespace Ludwig {
   struct CustomFormatter {
     constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator {
       auto it = ctx.begin();
-      if (it != ctx.end()) fmt::detail::throw_format_error("invalid format");
+      // TODO: Figure out how to do this with new fmt version
+      //if (it != ctx.end()) fmt::throw_format_error("invalid format");
       return it;
     }
   };
@@ -169,6 +172,12 @@ namespace Ludwig {
 
   static inline auto invite_id_to_code(uint64_t id) noexcept -> std::string {
     return fmt::format("{:05X}-{:03X}-{:03X}-{:05X}", id >> 44, (id >> 32) & 0xfff, (id >> 20) & 0xfff, id & 0xfffff);
+  }
+
+  // Reimplemented here because the version in Flatbuffers is broken (missing const_cast)
+  template <typename T>
+  const T* GetTemporaryPointer(const flatbuffers::FlatBufferBuilder& fbb, flatbuffers::Offset<T> offset) {
+    return GetMutableTemporaryPointer<T>(const_cast<flatbuffers::FlatBufferBuilder&>(fbb), offset);
   }
 
   template<typename T, size_t Size> struct ConstArray {

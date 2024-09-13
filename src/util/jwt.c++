@@ -1,5 +1,4 @@
 #include "jwt.h++"
-#include <regex>
 #include <openssl/crypto.h>
 #include <openssl/hmac.h>
 

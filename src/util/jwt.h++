@@ -5,14 +5,10 @@
 #include <span>
 
 namespace Ludwig {
-  static constexpr auto JWT_HEADER_TEXT = Base64::FixedString {
-    "{\"alg\":\"HS512\",\"typ\":\"JWT\"}"
-  };
-  constexpr auto JWT_HEADER = Base64::encode_const<JWT_HEADER_TEXT>();
+  static constexpr std::string_view JWT_HEADER_TEXT = R"({"alg":"HS512","typ":"JWT"})";
+  const auto JWT_HEADER = Base64::encode(JWT_HEADER_TEXT);
   constexpr size_t JWT_SECRET_SIZE = 64, JWT_SIGNATURE_SIZE = 87;
   using JwtSecret = std::span<uint8_t, JWT_SECRET_SIZE>;
-
-  static_assert(JWT_HEADER == Base64::FixedString{"eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9"});
 
   auto make_jwt(JwtPayload payload, JwtSecret secret) -> std::string;
 

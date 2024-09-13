@@ -1,7 +1,7 @@
 #include "thumbnailer.h++"
 #include <webp/decode.h>
 #include <webp/encode.h>
-#include <image_dec.h>
+#include <imageio/image_dec.h>
 #include <gif_lib.h>
 
 using std::make_unique, std::min, std::optional, std::round, std::runtime_error,

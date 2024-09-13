@@ -3,8 +3,8 @@
 #include <flatbuffers/flatbuffers.h>
 #include <static_block.hpp>
 
-using flatbuffers::FlatBufferBuilder, flatbuffers::GetTemporaryPointer,
-    flatbuffers::Offset, std::nullopt, std::optional, std::string,
+using flatbuffers::FlatBufferBuilder, flatbuffers::Offset,
+    std::nullopt, std::optional, std::string,
     std::string_view, std::vector;
 namespace chrono = std::chrono;
 using namespace std::literals;
@@ -66,15 +66,16 @@ namespace Ludwig {
     }
   } placeholders;
 
-  const auto ThreadDetail::null_link_card = GetTemporaryPointer(placeholders.fbb, placeholders.null_link_card);
-  const auto ThreadDetail::null_board = GetTemporaryPointer(placeholders.fbb, placeholders.null_board);
-  const auto CommentDetail::null_board = GetTemporaryPointer(placeholders.fbb, placeholders.null_board);
-  const auto ThreadDetail::null_user = GetTemporaryPointer(placeholders.fbb, placeholders.null_user);
-  const auto CommentDetail::null_user = GetTemporaryPointer(placeholders.fbb, placeholders.null_user);
-  const auto CommentDetail::null_thread = GetTemporaryPointer(placeholders.fbb, placeholders.null_thread);
-  const auto LocalUserDetail::temp_admin_user = GetTemporaryPointer(placeholders.fbb, placeholders.temp_admin_user);
-  const auto LocalUserDetail::temp_admin_local_user = GetTemporaryPointer(placeholders.fbb, placeholders.temp_admin_local_user);
-  const auto LocalUserDetail::temp_admin_stats = GetTemporaryPointer(placeholders.fbb, placeholders.temp_admin_stats);
+
+  const auto ThreadDetail::null_link_card = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.null_link_card);
+  const auto ThreadDetail::null_board = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.null_board);
+  const auto CommentDetail::null_board = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.null_board);
+  const auto ThreadDetail::null_user = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.null_user);
+  const auto CommentDetail::null_user = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.null_user);
+  const auto CommentDetail::null_thread = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.null_thread);
+  const auto LocalUserDetail::temp_admin_user = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.temp_admin_user);
+  const auto LocalUserDetail::temp_admin_local_user = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.temp_admin_local_user);
+  const auto LocalUserDetail::temp_admin_stats = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.temp_admin_stats);
 
   auto ThreadDetail::can_view(Login login) const noexcept -> bool {
     if (mod_state().state >= ModState::Unapproved) {
