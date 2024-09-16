@@ -4,7 +4,7 @@
 #include <static_vector.hpp>
 #include "util/lambda_macros.h++"
 
-using std::make_shared, std::optional, std::pair, std::regex, std::regex_match,
+using std::optional, std::regex, std::regex_match,
     std::runtime_error, std::shared_ptr, std::string, std::string_view,
     flatbuffers::FlatBufferBuilder;
 
@@ -28,7 +28,7 @@ namespace Ludwig {
     if (user && user->get().avatar_url()) {
       small_cache.thumbnail(user->get().avatar_url()->str(), std::move(cb));
     } else {
-      cb(make_shared<optional<pair<string, uint64_t>>>());
+      cb({});
     }
   }
 
@@ -39,7 +39,7 @@ namespace Ludwig {
     if (user && user->get().banner_url()) {
       banner_cache.thumbnail(user->get().banner_url()->str(), std::move(cb));
     } else {
-      cb(make_shared<optional<pair<string, uint64_t>>>());
+      cb({});
     }
   }
 
@@ -50,7 +50,7 @@ namespace Ludwig {
     if (board && board->get().icon_url()) {
       small_cache.thumbnail(board->get().icon_url()->str(), std::move(cb));
     } else {
-      cb(make_shared<optional<pair<string, uint64_t>>>());
+      cb({});
     }
   }
 
@@ -61,7 +61,7 @@ namespace Ludwig {
     if (board && board->get().banner_url()) {
       banner_cache.thumbnail(board->get().banner_url()->str(), std::move(cb));
     } else {
-      cb(make_shared<optional<pair<string, uint64_t>>>());
+      cb({});
     }
   }
 
@@ -75,7 +75,7 @@ namespace Ludwig {
         return;
       }
     }
-    cb(make_shared<optional<pair<string, uint64_t>>>());
+    cb({});
   }
 
   const regex ws("^\\s*$");

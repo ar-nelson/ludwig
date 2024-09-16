@@ -7,3 +7,4 @@ build.*/
 *.mdb-lock
 *.dbdump
 *.dbdump.zst
+core

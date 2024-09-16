@@ -1,6 +1,5 @@
 #pragma once
 #include "util/web.h++"
-#include "util/rich_text.h++"
 #include "models/db.h++"
 #include "models/detail.h++"
 #include "services/db.h++"
@@ -185,11 +184,11 @@ namespace Ludwig {
     std::optional<std::optional<std::string_view>> content_warning;
   };
 
-  static auto parse_hex_id(std::string hex_id) -> std::optional<uint64_t> {
-    if (hex_id.empty()) return {};
-    try { return std::stoull(hex_id, nullptr, 16); }
-    catch (...) { throw ApiError("Bad hexadecimal ID", 400); }
-  }
+  // static auto parse_hex_id(std::string hex_id) -> std::optional<uint64_t> {
+  //   if (hex_id.empty()) return {};
+  //   try { return std::stoull(hex_id, nullptr, 16); }
+  //   catch (...) { throw ApiError("Bad hexadecimal ID", 400); }
+  // }
 
   class InstanceController : public std::enable_shared_from_this<InstanceController> {
   private:

@@ -4,3 +4,6 @@
 [submodule "subprojects/boringssl"]
 	path = subprojects/boringssl
 	url = https://boringssl.googlesource.com/boringssl
+[submodule "subprojects/libvips"]
+	path = subprojects/libvips
+	url = https://github.com/libvips/libvips.git

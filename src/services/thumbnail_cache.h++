@@ -7,12 +7,11 @@
 namespace Ludwig {
   class ThumbnailCache {
   public:
-    using Image = std::shared_ptr<std::optional<std::pair<std::string, uint64_t>>>;
-    using Callback = uWS::MoveOnlyFunction<void (Image)>;
+    using Callback = uWS::MoveOnlyFunction<void (ImageRef)>;
     using Dispatcher = std::function<void (uWS::MoveOnlyFunction<void()>)>;
   private:
     using Promise = std::list<std::shared_ptr<Callback>>;
-    using Entry = std::variant<Promise, Image>;
+    using Entry = std::variant<Promise, ImageRef>;
     auto fetch_thumbnail(std::string url, Entry& entry_cell) -> Entry&;
     tbb::concurrent_lru_cache<std::string, Entry, Entry(*)(const std::string&)> cache;
     std::shared_ptr<HttpClient> http_client;

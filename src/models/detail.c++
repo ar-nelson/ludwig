@@ -67,15 +67,15 @@ namespace Ludwig {
   } placeholders;
 
 
-  const auto ThreadDetail::null_link_card = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.null_link_card);
-  const auto ThreadDetail::null_board = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.null_board);
-  const auto CommentDetail::null_board = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.null_board);
-  const auto ThreadDetail::null_user = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.null_user);
-  const auto CommentDetail::null_user = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.null_user);
-  const auto CommentDetail::null_thread = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.null_thread);
-  const auto LocalUserDetail::temp_admin_user = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.temp_admin_user);
-  const auto LocalUserDetail::temp_admin_local_user = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.temp_admin_local_user);
-  const auto LocalUserDetail::temp_admin_stats = Ludwig::GetTemporaryPointer(placeholders.fbb, placeholders.temp_admin_stats);
+  const auto ThreadDetail::null_link_card = get_temporary_pointer(placeholders.fbb, placeholders.null_link_card);
+  const auto ThreadDetail::null_board = get_temporary_pointer(placeholders.fbb, placeholders.null_board);
+  const auto CommentDetail::null_board = get_temporary_pointer(placeholders.fbb, placeholders.null_board);
+  const auto ThreadDetail::null_user = get_temporary_pointer(placeholders.fbb, placeholders.null_user);
+  const auto CommentDetail::null_user = get_temporary_pointer(placeholders.fbb, placeholders.null_user);
+  const auto CommentDetail::null_thread = get_temporary_pointer(placeholders.fbb, placeholders.null_thread);
+  const auto LocalUserDetail::temp_admin_user = get_temporary_pointer(placeholders.fbb, placeholders.temp_admin_user);
+  const auto LocalUserDetail::temp_admin_local_user = get_temporary_pointer(placeholders.fbb, placeholders.temp_admin_local_user);
+  const auto LocalUserDetail::temp_admin_stats = get_temporary_pointer(placeholders.fbb, placeholders.temp_admin_stats);
 
   auto ThreadDetail::can_view(Login login) const noexcept -> bool {
     if (mod_state().state >= ModState::Unapproved) {

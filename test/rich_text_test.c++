@@ -1,8 +1,9 @@
 #include "test_common.h++"
+#include "util/common.h++"
 #include "util/rich_text.h++"
 
 using std::string_view, flatbuffers::FlatBufferBuilder, flatbuffers::Vector,
-    flatbuffers::Offset, flatbuffers::GetTemporaryPointer;
+    flatbuffers::Offset;
 
 auto xml_ctx = std::make_shared<LibXmlContext>();
 
@@ -27,7 +28,7 @@ static inline auto parse_results(
   FlatBufferBuilder& fbb,
   const RichTextVectors& res
 ) -> pair<vector<RichText>, const Vector<Offset<void>>*> {
-  return { vec(GetTemporaryPointer(fbb, res.first)), GetTemporaryPointer(fbb, res.second) };
+  return { vec(get_temporary_pointer(fbb, res.first)), get_temporary_pointer(fbb, res.second) };
 }
 
 TEST_CASE("parse plain text as Markdown", "[rich_text]") {
@@ -37,8 +38,8 @@ TEST_CASE("parse plain text as Markdown", "[rich_text]") {
   REQUIRE(types == vector{RichText::Text});
   const auto text_content = expect_string(blocks, 0);
   REQUIRE(text_content == "<p>The rain in Spain stays mainly on the plain</p>");
-  REQUIRE(rich_text_to_html(GetTemporaryPointer(fbb, res.first), blocks, {}) == "<p>The rain in Spain stays mainly on the plain</p>");
-  REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) == "The rain in Spain stays mainly on the plain");
+  REQUIRE(rich_text_to_html(get_temporary_pointer(fbb, res.first), blocks, {}) == "<p>The rain in Spain stays mainly on the plain</p>");
+  REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) == "The rain in Spain stays mainly on the plain");
 }
 
 TEST_CASE("parse Markdown spans", "[rich_text]") {
@@ -48,8 +49,8 @@ TEST_CASE("parse Markdown spans", "[rich_text]") {
   REQUIRE(types == vector{RichText::Text});
   const auto text_content = expect_string(blocks, 0);
   REQUIRE(text_content ==  "<p>plain text <strong>bold text</strong> <em>italic text</em> <del>strikeout text</del> &quot;plain text&quot; again</p>");
-  REQUIRE(rich_text_to_html(GetTemporaryPointer(fbb, res.first), blocks, {}) == text_content);
-  REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) == "plain text bold text italic text strikeout text \"plain text\" again");
+  REQUIRE(rich_text_to_html(get_temporary_pointer(fbb, res.first), blocks, {}) == text_content);
+  REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) == "plain text bold text italic text strikeout text \"plain text\" again");
 }
 
 TEST_CASE("parse Markdown paragraphs", "[rich_text]") {
@@ -62,8 +63,8 @@ paragraph two)");
     REQUIRE(types == vector{RichText::Text});
     const auto text_content = expect_string(blocks, 0);
     REQUIRE(text_content == "<p>paragraph one</p>\n\n<p>paragraph two</p>");
-    REQUIRE(rich_text_to_html(GetTemporaryPointer(fbb, res.first), blocks, {}) == text_content);
-    REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) == "paragraph one\n\nparagraph two");
+    REQUIRE(rich_text_to_html(get_temporary_pointer(fbb, res.first), blocks, {}) == text_content);
+    REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) == "paragraph one\n\nparagraph two");
   }
   {
     FlatBufferBuilder fbb;
@@ -77,8 +78,8 @@ newline in it
     REQUIRE(types == vector{RichText::Text});
     const auto text_content = expect_string(blocks, 0);
     REQUIRE(text_content == "<p>paragraph one</p>\n\n<p>paragraph two, this one has a\nnewline in it</p>");
-    REQUIRE(rich_text_to_html(GetTemporaryPointer(fbb, res.first), blocks, {}) == text_content);
-    REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) == "paragraph one\n\nparagraph two, this one has a\nnewline in it");
+    REQUIRE(rich_text_to_html(get_temporary_pointer(fbb, res.first), blocks, {}) == text_content);
+    REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) == "paragraph one\n\nparagraph two, this one has a\nnewline in it");
   }
 }
 
@@ -111,8 +112,8 @@ code block 5
     "<hr>\n\n"
     "<pre><code>code block 5\n</code></pre>"
   );
-  REQUIRE(rich_text_to_html(GetTemporaryPointer(fbb, res.first), blocks, {}) == text_content);
-  REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) ==
+  REQUIRE(rich_text_to_html(get_temporary_pointer(fbb, res.first), blocks, {}) == text_content);
+  REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) ==
     "paragraph one\n\nparagraph two, this one has a\nnewline in it\n\nheading 3\n\nblockquote 4\n\n\n\ncode block 5\n");
 }
 
@@ -136,8 +137,8 @@ TEST_CASE("parse Markdown lists", "[rich_text]") {
     "<li>qux</li>\n\n"
     "<li>quux</li></ol></li></ul>"
   );
-  REQUIRE(rich_text_to_html(GetTemporaryPointer(fbb, res.first), blocks, {}) == text_content);
-  REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) == "foo\n\nbar\n\nbaz\n\nqux\n\nquux");
+  REQUIRE(rich_text_to_html(get_temporary_pointer(fbb, res.first), blocks, {}) == text_content);
+  REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) == "foo\n\nbar\n\nbaz\n\nqux\n\nquux");
 }
 
 TEST_CASE("parse Markdown links", "[rich_text]") {
@@ -148,8 +149,8 @@ TEST_CASE("parse Markdown links", "[rich_text]") {
   REQUIRE(expect_string(blocks, 0) == "<p>You&apos;re the 1,000,000th visitor! ");
   REQUIRE(expect_string(blocks, 1) == "http://example.com");
   REQUIRE(expect_string(blocks, 2) == "Click here</a> to claim your prize!</p>");
-  REQUIRE(rich_text_to_html(GetTemporaryPointer(fbb, res.first), blocks, {}) == R"(<p>You&apos;re the 1,000,000th visitor! <a href="http://example.com" rel="noopener noreferrer nofollow">Click here</a> to claim your prize!</p>)");
-  REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) == "You're the 1,000,000th visitor! Click here to claim your prize!");
+  REQUIRE(rich_text_to_html(get_temporary_pointer(fbb, res.first), blocks, {}) == R"(<p>You&apos;re the 1,000,000th visitor! <a href="http://example.com" rel="noopener noreferrer nofollow">Click here</a> to claim your prize!</p>)");
+  REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) == "You're the 1,000,000th visitor! Click here to claim your prize!");
 }
 
 TEST_CASE("parse Markdown complex links", "[rich_text]") {
@@ -162,8 +163,8 @@ TEST_CASE("parse Markdown complex links", "[rich_text]") {
   REQUIRE(expect_string(blocks, 2) == "Link <code>one</code></a>");
   REQUIRE(expect_string(blocks, 3) == "/2");
   REQUIRE(expect_string(blocks, 4) == "Link <em>two</em><strong>(!)</strong></a></p>");
-  REQUIRE(rich_text_to_html(GetTemporaryPointer(fbb, res.first), blocks, {}) == R"(<p><a href="/1" rel="noopener noreferrer nofollow">Link <code>one</code></a><a href="/2" rel="noopener noreferrer nofollow">Link <em>two</em><strong>(!)</strong></a></p>)");
-  REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) == "Link oneLink two(!)");
+  REQUIRE(rich_text_to_html(get_temporary_pointer(fbb, res.first), blocks, {}) == R"(<p><a href="/1" rel="noopener noreferrer nofollow">Link <code>one</code></a><a href="/2" rel="noopener noreferrer nofollow">Link <em>two</em><strong>(!)</strong></a></p>)");
+  REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) == "Link oneLink two(!)");
 }
 
 TEST_CASE("parse Markdown builtin emoji", "[rich_text]") {
@@ -172,8 +173,8 @@ TEST_CASE("parse Markdown builtin emoji", "[rich_text]") {
   const auto [types, blocks] = parse_results(fbb, res);
   REQUIRE(types == vector{RichText::Text});
   REQUIRE(expect_string(blocks, 0) == "<p>Nice 👍 <strong>🔥🔥🔥</strong></p>");
-  REQUIRE(rich_text_to_html(GetTemporaryPointer(fbb, res.first), blocks, {}) == "<p>Nice 👍 <strong>🔥🔥🔥</strong></p>");
-  REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) == "Nice 👍 🔥🔥🔥");
+  REQUIRE(rich_text_to_html(get_temporary_pointer(fbb, res.first), blocks, {}) == "<p>Nice 👍 <strong>🔥🔥🔥</strong></p>");
+  REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) == "Nice 👍 🔥🔥🔥");
 }
 
 TEST_CASE("parse Markdown custom emoji", "[rich_text]") {
@@ -188,13 +189,13 @@ TEST_CASE("parse Markdown custom emoji", "[rich_text]") {
   REQUIRE(expect_string(blocks, 4) == "water");
   REQUIRE(expect_string(blocks, 5) == "water");
   REQUIRE(expect_string(blocks, 6) == "</strong></p>");
-  REQUIRE(rich_text_to_html(GetTemporaryPointer(fbb, res.first), blocks, {}) == "<p>Nice :+2: <strong>:water::water::water:</strong></p>");
-  REQUIRE(rich_text_to_html(GetTemporaryPointer(fbb, res.first), blocks, {
+  REQUIRE(rich_text_to_html(get_temporary_pointer(fbb, res.first), blocks, {}) == "<p>Nice :+2: <strong>:water::water::water:</strong></p>");
+  REQUIRE(rich_text_to_html(get_temporary_pointer(fbb, res.first), blocks, {
     .lookup_emoji = [](auto emoji) {
       return fmt::format(R"(<img src="/{}.webp">)", Escape{emoji});
     }
   }) == R"(<p>Nice <img src="/+2.webp"> <strong><img src="/water.webp"><img src="/water.webp"><img src="/water.webp"></strong></p>)");
-  REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) == "Nice :+2: :water::water::water:");
+  REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) == "Nice :+2: :water::water::water:");
 }
 
 TEST_CASE("escape Markdown emoji with code blocks", "[rich_text]") {
@@ -203,8 +204,8 @@ TEST_CASE("escape Markdown emoji with code blocks", "[rich_text]") {
   const auto [types, blocks] = parse_results(fbb, res);
   REQUIRE(types == vector{RichText::Text});
   REQUIRE(expect_string(blocks, 0) == "<p>normal 👍 <code>escaped :+1:</code></p>");
-  REQUIRE(rich_text_to_html(GetTemporaryPointer(fbb, res.first), blocks, {}) == "<p>normal 👍 <code>escaped :+1:</code></p>");
-  REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) == "normal 👍 escaped :+1:");
+  REQUIRE(rich_text_to_html(get_temporary_pointer(fbb, res.first), blocks, {}) == "<p>normal 👍 <code>escaped :+1:</code></p>");
+  REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) == "normal 👍 escaped :+1:");
 }
 
 TEST_CASE("parse plaintext builtin emoji", "[rich_text]") {
@@ -213,8 +214,8 @@ TEST_CASE("parse plaintext builtin emoji", "[rich_text]") {
   const auto [types, blocks] = parse_results(fbb, res);
   REQUIRE(types == vector{RichText::Text});
   REQUIRE(expect_string(blocks, 0) == "Nice 👍 🔥🔥🔥");
-  REQUIRE(rich_text_to_html_emojis_only(GetTemporaryPointer(fbb, res.first), blocks, {}) == "Nice 👍 🔥🔥🔥");
-  REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) == "Nice 👍 🔥🔥🔥");
+  REQUIRE(rich_text_to_html_emojis_only(get_temporary_pointer(fbb, res.first), blocks, {}) == "Nice 👍 🔥🔥🔥");
+  REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) == "Nice 👍 🔥🔥🔥");
 }
 
 TEST_CASE("parse plaintext custom emoji", "[rich_text]") {
@@ -228,13 +229,13 @@ TEST_CASE("parse plaintext custom emoji", "[rich_text]") {
   REQUIRE(expect_string(blocks, 3) == "water");
   REQUIRE(expect_string(blocks, 4) == "water");
   REQUIRE(expect_string(blocks, 5) == "water");
-  REQUIRE(rich_text_to_html_emojis_only(GetTemporaryPointer(fbb, res.first), blocks, {}) == "Nice :+2: :water::water::water:");
-  REQUIRE(rich_text_to_html_emojis_only(GetTemporaryPointer(fbb, res.first), blocks, {
+  REQUIRE(rich_text_to_html_emojis_only(get_temporary_pointer(fbb, res.first), blocks, {}) == "Nice :+2: :water::water::water:");
+  REQUIRE(rich_text_to_html_emojis_only(get_temporary_pointer(fbb, res.first), blocks, {
     .lookup_emoji = [](auto emoji) {
       return fmt::format(R"(<img src="/{}.webp">)", Escape{emoji});
     }
   }) == R"(Nice <img src="/+2.webp"> <img src="/water.webp"><img src="/water.webp"><img src="/water.webp">)");
-  REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) == "Nice :+2: :water::water::water:");
+  REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) == "Nice :+2: :water::water::water:");
 }
 
 TEST_CASE("parse Markdown user and board references", "[rich_text]") {
@@ -285,7 +286,7 @@ TEST_CASE("parse Markdown user and board references", "[rich_text]") {
   REQUIRE(expect_string(blocks, 18) == "/c/foo@bar.example</a> ");
   REQUIRE(expect_string(blocks, 19) == "foo@bar.example");
   REQUIRE(expect_string(blocks, 20) == "!foo@bar.example</a></p>");
-  REQUIRE(rich_text_to_html(GetTemporaryPointer(fbb, res.first), blocks, {}) == "<p>"
+  REQUIRE(rich_text_to_html(get_temporary_pointer(fbb, res.first), blocks, {}) == "<p>"
     R"(<a href="/u/foo">/u/foo</a> )"
     R"(<a href="/u/foo">@foo</a> )"
     R"(<a href="/b/foo">/b/foo</a> )"
@@ -297,7 +298,7 @@ TEST_CASE("parse Markdown user and board references", "[rich_text]") {
     R"(<a href="/b/foo@bar.example">/c/foo@bar.example</a> )"
     R"(<a href="/b/foo@bar.example">!foo@bar.example</a></p>)"
   );
-  REQUIRE(rich_text_to_plain_text(GetTemporaryPointer(fbb, res.first), blocks) == "/u/foo @foo /b/foo /c/foo !foo /u/foo@bar.example @foo@bar.example /b/foo@bar.example /c/foo@bar.example !foo@bar.example");
+  REQUIRE(rich_text_to_plain_text(get_temporary_pointer(fbb, res.first), blocks) == "/u/foo @foo /b/foo /c/foo !foo /u/foo@bar.example @foo@bar.example /b/foo@bar.example /c/foo@bar.example !foo@bar.example");
 }
 
 TEST_CASE("parse Markdown auto links", "[rich_text]") {

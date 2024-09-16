@@ -1,5 +1,4 @@
 #pragma once
-#include "flatbuffers/flatbuffer_builder.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <algorithm>
@@ -11,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <glib.h>
 #include <fmt/core.h>
 #include <spdlog/spdlog.h>
 #include <uWebSockets/MoveOnlyFunction.h>
@@ -174,9 +174,27 @@ namespace Ludwig {
     return fmt::format("{:05X}-{:03X}-{:03X}-{:05X}", id >> 44, (id >> 32) & 0xfff, (id >> 20) & 0xfff, id & 0xfffff);
   }
 
+  static inline auto glib_log_level_to_spdlog_level(GLogLevelFlags level) -> spdlog::level::level_enum {
+    if (level & G_LOG_LEVEL_CRITICAL) return spdlog::level::critical;
+    if (level & G_LOG_LEVEL_ERROR) return spdlog::level::err;
+    if (level & G_LOG_LEVEL_WARNING) return spdlog::level::warn;
+    if (level & G_LOG_LEVEL_MESSAGE) return spdlog::level::info;
+    if (level & G_LOG_LEVEL_INFO) return spdlog::level::debug;
+    return spdlog::level::trace;
+  }
+
+  static inline auto glib_log_handler(
+    const gchar* log_domain,
+    GLogLevelFlags log_level,
+    const gchar* message,
+    gpointer
+  ) -> void {
+    spdlog::log(glib_log_level_to_spdlog_level(log_level), "{}: {}", log_domain, message);
+  }
+
   // Reimplemented here because the version in Flatbuffers is broken (missing const_cast)
   template <typename T>
-  const T* GetTemporaryPointer(const flatbuffers::FlatBufferBuilder& fbb, flatbuffers::Offset<T> offset) {
+  const T* get_temporary_pointer(const flatbuffers::FlatBufferBuilder& fbb, flatbuffers::Offset<T> offset) {
     return GetMutableTemporaryPointer<T>(const_cast<flatbuffers::FlatBufferBuilder&>(fbb), offset);
   }
 

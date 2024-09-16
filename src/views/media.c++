@@ -12,17 +12,16 @@ namespace Ludwig {
     MoveOnlyFunction<void (ThumbnailCache::Callback)>&& fn
   ) -> void {
     const string if_none_match(req->getHeader("if-none-match"));
-    fn([rsp, wrap = std::move(wrap), if_none_match](ThumbnailCache::Image img) mutable {
+    fn([rsp, wrap = std::move(wrap), if_none_match](ImageRef img) mutable {
       wrap([rsp, img, if_none_match]{
-        if (!*img) throw ApiError("No thumbnail available", 404);
-        const auto& [data, hash] = **img;
-        const auto hash_hex = fmt::format("\"{:016x}\"", hash);
+        if (!img) throw ApiError("No thumbnail available", 404);
+        const auto hash_hex = fmt::format(R"("{:016x}")", img.hash());
         if (if_none_match == hash_hex) {
           rsp->writeStatus(http_status(304))->end();
         } else {
           rsp->writeHeader("Content-Type", TYPE_WEBP)
             ->writeHeader("Etag", hash_hex)
-            ->end(data);
+            ->end(img);
         }
       });
     });

@@ -6,6 +6,7 @@
 #include <openssl/pem.h>
 #include <openssl/rand.h>
 #include <static_vector.hpp>
+#include "util/rich_text.h++"
 #include "util/web.h++"
 #include "models/patch.h++"
 

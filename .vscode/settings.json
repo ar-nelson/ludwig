@@ -1,3 +1,6 @@
 {
-  "mesonbuild.buildFolder": "build"
+  "mesonbuild.buildFolder": "build",
+  "mesonbuild.configureOptions": [
+    "b_sanitize=address"
+  ]
 }

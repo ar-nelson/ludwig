@@ -7,9 +7,10 @@ static inline void thumbnail(std::string extension) {
   auto src = load_file(test_root() / "images" / ("test." + extension));
   REQUIRE(!src.empty());
   auto thumbnail = generate_thumbnail("image/" + extension, src, 256);
-  REQUIRE(!thumbnail.empty());
+  REQUIRE(!!thumbnail);
   std::ofstream output(test_root() / "images" / ("thumbnail_" + extension + ".webp"));
-  output << thumbnail;
+  std::string_view sv = thumbnail;
+  output << sv;
 }
 
 TEST_CASE("webp thumbnail", "[thumbnailer]") {

@@ -2,6 +2,7 @@
 #include <openssl/rand.h>
 #include "controllers/instance.h++"
 #include "util/lambda_macros.h++"
+#include "util/rich_text.h++"
 
 using flatbuffers::FlatBufferBuilder, flatbuffers::Offset, flatbuffers::String,
     flatbuffers::Vector, std::nullopt, std::optional, std::pair, std::string,

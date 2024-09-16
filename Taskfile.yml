@@ -1,49 +1,59 @@
 version: '3'
 
 tasks:
-  cmake-debug:
-    desc: 🏗️ Set up CMake debug build directory in build.debug/
+  setup:
+    desc: 🏗️ Set up Meson debug build directory in build/
     sources:
-      - CMakeLists.txt
+      - meson.build
+      - src/meson.build
+      - src/models/meson.build
+      - src/static/meson.build
+      - test/meson.build
+      - vendor/meson.build
+      - subprojects/meson.build
     cmds:
-      - cmake -H. -Bbuild.debug -GNinja -DCMAKE_BUILD_TYPE=Debug
-      - rm -f build
-      - ln -s build.debug build
+      - meson setup build --buildtype debug -Db_sanitize=address
     generates:
-      - build.debug/build.ninja
-  cmake-release:
-    desc: 🏗️ Set up CMake release build directory in build.release/
+      - build/build.ninja
+  setup-release:
+    desc: 🏗️ Set up Meson release build directory in build.release/
     sources:
-      - CMakeLists.txt
+      - meson.build
+      - src/meson.build
+      - src/models/meson.build
+      - src/static/meson.build
+      - vendor/meson.build
+      - subprojects/meson.build
     cmds:
-      - cmake -H. -Bbuild.release -GNinja -DCMAKE_BUILD_TYPE=Release
-      - rm -f build
-      - ln -s build.release build
+      - meson setup build.release --buildtype release 
     generates:
       - build.release/build.ninja
-  build-debug:
-    desc: 🔧 Build in debug mode, along with unit tests, in build.debug/
+  build:
+    desc: 🔧 Build in debug mode, along with unit tests, in build/
     deps:
-      - cmake-debug
+      - setup
     sources:
       - src/**/*
       - test/**/*.c++
       - test/**/*.h++
-      - vendor/CMakeLists.txt
-      - CMakeLists.txt
+      - test/meson.build
+      - vendor/meson.build
+      - subprojects/meson.build
+      - meson.build
     cmds:
-      - ninja -C build.debug
+      - ninja -C build
     generates:
-      - build.debug/test
-      - build.debug/ludwig
+      - build/test/ludwig_test
+      - build/ludwig
   build-release:
     desc: 🔧 Build in release mode, in build.release/
     deps:
-      - cmake-release
+      - setup-release
     sources:
       - src/**/*
-      - vendor/CMakeLists.txt
-      - CMakeLists.txt
+      - vendor/meson.build
+      - subprojects/meson.build
+      - meson.build
     cmds:
       - ninja -C build.release
     generates:
@@ -51,22 +61,22 @@ tasks:
   test:
     desc: 🚨 Run the unit test suite
     deps:
-      - build-debug
+      - build
     cmds:
-      - ./build.debug/test
+      - "meson test -C build ludwig:"
   test-lldb:
     desc: 🚨 Run the unit test suite (in lldb)
     deps:
-      - build-debug
+      - build
     cmds:
-      - lldb -o run -- ./build.debug/test -b
-  run-debug:
+      - lldb -o run -- ./build/test/ludwig_test
+  run:
     desc: ▶️ Run the debug build of Ludwig, with default settings
     deps:
-      - build-debug
+      - build
     cmds:
-      - ./build.debug/ludwig --log-level debug
-  run:
+      - ./build/ludwig --log-level debug
+  run-release:
     desc: ▶️ Run the release build of Ludwig, with default settings
     deps:
       - build-release
@@ -74,10 +84,12 @@ tasks:
       - ./build.release/ludwig
   gen-typescript-flatbuffers:
     desc: ⚙️ Generate TypesScript Flatbuffers files used by the scripts in extras/
+    deps:
+      - build
     sources:
       - src/models/*.fbs
     cmds:
-      - ./build.debug/flatc --ts --gen-all -o ./extras/flatbuffers src/models/ts-models.fbs
+      - ./build/subprojects/flatbuffers-*/flatc --ts --gen-all -o ./extras/flatbuffers src/models/ts-models.fbs
       - >
         find ./extras/flatbuffers -iname '*.ts' -exec sed -i -e "s/\\.js'/.ts'/g" -e "s/from 'flatbuffers'/from 'npm:flatbuffers'/g" {} \;
     generates:
@@ -86,11 +98,11 @@ tasks:
     desc: "⚙️ Generate a ludwig.db file with random test fixture data. ⚠️ WARNING: WILL DELETE AN EXISTING DB FILE! ⚠️"
     deps:
       - gen-typescript-flatbuffers
-      - build-debug
+      - build
     cmds:
       - rm -f ludwig.mdb ludwig.mdb-lock search.mdb search.mdb-lock random.dbdump.zst
       - deno run extras/generate-mock-data.ts | zstd > random.dbdump.zst
-      - ./build.debug/ludwig --import random.dbdump.zst
+      - ./build/ludwig --import random.dbdump.zst
   html-sample:
     sources:
       - extras/static-sample-server.ts
@@ -101,4 +113,4 @@ tasks:
   clean:
     desc: 🧹 Delete all build directories
     cmds:
-      - rm -rf build build.debug build.release
+      - rm -rf build build.release

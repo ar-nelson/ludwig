@@ -6,6 +6,7 @@
 #include "static/ludwig.js.h++"
 #include "static/twemoji-piano.ico.h++"
 #include "util/lambda_macros.h++"
+#include "util/rich_text.h++"
 #include "util/web.h++"
 #include "util/zstd_db_dump.h++"
 #include <iterator>

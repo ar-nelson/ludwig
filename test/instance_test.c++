@@ -1,6 +1,7 @@
 #include "test_common.h++"
 #include "services/db.h++"
 #include "controllers/instance.h++"
+#include "util/rich_text.h++"
 
 using flatbuffers::FlatBufferBuilder, flatbuffers::Offset;
 
