@@ -50,7 +50,7 @@ static addKey(builder:flatbuffers.Builder, keyOffset:flatbuffers.Offset) {
 }
 
 static addValueInt(builder:flatbuffers.Builder, valueInt:bigint) {
-  builder.addFieldInt64(1, valueInt, BigInt(0));
+  builder.addFieldInt64(1, valueInt, null);
 }
 
 static addValueStr(builder:flatbuffers.Builder, valueStrOffset:flatbuffers.Offset) {

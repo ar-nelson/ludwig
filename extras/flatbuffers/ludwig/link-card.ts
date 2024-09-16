@@ -79,11 +79,11 @@ static addFetchTries(builder:flatbuffers.Builder, fetchTries:number) {
 }
 
 static addLastFetchAt(builder:flatbuffers.Builder, lastFetchAt:bigint) {
-  builder.addFieldInt64(2, lastFetchAt, BigInt(0));
+  builder.addFieldInt64(2, lastFetchAt, null);
 }
 
 static addMediaCategory(builder:flatbuffers.Builder, mediaCategory:MediaCategory) {
-  builder.addFieldInt8(3, mediaCategory, 0);
+  builder.addFieldInt8(3, mediaCategory, null);
 }
 
 static addTitle(builder:flatbuffers.Builder, titleOffset:flatbuffers.Offset) {

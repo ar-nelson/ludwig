@@ -3,6 +3,7 @@ project(
   'c',
   'cpp',
   version: '0.0.1',
+  meson_version: '>=0.63',
   license: 'Apache-2.0',
   default_options: ['c_std=gnu11', 'cpp_std=gnu++23', 'default_library=static'],
 )
@@ -55,21 +56,18 @@ inc_dir = include_directories(
 # Include libvips dependencies statically,
 # and add them as top-level dependencies,
 # to avoid libvips pulling in shared libs.
+zlib_dep = dependency('zlib', static: true)
 libpng_dep = dependency('libpng', static: true)
 libjpeg_dep = dependency('libjpeg', static: true)
 libwebp_dep = dependency('libwebp', static: true)
-#libhwy_dep = dependency('libhwy', static: true)
-#glib_dep = dependency('glib-2.0', static: true)
+libwebpmux_dep = dependency('libwebpmux', static: true)
+libwebpdemux_dep = dependency('libwebpdemux', static: true)
+libsharpyuv_dep = dependency('libsharpyuv', static: true)
 gio_dep = dependency('gio-2.0', static: true)
 gobject_dep = dependency('gobject-2.0', static: true)
-gmodule_dep = dependency('gmodule-2.0', static: true)
 expat_dep = dependency('expat', static: true)
-#pcre_dep = dependency('libpcre', static: true)
-zlib_dep = dependency('zlib', static: true)
 
 libvips_options = [
-  'default_library=static',
-  'debug=false',
   'deprecated=false',
   'examples=false',
   'cplusplus=true',
@@ -84,10 +82,8 @@ libvips_options = [
   'fftw=disabled',
   'fontconfig=disabled',
   'archive=disabled',
-  'heif=disabled', # TODO: enable HEIF and AVIF
   'imagequant=disabled',
   'jpeg=enabled',
-  'jpeg-xl=disabled', # TODO: enable JXL
   'lcms=disabled',
   'magick=disabled',
   'matio=disabled',
@@ -98,23 +94,53 @@ libvips_options = [
   'highway=enabled',
   'orc=disabled',
   'pangocairo=disabled',
-  'pdfium=disabled', # TODO: enable PDF thumbnails?
+  'pdfium=disabled',
   'png=enabled',
-  'poppler=disabled',
   'quantizr=disabled',
-  'rsvg=disabled', # TODO: enable SVG thumbnails
   'spng=disabled',
   'tiff=disabled',
   'webp=enabled',
   'zlib=enabled',
+  'ppm=false',
+  'analyze=false',
+  'radiance=false',
 ]
+
+if get_option('thumbnail_avif')
+  libvips_options += 'heif=enabled'
+  add_global_arguments('-DLUDWIG_THUMBNAIL_AVIF=1', language: 'cpp')
+else
+  libvips_options += 'heif=disabled'
+endif
+
+if get_option('thumbnail_jxl')
+  libvips_options += 'jpeg-xl=enabled'
+  add_global_arguments('-DLUDWIG_THUMBNAIL_JXL=1', language: 'cpp')
+else
+  libvips_options += 'jpeg-xl=disabled'
+endif
+
+if get_option('thumbnail_svg')
+  libvips_options += 'rsvg=enabled'
+  add_global_arguments('-DLUDWIG_THUMBNAIL_SVG=1', language: 'cpp')
+else
+  libvips_options += 'rsvg=disabled'
+endif
+
+if get_option('thumbnail_pdf')
+  libvips_options += 'poppler=enabled'
+  add_global_arguments('-DLUDWIG_THUMBNAIL_PDF=1', language: 'cpp')
+else
+  libvips_options += 'poppler=disabled'
+endif
 
 asio_dep = dependency('asio', static: true)
 catch2_dep = dependency('catch2-with-main')
 flatbuffers_dep = dependency('flatbuffers', static: true)
 flatc = find_program('flatc')
 fmt_dep = dependency('fmt', static: true)
-libvips_dep = subproject('libvips', default_options: libvips_options).get_variable('libvips_cpp_dep')
+libvips = subproject('libvips', default_options: libvips_options)
+libvips_dep = libvips.get_variable('libvips_cpp_dep')
 libxml2_dep = dependency('libxml-2.0', static: true)
 boringssl = cmake.subproject('boringssl', options: cmake_opts)
 crypto_dep = boringssl.dependency('crypto')
@@ -128,17 +154,16 @@ thread_dep = dependency('threads')
 zstd_dep = dependency('libzstd', static: true)
 
 libs = [
+  zlib_dep,
   libpng_dep,
   libjpeg_dep,
   libwebp_dep,
-  #libhwy_dep,
-  #glib_dep,
+  libwebpmux_dep,
+  libwebpdemux_dep,
+  libsharpyuv_dep,
   gio_dep,
   gobject_dep,
-  gmodule_dep,
   expat_dep,
-  #pcre_dep,
-  zlib_dep,
 
   asio_dep,
   flatbuffers_dep,

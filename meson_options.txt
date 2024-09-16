@@ -1,0 +1,27 @@
+option(
+  'thumbnail_avif',
+  type: 'boolean',
+  value: false,
+  description: 'Support thumbnailing AVIF images (via shared libheif)',
+)
+
+option(
+  'thumbnail_jxl',
+  type: 'boolean',
+  value: false,
+  description: 'Support thumbnailing JPEG-XL images (via shared libjxl)',
+)
+
+option(
+  'thumbnail_svg',
+  type: 'boolean',
+  value: false,
+  description: 'Support thumbnailing SVG images (via shared librsvg)',
+)
+
+option(
+  'thumbnail_pdf',
+  type: 'boolean',
+  value: false,
+  description: 'Support thumbnailing PDF files (via shared libpoppler-glib)',
+)

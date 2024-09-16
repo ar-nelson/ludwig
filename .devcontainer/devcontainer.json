@@ -19,7 +19,10 @@
 			"extensions": [
 				"mesonbuild.mesonbuild",
 				"llvm-vs-code-extensions.vscode-clangd",
-				"gaborv.flatbuffers"
+				"gaborv.flatbuffers",
+				"twxs.cmake",
+				"denoland.vscode-deno",
+				"ms-azuretools.vscode-docker"
 			]
 		}
 	},

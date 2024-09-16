@@ -262,15 +262,15 @@ static addCreatedAt(builder:flatbuffers.Builder, createdAt:bigint) {
 }
 
 static addUpdatedAt(builder:flatbuffers.Builder, updatedAt:bigint) {
-  builder.addFieldInt64(8, updatedAt, BigInt(0));
+  builder.addFieldInt64(8, updatedAt, null);
 }
 
 static addFetchedAt(builder:flatbuffers.Builder, fetchedAt:bigint) {
-  builder.addFieldInt64(9, fetchedAt, BigInt(0));
+  builder.addFieldInt64(9, fetchedAt, null);
 }
 
 static addDeletedAt(builder:flatbuffers.Builder, deletedAt:bigint) {
-  builder.addFieldInt64(10, deletedAt, BigInt(0));
+  builder.addFieldInt64(10, deletedAt, null);
 }
 
 static addDescriptionRaw(builder:flatbuffers.Builder, descriptionRawOffset:flatbuffers.Offset) {

@@ -25,7 +25,7 @@ tasks:
       - vendor/meson.build
       - subprojects/meson.build
     cmds:
-      - meson setup build.release --buildtype release 
+      - meson setup build.release --buildtype release -Ddebug=false -Dthumbnail_avif=true -Dthumbnail_jxl=true -Dthumbnail_svg=true -Dthumbnail_pdf=true
     generates:
       - build.release/build.ninja
   build:
@@ -92,6 +92,8 @@ tasks:
       - ./build/subprojects/flatbuffers-*/flatc --ts --gen-all -o ./extras/flatbuffers src/models/ts-models.fbs
       - >
         find ./extras/flatbuffers -iname '*.ts' -exec sed -i -e "s/\\.js'/.ts'/g" -e "s/from 'flatbuffers'/from 'npm:flatbuffers'/g" {} \;
+    env:
+      ASAN_OPTIONS: detect_leaks=0
     generates:
       - ./extras/flatbuffers/ludwig.ts
   gen-random-db:

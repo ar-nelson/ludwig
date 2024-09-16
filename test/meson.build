@@ -23,6 +23,7 @@ if not get_option('buildtype').startswith('release')
     test_sources,
     dependencies: [libs, catch2_dep],
     include_directories: inc_dir,
+    cpp_args: ['-DLUDWIG_TEST_ROOT="' + meson.current_source_dir() + '"'],
   )
 
   test('http_client', test_exe, args: ['[http_client]'])

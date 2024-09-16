@@ -1,6 +1,7 @@
 #include "util/common.h++"
 #include "util/web.h++"
 #include "services/http_client.h++"
+#include <glib.h>
 #include <map>
 #include <filesystem>
 #include <fstream>
@@ -15,16 +16,23 @@ using namespace std::chrono_literals;
 using namespace std::literals::string_view_literals;
 using namespace Ludwig;
 
-static_block {
-  spdlog::set_level(spdlog::level::debug);
-}
+#ifndef LUDWIG_TEST_ROOT
+#error "String macro LUDWIG_TEST_ROOT must be defined when building tests"
+#endif
 
 static inline auto test_root() {
-  std::filesystem::path p(__FILE__);
-  return p.parent_path();
+  return std::filesystem::absolute(LUDWIG_TEST_ROOT);
+}
+
+static_block {
+  spdlog::set_level(spdlog::level::debug);
+  g_log_set_handler(G_LOG_DOMAIN, G_LOG_LEVEL_MASK, glib_log_handler, nullptr);
+  g_log_set_handler("GLib-GObject", G_LOG_LEVEL_MASK, glib_log_handler, nullptr);
+  g_log_set_handler("VIPS", G_LOG_LEVEL_MASK, glib_log_handler, nullptr);
 }
 
 static inline auto load_file(std::filesystem::path p) -> string {
+  if (!std::filesystem::exists(p)) spdlog::error("Missing file: {}", p.string());
   REQUIRE(std::filesystem::exists(p));
   std::ostringstream ss;
   std::ifstream input(p, std::ios::binary);

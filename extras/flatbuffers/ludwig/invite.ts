@@ -64,11 +64,11 @@ static addFrom(builder:flatbuffers.Builder, from:bigint) {
 }
 
 static addAcceptedAt(builder:flatbuffers.Builder, acceptedAt:bigint) {
-  builder.addFieldInt64(3, acceptedAt, BigInt(0));
+  builder.addFieldInt64(3, acceptedAt, null);
 }
 
 static addTo(builder:flatbuffers.Builder, to:bigint) {
-  builder.addFieldInt64(4, to, BigInt(0));
+  builder.addFieldInt64(4, to, null);
 }
 
 static endInvite(builder:flatbuffers.Builder):flatbuffers.Offset {
