@@ -57,6 +57,7 @@ int main(int argc, char** argv) {
     .set_default(4096);
   parser.add_option("--db")
     .dest("db")
+    .type("FILE.mdb")
     .help("database filename, will be created if it does not exist (default = ludwig.mdb)")
     .set_default("ludwig.mdb");
   parser.add_option("--search")
@@ -65,15 +66,17 @@ int main(int argc, char** argv) {
     .set_default("lmdb:search.mdb");
   parser.add_option("--import")
     .dest("import")
+    .type("FILE.zst")
     .help("database dump file to import; if present, database file (--db) must not exist yet; exits after importing");
   parser.add_option("--export")
     .dest("export")
+    .type("FILE.zst")
     .help("database dump file to export to; exits after exporting");
   parser.add_option("--log-level")
     .dest("log_level")
     .help("log level (debug, info, warn, error, critical)")
     .set_default("info");
-  parser.add_option("r", "--rate-limit")
+  parser.add_option("-r", "--rate-limit")
     .dest("rate_limit")
     .type("INT")
     .help("max requests per 5 minutes from a single IP (default = 3000)")
@@ -83,6 +86,14 @@ int main(int argc, char** argv) {
     .type("INT")
     .help("number of request handler threads (default = number of cores)")
     .set_default(0);
+  parser.add_option("--unsafe-https")
+    .nargs(0)
+    .dest("unsafe_https")
+    .help("don't validate HTTPS certificates when making requests to other servers");
+  parser.add_option("--unsafe-local-requests")
+    .nargs(0)
+    .dest("unsafe_local_requests")
+    .help("don't block HTTP requests to local network IP addresses");
   parser.add_help_option();
 
   const optparse::Values options = parser.parse_args(argc, argv);
@@ -216,7 +227,10 @@ int main(int argc, char** argv) {
 
   AsioThreadPool pool(threads);
   auto rate_limiter = make_shared<KeyedRateLimiter>(rate_limit / 300.0, rate_limit);
-  auto http_client = make_shared<AsioHttpClient>(pool.io);
+  auto http_client = make_shared<AsioHttpClient>(pool.io, 1000,
+    options.is_set_by_user("unsafe_https") ? UNSAFE_HTTPS : SAFE_HTTPS,
+    options.is_set_by_user("unsafe_local_requests") ? UNSAFE_LOCAL_REQUESTS : SAFE_LOCAL_REQUESTS
+  );
   auto event_bus = make_shared<AsioEventBus>(pool.io);
   auto xml_ctx = make_shared<LibXmlContext>();
   auto instance_c = make_shared<InstanceController>(db, http_client, event_bus, search_engine, first_run_admin_password);

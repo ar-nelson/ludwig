@@ -27,7 +27,12 @@ public:
   AsioHttpClient http;
   shared_ptr<MockHttpClient> outer_http;
   shared_ptr<InstanceController> instance;
-  IntegrationTest() : pool(1), xml(make_shared<LibXmlContext>()), http(pool.io), outer_http(make_shared<MockHttpClient>()) {
+  IntegrationTest() :
+    pool(1),
+    xml(make_shared<LibXmlContext>()),
+    http(pool.io, 100000, UNSAFE_HTTPS, UNSAFE_LOCAL_REQUESTS),
+    outer_http(make_shared<MockHttpClient>())
+  {
     pair<Hash, Salt> first_run_hash;
     RAND_pseudo_bytes(const_cast<uint8_t*>(first_run_hash.second.bytes()->Data()), first_run_hash.second.bytes()->size());
     InstanceController::hash_password(
