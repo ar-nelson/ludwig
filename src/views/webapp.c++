@@ -1,6 +1,8 @@
 #include "views/webapp.h++"
+#include "controllers/instance.h++"
+#include "db.h++"
 #include "models/enums.h++"
-#include "static/default-theme.css.h++"
+#include "static/default-theme.min.css.h++"
 #include "static/feather-sprite.svg.h++"
 #include "static/htmx.min.js.h++"
 #include "static/ludwig.js.h++"
@@ -15,7 +17,7 @@
 
 using std::bind, std::match_results, std::monostate, std::nullopt, std::optional, std::regex,
     std::regex_search, std::shared_ptr, std::stoull, std::string, std::string_view, std::variant,
-    std::visit;
+    std::visit, fmt::format, fmt::format_to, fmt::operator""_cf;
 
 using namespace std::placeholders;
 namespace chrono = std::chrono;
@@ -23,38 +25,41 @@ namespace chrono = std::chrono;
 #define COOKIE_NAME "ludwig_session"
 
 namespace Ludwig {
-struct Suffixed {
-  int64_t n;
-};
-struct RelativeTime {
-  Timestamp t;
-};
-} // namespace Ludwig
+  struct Suffixed {
+    int64_t n;
+  };
+  struct RelativeTime {
+    Timestamp t;
+  };
+}
 
 namespace fmt {
 template <> struct formatter<Ludwig::Suffixed> : public Ludwig::CustomFormatter {
   // Adapted from https://programming.guide/java/formatting-byte-size-to-human-readable-format.html
-  auto format(Ludwig::Suffixed x, format_context &ctx) const {
+  template <typename FormatContext>
+  auto format(Ludwig::Suffixed x, FormatContext &ctx) const {
     static constexpr auto SUFFIXES = "KMBTqQ";
     auto n = x.n;
     if (-1000 < n && n < 1000)
-      return fmt::format_to(ctx.out(), "{:d}", n);
+      return format_to(ctx.out(), "{:d}"_cf, n);
     uint8_t i = 0;
     while (n <= -999'950 || n >= 999'950) {
       n /= 1000;
       i++;
     }
-    return fmt::format_to(ctx.out(), "{:.3g}{:c}", (double)n / 1000.0, SUFFIXES[i]);
+    return format_to(ctx.out(), "{:.3g}{:c}"_cf, (double)n / 1000.0, SUFFIXES[i]);
     // SUFFIXES[i] can never overflow, max 64-bit int is ~18 quintillion (Q)
   }
 };
 
 template <> struct formatter<Ludwig::RelativeTime> : public Ludwig::CustomFormatter {
-  static auto write(format_context &ctx, const char s[]) {
+  template <typename FormatContext>
+  static auto write(FormatContext &ctx, const char s[]) {
     return std::copy(s, s + std::char_traits<char>::length(s), ctx.out());
   }
 
-  auto format(Ludwig::RelativeTime x, format_context &ctx) const {
+  template <typename FormatContext>
+  auto format(Ludwig::RelativeTime x, FormatContext &ctx) const {
     using namespace chrono;
     const auto now = Ludwig::now_t();
     if (x.t > now)
@@ -65,26 +70,26 @@ template <> struct formatter<Ludwig::RelativeTime> : public Ludwig::CustomFormat
     if (diff < 2min)
       return write(ctx, "1 minute ago");
     if (diff < 1h)
-      return fmt::format_to(ctx.out(), "{:d} minutes ago", duration_cast<minutes>(diff).count());
+      return format_to(ctx.out(), "{:d} minutes ago"_cf, duration_cast<minutes>(diff).count());
     if (diff < 2h)
       return write(ctx, "1 hour ago");
     if (diff < days{1})
-      return fmt::format_to(ctx.out(), "{:d} hours ago", duration_cast<hours>(diff).count());
+      return format_to(ctx.out(), "{:d} hours ago"_cf, duration_cast<hours>(diff).count());
     if (diff < days{2})
       return write(ctx, "1 day ago");
     if (diff < weeks{1})
-      return fmt::format_to(ctx.out(), "{:d} days ago", duration_cast<days>(diff).count());
+      return format_to(ctx.out(), "{:d} days ago"_cf, duration_cast<days>(diff).count());
     if (diff < weeks{2})
       return write(ctx, "1 week ago");
     if (diff < months{1})
-      return fmt::format_to(ctx.out(), "{:d} weeks ago", duration_cast<weeks>(diff).count());
+      return format_to(ctx.out(), "{:d} weeks ago"_cf, duration_cast<weeks>(diff).count());
     if (diff < months{2})
       return write(ctx, "1 month ago");
     if (diff < years{1})
-      return fmt::format_to(ctx.out(), "{:d} months ago", duration_cast<months>(diff).count());
+      return format_to(ctx.out(), "{:d} months ago"_cf, duration_cast<months>(diff).count());
     if (diff < years{2})
       return write(ctx, "1 year ago");
-    return fmt::format_to(ctx.out(), "{:d} years ago", duration_cast<years>(diff).count());
+    return format_to(ctx.out(), "{:d} years ago"_cf, duration_cast<years>(diff).count());
   }
 };
 }
@@ -158,6 +163,18 @@ namespace Ludwig {
     }
   }
 
+  static inline auto check(bool b) -> string_view {
+    return b ? " checked" : "";
+  }
+
+  template <typename T>
+  static inline auto select(T n, T v) -> string_view {
+    return n == v ? " selected" : "";
+  }
+
+# define die(STATUS, MESSAGE) throw ApiError(MESSAGE, STATUS)
+# define die_fmt(STATUS, MESSAGE, ...) throw ApiError(format(MESSAGE ""_cf, __VA_ARGS__), STATUS)
+
   template <bool SSL> struct Webapp : public std::enable_shared_from_this<Webapp<SSL>> {
     shared_ptr<InstanceController> controller;
     shared_ptr<KeyedRateLimiter> rate_limiter; // may be null!
@@ -202,16 +219,16 @@ namespace Ludwig {
       }
 
       auto require_login() {
-        if (!logged_in_user_id) throw ApiError("Login is required", 401);
+        if (!logged_in_user_id) die(401, "Login is required");
         const auto id = *logged_in_user_id;
-        if (!id && site->setup_done) throw ApiError("Site is set up, temporary login is no longer valid", 401);
+        if (!id && site->setup_done) die(401, "Site is set up, temporary login is no longer valid");
         return id;
       }
 
       auto require_login(ReadTxn& txn) -> const LocalUserDetail& {
-        if (!logged_in_user_id) throw ApiError("Login is required", 401);
+        if (!logged_in_user_id) die(401, "Login is required");
         if (!login) populate(txn);
-        if (!login) throw ApiError("Site is set up, temporary login is no longer valid", 401);
+        if (!login) die(401, "Site is set up, temporary login is no longer valid");
         return *login;
       }
 
@@ -240,7 +257,7 @@ namespace Ludwig {
           spdlog::debug("Regenerated session {:x} as {:x}", old_session, new_session->session_id);
           return {
             new_session,
-            fmt::format(COOKIE_NAME "={:x}; path=/; expires={:%a, %d %b %Y %T %Z}",
+            format(COOKIE_NAME "={:x}; path=/; expires={:%a, %d %b %Y %T %Z}"_cf,
               new_session->session_id, fmt::gmtime(new_session->expiration))
           };
         }
@@ -257,21 +274,21 @@ namespace Ludwig {
       const string ip(get_ip(rsp, req));
 
       if (rate_limiter && !rate_limiter->try_acquire(ip, req->getMethod() == "GET" ? 1 : 10)) {
-        throw ApiError("Rate limited, try again later", 429);
+        die(429, "Rate limited, try again later");
       }
 
       const auto [new_session, session_cookie] = get_auth_cookie(req, ip);
       auto site = controller->site_detail();
       if (!new_session) {
         if (site->require_login_to_view && req->getUrl() != "/login") {
-          throw ApiError("Login is required to view this page", 401);
+          die(401, "Login is required to view this page");
         }
         if (!site->setup_done && req->getUrl() != "/login") {
-          throw ApiError("First-run setup is not complete. Log in as an admin user to complete site setup. If no admin user exists, check console output for a randomly-generated password.", 401);
+          die(401, "First-run setup is not complete. Log in as an admin user to complete site setup. If no admin user exists, check console output for a randomly-generated password.");
         }
       } else if (!site->setup_done) {
         if (req->getUrl() != "/" && req->getUrl() != "/login" && req->getUrl() != "/logout" && req->getUrl() != "/site_admin/first_run_setup") {
-          throw ApiError("First-run setup is not complete. This page is not yet accessible.", 403);
+          die(403, "First-run setup is not complete. This page is not yet accessible.");
         }
       }
 
@@ -309,13 +326,14 @@ namespace Ludwig {
       InstanceController& controller;
       Response rsp;
       string buf;
+      std::back_insert_iterator<string> inserter = std::back_inserter(buf);
 
       ResponseWriter(Webapp<SSL>* w, Response rsp) : controller(*w->controller), rsp(rsp) { buf.reserve(1024); }
       operator Response() { return rsp; }
       auto write(string_view s) noexcept -> ResponseWriter& { buf.append(s); return *this; }
       auto finish() -> void { rsp->end(buf); }
-      template <typename... Args> auto write_fmt(fmt::format_string<Args...> fmt, Args&&... args) noexcept -> ResponseWriter& {
-        fmt::format_to(std::back_inserter(buf), fmt, std::forward<Args>(args)...);
+      template <typename T, typename... Args> auto write_fmt(T fmt, Args&&... args) noexcept -> ResponseWriter& {
+        format_to(inserter, fmt, std::forward<Args>(args)...);
         return *this;
       }
 
@@ -323,7 +341,7 @@ namespace Ludwig {
         return write_fmt(
           R"(<div hx-swap-oob="afterbegin:#toasts">)"
           R"(<p class="toast{}" aria-live="polite" hx-get="data:text/html," hx-trigger="click, every 30s" hx-swap="delete">{}</p>)"
-          "</div>",
+          "</div>"_cf,
           extra_classes, Escape{content}
         );
       }
@@ -357,7 +375,7 @@ namespace Ludwig {
           return rich_text_to_html_emojis_only(user.display_name_type(), user.display_name(), {});
         }
         const auto name = user.name()->string_view();
-        return fmt::format("{}", Escape(name.substr(0, name.find('@'))));
+        return format("{}"_cf, Escape(name.substr(0, name.find('@'))));
       }
 
       auto display_name_as_html(const Board& board) -> string {
@@ -365,7 +383,7 @@ namespace Ludwig {
           return rich_text_to_html_emojis_only(board.display_name_type(), board.display_name(), {});
         }
         const auto name = board.name()->string_view();
-        return fmt::format("{}", Escape(name.substr(0, name.find('@'))));
+        return format("{}"_cf, Escape(name.substr(0, name.find('@'))));
       }
 
       struct HtmlHeaderOptions {
@@ -382,7 +400,7 @@ namespace Ludwig {
           R"(<meta name="viewport" content="width=device-width,initial-scale=1">)"
           R"(<meta name="referrer" content="same-origin"><title>{}{}{}</title>)"
           R"(<style type="text/css">body{}--color-accent:{}!important;--color-accent-dim:{}!important;--color-accent-hover:{}!important;{}</style>)"
-          R"(<link rel="stylesheet" href="/static/default-theme.css">)",
+          R"(<link rel="stylesheet" href="/static/default-theme.css">)"_cf,
           Escape{m.site->name},
           (opt.page_title || opt.banner_title) ? " - " : "",
           Escape{
@@ -406,7 +424,7 @@ namespace Ludwig {
           write_fmt(
             R"(<link rel="canonical" href="{0}{1}">)"
             R"(<meta property="og:url" content="{0}{1}">)"
-            R"(<meta property="twitter:url" content="{0}{1}">)",
+            R"(<meta property="twitter:url" content="{0}{1}">)"_cf,
             Escape{m.site->base_url}, Escape{*opt.canonical_path}
           );
         }
@@ -415,7 +433,7 @@ namespace Ludwig {
             R"(<meta property="title" href="{0} - {1}">)"
             R"(<meta property="og:title" content="{0} - {1}">)"
             R"(<meta property="twitter:title" content="{0} - {1}">)"
-            R"(<meta property="og:type" content="website">)",
+            R"(<meta property="og:type" content="website">)"_cf,
             Escape{m.site->name}, Escape{*opt.page_title}
           );
         }
@@ -423,7 +441,7 @@ namespace Ludwig {
           write_fmt(
             R"(<meta property="og:image" content="{0}">)"
             R"(<meta property="twitter:image" content="{0}>)"
-            R"(<meta property="twitter:card" content="summary_large_image">)",
+            R"(<meta property="twitter:card" content="summary_large_image">)"_cf,
             Escape{*opt.card_image}
           );
         }
@@ -434,14 +452,14 @@ namespace Ludwig {
           R"(<li><a href="/local">Local</a>)"
           R"(<li><a href="/all">All</a>)"
           R"(<li><a href="/boards">Boards</a>)"
-          R"(<li><a href="/users">Users</a>)",
+          R"(<li><a href="/users">Users</a>)"_cf,
           Escape{m.site->name}
         );
         if (m.login) {
           write_fmt(
             R"(</ul><ul>)"
             R"(<li id="topbar-user"><a href="/u/{}">{}</a> ({:d}))"
-            R"(<li><a href="/settings">Settings</a>{}<li><a href="/logout">Logout</a></ul></nav>)",
+            R"(<li><a href="/settings">Settings</a>{}<li><a href="/logout">Logout</a></ul></nav>)"_cf,
             Escape(m.login->user().name()),
             display_name_as_html(m.login->user()),
             m.login->stats().thread_karma() + m.login->stats().comment_karma(),
@@ -461,15 +479,15 @@ namespace Ludwig {
         if (opt.banner_title) {
           write(R"(<header id="page-header")");
           if (opt.banner_image) {
-            write_fmt(R"( class="banner-image" style="background-image:url('{}');")", Escape{*opt.banner_image});
+            write_fmt(R"( class="banner-image" style="background-image:url('{}');")"_cf, Escape{*opt.banner_image});
           }
           if (opt.banner_link) {
             write_fmt(
-              R"(><h1><a class="page-header-link" href="{}">{}</a></h1></header>)",
+              R"(><h1><a class="page-header-link" href="{}">{}</a></h1></header>)"_cf,
               Escape{*opt.banner_link}, Escape{*opt.banner_title}
             );
           } else {
-            write_fmt("><h1>{}</h1></header>", Escape{*opt.banner_title});
+            write_fmt("><h1>{}</h1></header>"_cf, Escape{*opt.banner_title});
           }
         }
         return *this;
@@ -482,27 +500,17 @@ namespace Ludwig {
 #         ifdef LUDWIG_DEBUG
           " (DEBUG BUILD)"
 #         endif
-          R"( · Generated in {:L}μs</small></footer></body></html>)",
+          R"( · Generated in {:L}μs</small></footer></body></html>)"_cf,
           VERSION,
           m.time_elapsed()
         );
       }
 
-#     define ICON(NAME) \
-        R"(<svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#)" NAME R"("></svg>)"
-#     define HTML_FIELD(ID, LABEL, TYPE, EXTRA) \
-        "<label for=\"" ID "\"><span>" LABEL "</span><input type=\"" TYPE "\" name=\"" ID "\" id=\"" ID "\"" EXTRA "></label>"
-#     define HTML_CHECKBOX(ID, LABEL, EXTRA) \
-        "<label for=\"" ID "\"><span>" LABEL "</span><input type=\"checkbox\" class=\"a11y\" name=\"" ID "\" id=\"" ID "\"" EXTRA "><div class=\"toggle-switch\"></div></label>"
-#     define HTML_TEXTAREA(ID, LABEL, EXTRA, CONTENT) \
-        "<label for=\"" ID "\"><span>" LABEL "</span><div><textarea name=\"" ID "\" id=\"" ID "\"" EXTRA ">" CONTENT \
-        R"(</textarea><small><a href="https://www.markdownguide.org/cheat-sheet/" target="_blank">Markdown</a> formatting is supported.</small></div></label>)"
-
       auto write_subscribe_button(string_view name, bool is_unsubscribe) noexcept -> ResponseWriter& {
         return write_fmt(
           R"(<form method="post" action="/b/{0}/subscribe" hx-post="/b/{0}/subscribe" hx-swap="outerHTML">{1})"
           R"(<button type="submit" class="big-button">{2}</button>)"
-          "</form>",
+          "</form>"_cf,
           Escape{name},
           is_unsubscribe ? R"(<input type="hidden" name="unsubscribe" value="1">)" : "",
           is_unsubscribe ? "Unsubscribe" : "Subscribe"
@@ -533,12 +541,12 @@ namespace Ludwig {
         const auto hide_cw = login && login->local_user().hide_cw_posts();
         const optional<BoardDetail> board =
           std::holds_alternative<const BoardDetail>(detail) ? optional(std::get<const BoardDetail>(detail)) : nullopt;
-        if (board) write_fmt(R"(<input type="hidden" name="board" value="{:x}">)", board->id);
+        if (board) write_fmt(R"(<input type="hidden" name="board" value="{:x}">)"_cf, board->id);
         if (!hide_cw || board) {
           write(R"(<details id="search-options"><summary>Search Options</summary><fieldset>)");
           if (board) {
             write_fmt(
-              R"(<label for="only_board"><input type="checkbox" name="only_board" id="only_board" checked> Limit my search to {}</label>)",
+              R"(<label for="only_board"><input type="checkbox" name="only_board" id="only_board" checked> Limit my search to {}</label>)"_cf,
               display_name_as_html(board->board())
             );
           }
@@ -555,7 +563,7 @@ namespace Ludwig {
             R"(<label for="password"><span class="a11y">Password</span><input type="password" name="password" id="password" placeholder="Password"></label>)"
             R"(<label for="remember"><input type="checkbox" name="remember" id="remember"> Remember me</label>)"
             R"(<input type="submit" value="Login" class="big-button"></form>)"
-            R"({}</section>)",
+            R"({}</section>)"_cf,
             HONEYPOT_FIELD,
             site->registration_enabled ? R"(<a href="/register" class="big-button">Register</a>)" : ""
           );
@@ -576,13 +584,13 @@ namespace Ludwig {
               if (board.can_create_thread(login)) {
                 write_fmt(
                   R"(<a class="big-button" href="/b/{0}/create_thread">Submit a new link</a>)"
-                  R"(<a class="big-button" href="/b/{0}/create_thread?text=1">Submit a new text post</a>)",
+                  R"(<a class="big-button" href="/b/{0}/create_thread?text=1">Submit a new text post</a>)"_cf,
                   Escape(board.board().name())
                 );
               }
               if (board.can_change_settings(login)) {
                 write_fmt(
-                  R"(<a class="big-button" href="/b/{0}/settings">Board settings</a>)",
+                  R"(<a class="big-button" href="/b/{0}/settings">Board settings</a>)"_cf,
                   Escape(board.board().name())
                 );
               }
@@ -594,20 +602,20 @@ namespace Ludwig {
 
         visit(overload{
           [&](std::monostate) {
-            write_fmt(R"(<section id="site-sidebar"><h2>{}</h2>)", Escape{site->name});
+            write_fmt(R"(<section id="site-sidebar"><h2>{}</h2>)"_cf, Escape{site->name});
             if (site->banner_url) {
               write_fmt(
-                R"(<div class="sidebar-banner"><img src="{}" alt="{} banner"></div>)",
+                R"(<div class="sidebar-banner"><img src="{}" alt="{} banner"></div>)"_cf,
                 Escape{*site->banner_url}, Escape{site->name}
               );
             }
-            write_fmt("<p>{}</p>", Escape{site->description});
+            write_fmt("<p>{}</p>"_cf, Escape{site->description});
           },
           [&](const BoardDetail& board) {
-            write_fmt(R"(<section id="board-sidebar"><h2>{}</h2>)", display_name_as_html(board.board()));
+            write_fmt(R"(<section id="board-sidebar"><h2>{}</h2>)"_cf, display_name_as_html(board.board()));
             // TODO: Banner image
             if (board.board().description_type() && board.board().description_type()->size()) {
-              write_fmt("<p>{}</p>", rich_text_to_html(
+              write_fmt(R"(<div class="markdown">{}</div>)"_cf, rich_text_to_html(
                 board.board().description_type(),
                 board.board().description(),
                 { .open_links_in_new_tab = login && login->local_user().open_links_in_new_tab() }
@@ -615,9 +623,9 @@ namespace Ludwig {
             }
           },
           [&](const UserDetail& user) {
-            write_fmt(R"(<section id="user-sidebar"><h2>{}</h2>)", display_name_as_html(user.user()));
+            write_fmt(R"(<section id="user-sidebar"><h2>{}</h2>)"_cf, display_name_as_html(user.user()));
             if (user.user().bio_type() && user.user().bio_type()->size()) {
-              write_fmt("<p>{}</p>", rich_text_to_html(
+              write_fmt(R"(<div class="markdown">{}</div>)"_cf, rich_text_to_html(
                 user.user().bio_type(),
                 user.user().bio(),
                 { .open_links_in_new_tab = login && login->local_user().open_links_in_new_tab() }
@@ -630,13 +638,13 @@ namespace Ludwig {
       }
 
       auto write_datetime(Timestamp timestamp) noexcept -> ResponseWriter& {
-        return write_fmt(R"(<time datetime="{:%FT%TZ}" title="{:%D %r %Z}">{}</time>)",
-          fmt::gmtime(timestamp), timestamp, RelativeTime{timestamp});
+        return write_fmt(R"(<time datetime="{:%FT%TZ}" title="{:%D %r %Z}">{}</time>)"_cf,
+          fmt::gmtime(timestamp), fmt::localtime(chrono::system_clock::to_time_t(timestamp)), RelativeTime{timestamp});
       }
 
       auto write_user_avatar(const User& user, Login login = {}) noexcept -> ResponseWriter& {
         if (user.avatar_url() && (!login || login->local_user().show_avatars())) {
-          return write_fmt(R"(<img aria-hidden="true" class="avatar" loading="lazy" src="/media/user/{}/avatar.webp">)",
+          return write_fmt(R"(<img aria-hidden="true" class="avatar" loading="lazy" src="/media/user/{}/avatar.webp">)"_cf,
             Escape{user.name()}
           );
         }
@@ -656,19 +664,19 @@ namespace Ludwig {
         // TODO: board-specific mod_state
         if (user.mod_state() > ModState::Normal) {
           if (user.mod_reason()) {
-            write_fmt(R"( <abbr class="tag tag-mod-state" title="{0}: {1}">{0}</abbr>)",
+            write_fmt(R"( <abbr class="tag tag-mod-state" title="{0}: {1}">{0}</abbr>)"_cf,
               describe_mod_state(user.mod_state()),
               Escape(user.mod_reason())
             );
           } else {
-            write_fmt(R"( <span class="tag tag-mod-state">{}</span>)", describe_mod_state(user.mod_state()));
+            write_fmt(R"( <span class="tag tag-mod-state">{}</span>)"_cf, describe_mod_state(user.mod_state()));
           }
         }
         return *this;
       }
 
       auto write_user_link(const User& user, bool user_is_admin, Login login, uint64_t board_id = 0) noexcept -> ResponseWriter& {
-        return write_fmt(R"(<a class="user-link" href="/u/{}">)", Escape(user.name()))
+        return write_fmt(R"(<a class="user-link" href="/u/{}">)"_cf, Escape(user.name()))
           .write_user_avatar(user, login)
           .write_qualified_display_name(&user)
           .write("</a>")
@@ -677,7 +685,7 @@ namespace Ludwig {
 
       auto write_board_icon(const Board& board) noexcept -> ResponseWriter& {
         if (board.icon_url()) {
-          return write_fmt(R"(<img aria-hidden="true" class="avatar" loading="lazy" src="/media/board/{}/icon.webp">)",
+          return write_fmt(R"(<img aria-hidden="true" class="avatar" loading="lazy" src="/media/board/{}/icon.webp">)"_cf,
             Escape(board.name())
           );
         }
@@ -686,7 +694,7 @@ namespace Ludwig {
 
       auto write_board_tags(const Board& board) noexcept -> ResponseWriter& {
         if (board.content_warning()) {
-          write_fmt(R"( <abbr class="tag tag-cw" title="Content Warning: {}">CW</abbr>)", Escape(board.content_warning()));
+          write_fmt(R"( <abbr class="tag tag-cw" title="Content Warning: {}">CW</abbr>)"_cf, Escape(board.content_warning()));
         }
         if (board.deleted_at()) {
           write(R"( <span class="tag tag-deleted">Deleted</span>)");
@@ -694,19 +702,19 @@ namespace Ludwig {
         const auto mod_state = board.mod_state();
         if (mod_state > ModState::Normal) {
           if (board.mod_reason()) {
-            write_fmt(R"( <abbr class="tag tag-mod-state" title="{0}: {1}">{0}</abbr>)",
+            write_fmt(R"( <abbr class="tag tag-mod-state" title="{0}: {1}">{0}</abbr>)"_cf,
               describe_mod_state(board.mod_state()),
               Escape(board.mod_reason())
             );
           } else {
-            write_fmt(R"( <span class="tag tag-mod-state">{}</span>)", describe_mod_state(board.mod_state()));
+            write_fmt(R"( <span class="tag tag-mod-state">{}</span>)"_cf, describe_mod_state(board.mod_state()));
           }
         }
         return *this;
       }
 
       auto write_board_link(const Board& board) noexcept -> ResponseWriter& {
-        return write_fmt(R"(<a class="board-link" href="/b/{}">)", Escape(board.name()))
+        return write_fmt(R"(<a class="board-link" href="/b/{}">)"_cf, Escape(board.name()))
           .write_board_icon(board)
           .write_qualified_display_name(&board)
           .write("</a>")
@@ -717,13 +725,13 @@ namespace Ludwig {
         write(R"(<li class="board-list-entry"><div class="board-list-desc"><p class="board-list-name">)");
         write_board_link(entry.board());
         if (entry.board().display_name() && entry.board().display_name()->size()) {
-          write_fmt(R"(</p><p class="account-name"><small>{}</small>)", Escape{entry.board().name()});
+          write_fmt(R"(</p><p class="account-name"><small>{}</small>)"_cf, Escape{entry.board().name()});
         }
         write_fmt(
           R"(</p><p>{}</p></div><div class="board-list-stats"><dl>)"
           R"(<dt>Subscribers</dt><dd>{:d}</dd>)"
           R"(<dt>Threads</dt><dd>{:d}</dd>)"
-          R"(<dt>Last Activity</dt><dd>{}</dd></dl></div></li>)",
+          R"(<dt>Last Activity</dt><dd>{}</dd></dl></div></li>)"_cf,
           rich_text_to_html(entry.board().description_type(), entry.board().description()),
           entry.stats().subscriber_count(),
           entry.stats().thread_count(),
@@ -735,13 +743,13 @@ namespace Ludwig {
         write(R"(<li class="user-list-entry"><div class="user-list-desc"><p class="user-list-name">)");
         write_user_link(entry.user(), entry.maybe_local_user().transform(λx(x.get().admin())).value_or(false), login);
         if (entry.user().display_name() && entry.user().display_name()->size()) {
-          write_fmt(R"(</p><p class="account-name"><small>{}</small>)", Escape{entry.user().name()});
+          write_fmt(R"(</p><p class="account-name"><small>{}</small>)"_cf, Escape{entry.user().name()});
         }
         write_fmt(
           R"(</p><p>{}</p></div><div class="user-list-stats"><dl>)"
           R"(<dt>Threads</dt><dd>{:d}</dd>)"
           R"(<dt>Comments</dt><dd>{:d}</dd>)"
-          R"(<dt>Last Activity</dt><dd>{}</dd></dl></div></li>)",
+          R"(<dt>Last Activity</dt><dd>{}</dd></dl></div></li>)"_cf,
           rich_text_to_html(entry.user().bio_type(), entry.user().bio()),
           entry.stats().thread_count(),
           entry.stats().comment_count(),
@@ -770,24 +778,24 @@ namespace Ludwig {
           R"(<option value="TopTwelveHour"{}>Top Twelve Hour)"
           R"(<option value="TopSixHour"{}>Top Six Hour)"
           R"(<option value="TopHour"{}>Top Hour)"
-          "</select>",
+          "</select>"_cf,
           name, name,
-          value == SortType::Active ? " selected" : "",
-          value == SortType::Hot ? " selected" : "",
-          value == SortType::New ? " selected" : "",
-          value == SortType::Old ? " selected" : "",
-          value == SortType::MostComments ? " selected" : "",
-          value == SortType::NewComments ? " selected" : "",
-          value == SortType::TopAll ? " selected" : "",
-          value == SortType::TopYear ? " selected" : "",
-          value == SortType::TopSixMonths ? " selected" : "",
-          value == SortType::TopThreeMonths ? " selected" : "",
-          value == SortType::TopMonth ? " selected" : "",
-          value == SortType::TopWeek ? " selected" : "",
-          value == SortType::TopDay ? " selected" : "",
-          value == SortType::TopTwelveHour ? " selected" : "",
-          value == SortType::TopSixHour ? " selected" : "",
-          value == SortType::TopHour ? " selected" : ""
+          select(value, SortType::Active),
+          select(value, SortType::Hot),
+          select(value, SortType::New),
+          select(value, SortType::Old),
+          select(value, SortType::MostComments),
+          select(value, SortType::NewComments),
+          select(value, SortType::TopAll),
+          select(value, SortType::TopYear),
+          select(value, SortType::TopSixMonths),
+          select(value, SortType::TopThreeMonths),
+          select(value, SortType::TopMonth),
+          select(value, SortType::TopWeek),
+          select(value, SortType::TopDay ),
+          select(value, SortType::TopTwelveHour),
+          select(value, SortType::TopSixHour),
+          select(value, SortType::TopHour)
         );
       }
 
@@ -798,12 +806,12 @@ namespace Ludwig {
           R"(<option value="New"{}>New)"
           R"(<option value="Old"{}>Old)"
           R"(<option value="Top"{}>Top)"
-          "</select>",
+          "</select>"_cf,
           name, name,
-          value == CommentSortType::Hot ? " selected" : "",
-          value == CommentSortType::New ? " selected" : "",
-          value == CommentSortType::Old ? " selected" : "",
-          value == CommentSortType::Top ? " selected" : ""
+          select(value, CommentSortType::Hot),
+          select(value, CommentSortType::New),
+          select(value, CommentSortType::Old),
+          select(value, CommentSortType::Top)
         );
       }
 
@@ -813,11 +821,11 @@ namespace Ludwig {
           R"(<option value="New"{}>New)"
           R"(<option value="Old"{}>Old)"
           R"(<option value="Top"{}>Top)"
-          "</select>",
+          "</select>"_cf,
           name, name,
-          value == UserPostSortType::New ? " selected" : "",
-          value == UserPostSortType::Old ? " selected" : "",
-          value == UserPostSortType::Top ? " selected" : ""
+          select(value, UserPostSortType::New),
+          select(value, UserPostSortType::Old),
+          select(value, UserPostSortType::Top)
         );
       }
 
@@ -828,12 +836,12 @@ namespace Ludwig {
           R"(<option value="Old"{}>Old)"
           R"(<option value="MostPosts"{}>Most Posts)"
           R"(<option value="NewPosts"{}>New Posts)"
-          "</select>",
+          "</select>"_cf,
           name, name,
-          value == UserSortType::New ? " selected" : "",
-          value == UserSortType::Old ? " selected" : "",
-          value == UserSortType::MostPosts ? " selected" : "",
-          value == UserSortType::NewPosts ? " selected" : ""
+          select(value, UserSortType::New),
+          select(value, UserSortType::Old),
+          select(value, UserSortType::MostPosts),
+          select(value, UserSortType::NewPosts)
         );
       }
 
@@ -845,13 +853,13 @@ namespace Ludwig {
           R"(<option value="MostPosts"{}>Most Posts)"
           R"(<option value="NewPosts"{}>New Posts)"
           R"(<option value="MostSubscribers"{}>Most Subscribers)"
-          "</select>",
+          "</select>"_cf,
           name, name,
-          value == BoardSortType::New ? " selected" : "",
-          value == BoardSortType::Old ? " selected" : "",
-          value == BoardSortType::MostPosts ? " selected" : "",
-          value == BoardSortType::NewPosts ? " selected" : "",
-          value == BoardSortType::MostSubscribers ? " selected" : ""
+          select(value, BoardSortType::New),
+          select(value, BoardSortType::Old),
+          select(value, BoardSortType::MostPosts),
+          select(value, BoardSortType::NewPosts),
+          select(value, BoardSortType::MostSubscribers)
         );
       }
 
@@ -859,8 +867,8 @@ namespace Ludwig {
         return write_fmt(
           R"(<fieldset class="toggle-buttons"><legend class="a11y">Show</legend>)"
           R"(<input class="a11y" name="type" type="radio" value="threads" id="type-threads"{}><label for="type-threads" class="toggle-button">Threads</label>)"
-          R"(<input class="a11y" name="type" type="radio" value="comments" id="type-comments"{}><label for="type-comments" class="toggle-button">Comments</label></fieldset>)",
-          show_threads ? " checked" : "", show_threads ? "" : " checked"
+          R"(<input class="a11y" name="type" type="radio" value="comments" id="type-comments"{}><label for="type-comments" class="toggle-button">Comments</label></fieldset>)"_cf,
+          check(show_threads), check(!show_threads)
         );
       }
 
@@ -868,24 +876,24 @@ namespace Ludwig {
         return write_fmt(
           R"(<fieldset class="toggle-buttons"><legend class="a11y">Show</legend>)"
           R"(<input class="a11y" name="local" type="radio" value="1" id="local-1"{}><label for="local-1" class="toggle-button">Local</label>)"
-          R"(<input class="a11y" name="local" type="radio" value="0" id="local-0"{}><label for="local-0" class="toggle-button">All</label></fieldset>)",
-          local_only ? " checked" : "", local_only ? "" : " checked"
+          R"(<input class="a11y" name="local" type="radio" value="0" id="local-0"{}><label for="local-0" class="toggle-button">All</label></fieldset>)"_cf,
+          check(local_only), check(!local_only)
         );
       }
 
       auto write_show_images_toggle(bool show_images) noexcept -> ResponseWriter& {
         return write_fmt(
           R"(</label><label for="images"><input class="a11y" name="images" id="images" type="checkbox" value="1"{}><div class="toggle-switch"></div> Images</label>)"
-          R"(<input class="no-js" type="submit" value="Apply"></form>)",
-          show_images ? " checked" : ""
+          R"(<input class="no-js" type="submit" value="Apply"></form>)"_cf,
+          check(show_images)
         );
       }
 
       auto write_subscribed_toggle(bool show_images) noexcept -> ResponseWriter& {
         return write_fmt(
           R"(</label><label for="sub"><input class="a11y" name="sub" id="sub" type="checkbox" value="1"{}><div class="toggle-switch"></div> Subscribed Only</label>)"
-          R"(<input class="no-js" type="submit" value="Apply"></form>)",
-          show_images ? " checked" : ""
+          R"(<input class="no-js" type="submit" value="Apply"></form>)"_cf,
+          check(show_images)
         );
       }
 
@@ -911,7 +919,7 @@ namespace Ludwig {
         string_view hx_target = "#top-level-list"
       ) noexcept -> ResponseWriter& {
         return write_fmt(
-            R"(<form class="sort-form" method="get" action="{0}" hx-get="{0}" hx-trigger="change" hx-target="{1}" hx-push-url="true">)",
+            R"(<form class="sort-form" method="get" action="{0}" hx-get="{0}" hx-trigger="change" hx-target="{1}" hx-swap="outerHTML" hx-push-url="true">)"_cf,
             Escape{base_url}, Escape{hx_target}
           )
           .template write_toggle_1<T>(toggle_1)
@@ -925,15 +933,15 @@ namespace Ludwig {
           can_downvote = entry.can_downvote(login, site);
         if (can_upvote || can_downvote) {
           write_fmt(
-            R"(<form class="vote-buttons" id="votes-{0:x}" method="post" action="/{1}/{0:x}/vote" hx-post="/{1}/{0:x}/vote" hx-swap="outerHTML">)",
+            R"(<form class="vote-buttons" id="votes-{0:x}" method="post" action="/{1}/{0:x}/vote" hx-post="/{1}/{0:x}/vote" hx-swap="outerHTML">)"_cf,
             entry.id, T::noun
           );
         } else {
-          write_fmt(R"(<div class="vote-buttons" id="votes-{:x}">)", entry.id);
+          write_fmt(R"(<div class="vote-buttons" id="votes-{:x}">)"_cf, entry.id);
         }
         if (entry.should_show_votes(login, site)) {
           if (!login || login->local_user().show_karma()) {
-            write_fmt(R"(<output class="karma" id="karma-{:x}">{}</output>)", entry.id, Suffixed{entry.stats().karma()});
+            write_fmt(R"(<output class="karma" id="karma-{:x}">{}</output>)"_cf, entry.id, Suffixed{entry.stats().karma()});
           } else {
             write(R"(<div class="karma">&nbsp;</div>)");
           }
@@ -941,7 +949,7 @@ namespace Ludwig {
             R"(<label class="upvote"><button type="submit" name="vote" {0}{2}>)"
             ICON("chevron-up") R"(<span class="a11y">Upvote</span></button></label>)"
             R"(<label class="downvote"><button type="submit" name="vote" {1}{3}>)"
-            ICON("chevron-down") R"(<span class="a11y">Downvote</span></button></label>)",
+            ICON("chevron-down") R"(<span class="a11y">Downvote</span></button></label>)"_cf,
             can_upvote ? "" : "disabled ", can_downvote ? "" : "disabled ",
             entry.your_vote == Vote::Upvote ? R"(class="voted" value="0")" : R"(value="1")",
             entry.your_vote == Vote::Downvote ? R"(class="voted" value="0")" : R"(value="-1")"
@@ -960,17 +968,17 @@ namespace Ludwig {
         write(R"(<div class="pagination" id="pagination" hx-swap-oob="true")");
         if (next && infinite_scroll_enabled) {
           write_fmt(
-            R"( hx-get="{}{}from={}" hx-target="#top-level-list" hx-swap="beforeend" hx-trigger="revealed">)",
+            R"( hx-get="{}{}from={}" hx-target="#top-level-list" hx-swap="beforeend" hx-trigger="revealed">)"_cf,
             Escape{base_url}, sep, next.to_string()
           );
         } else write(">");
         if (!is_first) {
-          write_fmt(R"(<a class="big-button no-js" href="{}">← First</a>)", Escape{base_url});
+          write_fmt(R"(<a class="big-button no-js" href="{}">← First</a>)"_cf, Escape{base_url});
         }
         if (next) {
           write_fmt(
             R"(<a class="big-button no-js" href="{0}{1}from={2}">Next →</a>)"
-            R"(<a class="more-link js" href="{0}{1}from={2}" hx-get="{0}{1}from={2}" hx-target="#top-level-list" hx-swap="beforeend">Load more…</a>)",
+            R"(<a class="more-link js" href="{0}{1}from={2}" hx-get="{0}{1}from={2}" hx-target="#top-level-list" hx-swap="beforeend">Load more…</a>)"_cf,
             Escape{base_url}, sep, next.to_string()
           );
         }
@@ -988,32 +996,32 @@ namespace Ludwig {
           R"(<input type="hidden" name="context" value="{2:d}">)"
           R"(<label for="action"><span class="a11y">Action</span>)" ICON("chevron-down")
           R"(<select name="action" autocomplete="off" hx-post="/{1}/{0:x}/action" hx-trigger="change" hx-target="#controls-submenu-{0:x}">)"
-          R"(<option selected hidden value="{3:d}">Actions)",
+          R"(<option selected hidden value="{3:d}">Actions)"_cf,
           post.id, T::noun, static_cast<unsigned>(context), SubmenuAction::None
         );
         if (context != PostContext::View && post.can_reply_to(login)) {
-          write_fmt(R"(<option value="{:d}">💬 Reply)", SubmenuAction::Reply);
+          write_fmt(R"(<option value="{:d}">💬 Reply)"_cf, SubmenuAction::Reply);
         }
         if (post.can_edit(login)) {
-          write_fmt(R"(<option value="{:d}">✏️ Edit)", SubmenuAction::Edit);
+          write_fmt(R"(<option value="{:d}">✏️ Edit)"_cf, SubmenuAction::Edit);
         }
         if (post.can_delete(login)) {
-          write_fmt(R"(<option value="{:d}">🗑️ Delete)", SubmenuAction::Delete);
+          write_fmt(R"(<option value="{:d}">🗑️ Delete)"_cf, SubmenuAction::Delete);
         }
         write_fmt(
           R"(<option value="{:d}">{})"
-          R"(<option value="{:d}">{})",
+          R"(<option value="{:d}">{})"_cf,
           post.saved ? SubmenuAction::Unsave : SubmenuAction::Save, post.saved ? "🚫 Unsave" : "🔖 Save",
           post.hidden ? SubmenuAction::Unhide : SubmenuAction::Hide, post.hidden ? "🔈 Unhide" : "🔇 Hide"
         );
         if (context != PostContext::User) {
-          write_fmt(R"(<option value="{:d}">{})",
+          write_fmt(R"(<option value="{:d}">{})"_cf,
             post.user_hidden ? SubmenuAction::UnmuteUser : SubmenuAction::MuteUser,
             post.user_hidden ? "🔈 Unmute user" : "🔇 Mute user"
           );
         }
         if (context != PostContext::Board) {
-          write_fmt(R"(<option value="{:d}">{})",
+          write_fmt(R"(<option value="{:d}">{})"_cf,
             post.board_hidden ? SubmenuAction::UnmuteBoard : SubmenuAction::MuteBoard,
             post.board_hidden ? "🔈 Unhide board" : "🔇 Hide board"
           );
@@ -1073,7 +1081,7 @@ namespace Ludwig {
             R"(<option value="{:d}">🔨 Ban user)"
             R"(<option value="{:d}">☣️ Purge {})"
             R"(<option value="{:d}">☣️ Purge user)"
-            "</optgroup>",
+            "</optgroup>"_cf,
             a1, b1, a2, b2, a3, b3,
             SubmenuAction::AdminRemoveUser,
             SubmenuAction::AdminPurge, T::noun,
@@ -1123,6 +1131,7 @@ namespace Ludwig {
 
       template<class T> auto write_warnings(const T& post, PostContext context) noexcept -> ResponseWriter& {
         const auto mod_state = post.mod_state(context);
+        write(R"(<p class="content-warning">)");
         if (
           mod_state.state > ModState::Normal &&
           (context == PostContext::View || context == PostContext::Reply || mod_state.subject >= ModStateSubject::ThreadInBoard)
@@ -1130,13 +1139,13 @@ namespace Ludwig {
           const auto [prefix, suffix] = mod_state_prefix_suffix<T>(mod_state.subject);
           if (mod_state.reason) {
             write_content_warning(
-              fmt::format("{}{}{}", prefix, describe_mod_state(mod_state.state), suffix),
+              format("{}{}{}"_cf, prefix, describe_mod_state(mod_state.state), suffix),
               true,
               *mod_state.reason
             );
           } else {
             write_fmt(
-              R"(<p class="content-warning"><span class="tag tag-mod-state">{}{}{}</span></p>)",
+              R"(<span class="tag tag-mod-state">{}{}{}</span>)"_cf,
               prefix, describe_mod_state(mod_state.state), suffix
             );
           }
@@ -1147,20 +1156,20 @@ namespace Ludwig {
             write_content_warning("Content Warning", false, cw->content_warning, prefix);
           }
         }
-        return *this;
+        return write("</p>");
       }
 
       template<class T> auto write_post_tags(const T& post, PostContext context) noexcept -> ResponseWriter& {
         const auto mod_state = post.mod_state(context);
         if (mod_state.state > ModState::Normal) {
           auto [prefix, suffix] = mod_state_prefix_suffix<T>(mod_state.subject);
-          write_fmt(R"( <abbr class="tag tag-mod-state" title="{0}{1}{2}{3}{4}">{1}</abbr>)",
+          write_fmt(R"( <abbr class="tag tag-mod-state" title="{0}{1}{2}{3}{4}">{1}</abbr>)"_cf,
             prefix, describe_mod_state(mod_state.state), suffix, mod_state.reason ? ": " : "", Escape(mod_state.reason.value_or(""))
           );
         }
         if (const auto cw = post.content_warning(context)) {
           const auto prefix = content_warning_prefix<T>(cw->subject);
-          write_fmt(R"( <abbr class="tag tag-cw" title="{}Content Warning: {}">CW</abbr>)",
+          write_fmt(R"( <abbr class="tag tag-cw" title="{}Content Warning: {}">CW</abbr>)"_cf,
             prefix, Escape(cw->content_warning)
           );
         }
@@ -1176,33 +1185,33 @@ namespace Ludwig {
       ) noexcept -> ResponseWriter& {
         // TODO: thread-source (link URL)
         write_fmt(
-          R"({} class="thread" id="thread-{:x}"><h2 class="thread-title">)",
+          R"({} class="thread" id="thread-{:x}"><h2 class="thread-title">)"_cf,
           context == PostContext::View ? "<div" : "<li><article",
           thread.id
         );
         const auto title = rich_text_to_html_emojis_only(thread.thread().title_type(), thread.thread().title(), {});
         if (context != PostContext::View || thread.thread().content_url()) {
-          write_fmt(R"(<a class="thread-title-link" href="{}">{}</a></h2>)",
+          write_fmt(R"(<a class="thread-title-link" href="{}">{}</a></h2>)"_cf,
             Escape{
               thread.thread().content_url()
                 ? thread.thread().content_url()->string_view()
-                : fmt::format("/thread/{:x}", thread.id)
+                : format("/thread/{:x}"_cf, thread.id)
             },
             title
           );
         } else {
-          write_fmt("{}</h2>", title);
+          write_fmt("{}</h2>"_cf, title);
         }
         const auto cw = thread.content_warning(context);
         // TODO: Selectively show CW'd images, maybe use blurhash
         if (show_images && !cw && thread.link_card().image_url()) {
           write_fmt(
-            R"(<div class="thumbnail"><img src="/media/thread/{:x}/thumbnail.webp" aria-hidden="true"></div>)",
+            R"(<div class="thumbnail"><img src="/media/thread/{:x}/thumbnail.webp" aria-hidden="true"></div>)"_cf,
             thread.id
           );
         } else {
           write_fmt(
-            R"(<div class="thumbnail">)" ICON("{}") "</div>",
+            R"(<div class="thumbnail">)" ICON("{}") "</div>"_cf,
             cw ? "alert-octagon" : (thread.thread().content_url() ? "link" : "file-text")
           );
         }
@@ -1227,7 +1236,7 @@ namespace Ludwig {
         write("</span></div>");
         write_vote_buttons(thread, site, login);
         if (context != PostContext::View) {
-          write_fmt(R"(<div class="controls"><a id="comment-link-{0:x}" href="/thread/{0:x}#comments">{1:d}{2}</a>)",
+          write_fmt(R"(<div class="controls"><a id="comment-link-{0:x}" href="/thread/{0:x}#comments">{1:d}{2}</a>)"_cf,
             thread.id,
             thread.stats().descendant_count(),
             thread.stats().descendant_count() == 1 ? " comment" : " comments"
@@ -1241,7 +1250,7 @@ namespace Ludwig {
 
       auto write_comment_header(const CommentDetail& comment, Login login, PostContext context) noexcept -> ResponseWriter& {
         const string_view tag = context == PostContext::Reply ? "h3" : "h2";
-        write_fmt(R"(<{} class="comment-info" id="comment-info-{:x}"><span>)", tag, comment.id);
+        write_fmt(R"(<{} class="comment-info" id="comment-info-{:x}"><span>)"_cf, tag, comment.id);
         if (context != PostContext::User) {
           write_user_link(comment.author(), comment.user_is_admin, login);
           write("</span><span>");
@@ -1249,7 +1258,7 @@ namespace Ludwig {
         write("commented ");
         write_datetime(comment.created_at());
         if (context != PostContext::Reply) {
-          write_fmt(R"(</span><span>on <a href="/thread/{:x}">{}</a>)",
+          write_fmt(R"(</span><span>on <a href="/thread/{:x}">{}</a>)"_cf,
             comment.comment().thread(),
             rich_text_to_html_emojis_only(comment.thread().title_type(), comment.thread().title(), {})
           );
@@ -1260,7 +1269,7 @@ namespace Ludwig {
             write_board_link(comment.board());
           }
         }
-        return write_fmt(R"(</span></{}>)", tag);
+        return write_fmt(R"(</span></{}>)"_cf, tag);
       }
 
       auto write_comment_body(
@@ -1276,24 +1285,27 @@ namespace Ludwig {
           comment.comment().content(),
           { .show_images = show_images, .open_links_in_new_tab = login && login->local_user().open_links_in_new_tab() }
         );
-        write_fmt(R"(<div class="comment-body" id="comment-body-{:x}"><div class="comment-content">)", comment.id);
+        write_fmt(
+          R"(<div class="comment-body" id="comment-body-{:x}"><div class="comment-content markdown">)"_cf,
+          comment.id
+        );
         if (has_warnings) {
           write(R"(<details class="content-warning-collapse"><summary>Content hidden (click to show))");
           write_warnings(comment, context);
-          write_fmt(R"(</summary><div>{}</div></details></div>)", content);
+          write_fmt(R"(</summary><div>{}</div></details></div>)"_cf, content);
         } else {
-          write_fmt(R"({}</div>)", content);
+          write_fmt(R"({}</div>)"_cf, content);
         }
         write_vote_buttons(comment, site, login);
         write(R"(<div class="controls">)");
         if (context != PostContext::Reply) {
-          write_fmt(R"(<a id="comment-link-{0:x}" href="/comment/{0:x}#replies">{1:d}{2}</a>)",
+          write_fmt(R"(<a id="comment-link-{0:x}" href="/comment/{0:x}#replies">{1:d}{2}</a>)"_cf,
             comment.id,
             comment.stats().descendant_count(),
             comment.stats().descendant_count() == 1 ? " reply" : " replies"
           );
         } else {
-          write_fmt(R"(<a href="/comment/{:x}">Permalink</a>)", comment.id);
+          write_fmt(R"(<a href="/comment/{:x}">Permalink</a>)"_cf, comment.id);
         }
         write_controls_submenu(comment, login, context);
         return write("</div></div>");
@@ -1306,8 +1318,10 @@ namespace Ludwig {
         PostContext context,
         bool show_images
       ) noexcept -> ResponseWriter& {
-        return write_fmt(R"(<li><article class="comment" id="comment-{:x}">)", comment.id)
-          .write_comment_header(comment, login, context)
+        return write_fmt(R"(<li><article class="comment{}" id="comment-{:x}">)"_cf,
+          comment.should_show_votes(login, site) ? "" : " no-votes",
+          comment.id
+        ) .write_comment_header(comment, login, context)
           .write_comment_body(comment, site, login, context, show_images)
           .write("</article>");
       }
@@ -1353,58 +1367,60 @@ namespace Ludwig {
         bool is_alt = false
       ) noexcept -> ResponseWriter& {
         // TODO: Include existing query params
+        if (include_ol) write_fmt(R"(<ol class="comment-list comment-tree" id="comments-{:x}">)"_cf, root);
         auto range = comments.comments.equal_range(root);
         if (range.first == range.second) {
-          if (is_top_level) write(R"(<div class="no-comments">No comments</div>)");
-          return *this;
-        }
-        const bool infinite_scroll_enabled =
-          site->infinite_scroll_enabled && (!login || login->local_user().infinite_scroll_enabled());
-        if (include_ol) write_fmt(R"(<ol class="comment-list comment-tree" id="comments-{:x}">)", root);
-        for (auto iter = range.first; iter != range.second; iter++) {
-          const auto& comment = iter->second;
-          write_fmt(
-            R"(<li><article class="comment-with-comments{}"><details open class="comment-collapse" id="comment-{:x}"><summary>)",
-            is_alt ? " odd-depth" : "", comment.id,
-            comment.id
-          );
-          write_comment_header(comment, login, PostContext::Reply);
-          write_fmt(
-            R"(<small class="comment-reply-count">({:d} repl{})</small>)",
-            comment.stats().descendant_count(),
-            comment.stats().descendant_count() == 1 ? "y" : "ies"
-          );
-          write("</summary>");
-          write_comment_body(comment, site, login, PostContext::Reply, show_images);
-          const auto cont = comments.continued.find(comment.id);
-          if (cont != comments.continued.end() && !cont->second) {
+          if (is_top_level) write(R"(<li class="no-comments">No comments</li>)");
+        } else {
+          const bool infinite_scroll_enabled =
+            site->infinite_scroll_enabled && (!login || login->local_user().infinite_scroll_enabled());
+          for (auto iter = range.first; iter != range.second; iter++) {
+            const auto& comment = iter->second;
             write_fmt(
-              R"(<a class="more-link{0}" id="continue-{1:x}" href="/comment/{1:x}">More comments…</a>)",
-              is_alt ? "" : " odd-depth", comment.id
+              R"(<li><article class="comment-with-comments{}{}">)"
+              R"(<details open class="comment-collapse" id="comment-{:x}"><summary>)"_cf,
+              comment.should_show_votes(login, site) ? "" : " no-votes",
+              is_alt ? " odd-depth" : "",
+              comment.id
             );
-          } else if (comment.stats().child_count()) {
-            write(R"(<section class="comments" aria-title="Replies">)");
-            write_comment_tree(comments, comment.id, sort, site, login, show_images, false, true, !is_alt);
-            write("</section>");
-          }
-          write("</details></article>");
-        }
-        const auto cont = comments.continued.find(root);
-        if (cont != comments.continued.end()) {
-          write_fmt(R"(<li id="comment-replace-{:x}")", root);
-          if (infinite_scroll_enabled) {
+            write_comment_header(comment, login, PostContext::Reply);
             write_fmt(
-              R"( hx-get="/{0}/{1:x}?sort={2}&from={3}" hx-swap="outerHTML" hx-trigger="revealed")",
-              is_top_level ? "thread" : "comment", root,
+              R"(<small class="comment-reply-count">({:d} repl{})</small>)"_cf,
+              comment.stats().descendant_count(),
+              comment.stats().descendant_count() == 1 ? "y" : "ies"
+            );
+            write("</summary>");
+            write_comment_body(comment, site, login, PostContext::Reply, show_images);
+            const auto cont = comments.continued.find(comment.id);
+            if (cont != comments.continued.end() && !cont->second) {
+              write_fmt(
+                R"(<a class="more-link{0}" id="continue-{1:x}" href="/comment/{1:x}">More comments…</a>)"_cf,
+                is_alt ? "" : " odd-depth", comment.id
+              );
+            } else if (comment.stats().child_count()) {
+              write(R"(<section class="comments" aria-title="Replies">)");
+              write_comment_tree(comments, comment.id, sort, site, login, show_images, false, true, !is_alt);
+              write("</section>");
+            }
+            write("</details></article>");
+          }
+          const auto cont = comments.continued.find(root);
+          if (cont != comments.continued.end()) {
+            write_fmt(R"(<li id="comment-replace-{:x}")"_cf, root);
+            if (infinite_scroll_enabled) {
+              write_fmt(
+                R"( hx-get="/{0}/{1:x}?sort={2}&from={3}" hx-swap="outerHTML" hx-trigger="revealed")"_cf,
+                is_top_level ? "thread" : "comment", root,
+                EnumNameCommentSortType(sort), cont->second.to_string()
+              );
+            }
+            write_fmt(
+              R"(><a class="more-link{0}" id="continue-{1:x}" href="/{2}/{1:x}?sort={3}&from={4}")"
+              R"( hx-get="/{2}/{1:x}?sort={3}&from={4}" hx-target="#comment-replace-{1:x}" hx-swap="outerHTML">More comments…</a>)"_cf,
+              is_alt ? " odd-depth" : "", root, is_top_level ? "thread" : "comment",
               EnumNameCommentSortType(sort), cont->second.to_string()
             );
           }
-          write_fmt(
-            R"(><a class="more-link{0}" id="continue-{1:x}" href="/{2}/{1:x}?sort={3}&from={4}")"
-            R"( hx-get="/{2}/{1:x}?sort={3}&from={4}" hx-target="#comment-replace-{1:x}" hx-swap="outerHTML">More comments…</a>)",
-            is_alt ? " odd-depth" : "", root, is_top_level ? "thread" : "comment",
-            EnumNameCommentSortType(sort), cont->second.to_string()
-          );
         }
         if (include_ol) write("</ol>");
         return *this;
@@ -1420,8 +1436,8 @@ namespace Ludwig {
           R"(<span class="no-js">Content warning (optional)</span>)"
           R"(<span class="js">Content warning text</span>)"
           R"(<input type="text" name="content_warning" id="content_warning" autocomplete="off" value="{}">)"
-          R"(</label>)",
-          existing_value.empty() ? "" : " checked",
+          R"(</label>)"_cf,
+          check(!existing_value.empty()),
           existing_value.empty() ? R"( class="no-js")" : "",
           Escape{existing_value}
         );
@@ -1429,7 +1445,7 @@ namespace Ludwig {
 
       auto write_content_warning(string_view label, bool is_mod, string_view content, string_view prefix = "") noexcept -> ResponseWriter& {
         return write_fmt(
-          R"(<p class="tag tag-cw content-warning"><strong class="{}-warning-label">{}{}<span class="a11y">:</span></strong> {}</p>)",
+          R"(<p class="tag tag-cw content-warning"><strong class="{}-warning-label">{}{}<span class="a11y">:</span></strong> {}</p>)"_cf,
           is_mod ? "mod" : "content", prefix, label, Escape{content}
         );
       }
@@ -1439,7 +1455,8 @@ namespace Ludwig {
           R"(<form data-component="Form" id="reply-{1:x}" class="form reply-form" method="post" action="/{0}/{1:x}/reply" )"
           R"html(hx-post="/{0}/{1:x}/reply" hx-target="#comments-{1:x}" hx-swap="afterbegin" hx-on::after-request="this.reset()">)html"
           R"(<a name="reply"></a>)"
-          HTML_TEXTAREA("text_content", "Reply", R"( required placeholder="Write your reply here")", ""),
+          HTML_TEXTAREA("text_content", "Reply", R"( required placeholder="Write your reply here")", "")
+          ""_cf,
           T::noun, parent.id
         );
         write_content_warning_field();
@@ -1454,7 +1471,9 @@ namespace Ludwig {
         CommentSortType sort,
         bool show_images = false
       ) noexcept -> ResponseWriter& {
-        write(R"(<article class="thread-with-comments">)");
+        write_fmt(R"(<article class="thread-with-comments{}">)"_cf,
+          thread.should_show_votes(login, site) ? "" : " no-votes"
+        );
         write_thread_entry(thread, site, login, PostContext::View, show_images);
         if (thread.has_text_content()) {
           const auto content = rich_text_to_html(
@@ -1463,15 +1482,15 @@ namespace Ludwig {
             { .show_images = show_images, .open_links_in_new_tab = login && login->local_user().open_links_in_new_tab() }
           );
           if (thread.thread().content_warning() || thread.board().content_warning() || thread.thread().mod_state() > ModState::Normal) {
-            write(R"(<div class="thread-content"><details class="content-warning-collapse"><summary>Content hidden (click to show))");
+            write(R"(<div class="thread-content markdown"><details class="content-warning-collapse"><summary>Content hidden (click to show))");
             write_warnings(thread, PostContext::View);
-            write_fmt(R"(</summary><div>{}</div></details></div>)", content);
+            write_fmt(R"(</summary><div>{}</div></details></div>)"_cf, content);
           } else {
-            write_fmt(R"(<div class="thread-content">{}</div>)", content);
+            write_fmt(R"(<div class="thread-content markdown">{}</div>)"_cf, content);
           }
         }
-        write_fmt(R"(<section class="comments" id="comments"><h2>{:d} comments</h2>)", thread.stats().descendant_count());
-        write_sort_options(fmt::format("/thread/{:x}", thread.id), sort, false, show_images, fmt::format("#comments-{:x}", thread.id));
+        write_fmt(R"(<section class="comments" id="comments"><h2>{:d} comments</h2>)"_cf, thread.stats().descendant_count());
+        write_sort_options(format("/thread/{:x}"_cf, thread.id), sort, false, show_images, format("#comments-{:x}", thread.id));
         if (thread.can_reply_to(login)) {
           write_reply_form(thread);
         }
@@ -1487,11 +1506,14 @@ namespace Ludwig {
         CommentSortType sort,
         bool show_images = false
       ) noexcept -> ResponseWriter& {
-        write_fmt(R"(<article class="comment-with-comments"><section class="comment" id="comment-{:x}">)", comment.id);
+        write_fmt(R"(<article class="comment-with-comments"><section class="comment{}" id="comment-{:x}">)"_cf,
+          comment.should_show_votes(login, site) ? "" : " no-votes",
+          comment.id
+        );
         write_comment_header(comment, login, PostContext::View);
         write_comment_body(comment, site, login, PostContext::View, show_images);
-        write_fmt(R"(</section><section class="comments" id="comments"><h2>{:d} replies</h2>)", comment.stats().descendant_count());
-        write_sort_options(fmt::format("/comment/{:x}", comment.id), sort, false, show_images, fmt::format("#comments-{:x}", comment.id));
+        write_fmt(R"(</section><section class="comments" id="comments"><h2>{:d} replies</h2>)"_cf, comment.stats().descendant_count());
+        write_sort_options(format("/comment/{:x}"_cf, comment.id), sort, false, show_images, format("#comments-{:x}"_cf, comment.id));
         if (comment.can_reply_to(login)) {
           write_reply_form(comment);
         }
@@ -1501,7 +1523,7 @@ namespace Ludwig {
 
       static auto error_banner(optional<string_view> error) noexcept -> string {
         if (!error) return "";
-        return fmt::format(R"(<p class="error-message"><strong>Error:</strong> {}</p>)", Escape{*error});
+        return format(R"(<p class="error-message"><strong>Error:</strong> {}</p>)"_cf, Escape{*error});
       }
 
       auto write_login_form(optional<string_view> error = {}) noexcept -> ResponseWriter& {
@@ -1510,14 +1532,14 @@ namespace Ludwig {
           HTML_FIELD("actual_username", "Username or email", "text", "")
           HTML_FIELD("password", "Password", "password", "")
           HTML_CHECKBOX("remember", "Remember me", "")
-          R"(<input type="submit" value="Login"></form></main>)",
+          R"(<input type="submit" value="Login"></form></main>)"_cf,
           error_banner(error), HONEYPOT_FIELD
         );
       }
 
       auto write_register_form(const SiteDetail* site, optional<string_view> error = {}) noexcept -> ResponseWriter& {
         write_fmt(
-          R"(<main><form data-component="Form" class="form form-page" method="post" action="/register">{})",
+          R"(<main><form data-component="Form" class="form form-page" method="post" action="/register">{})"_cf,
           error_banner(error)
         ).write(
           R"(<label for="username" class="a11y"><span>Don't type here unless you're a bot</span>)"
@@ -1532,7 +1554,7 @@ namespace Ludwig {
         }
         if (site->registration_application_required) {
           write_fmt(
-            R"(<label for="application_reason"><span>{}</span><textarea name="application_reason" required autocomplete="off"></textarea></label>)",
+            R"(<label for="application_reason"><span>{}</span><textarea name="application_reason" required autocomplete="off"></textarea></label>)"_cf,
             Escape{site->application_question.value_or("Why do you want to join?")}
           );
         }
@@ -1544,7 +1566,7 @@ namespace Ludwig {
         optional<string_view> error = {}
       ) noexcept -> ResponseWriter& {
         return write_fmt(
-          R"(<main><form data-component="Form" class="form form-page" method="post" action="/create_board"><h2>Create Board</h2>{})",
+          R"(<main><form data-component="Form" class="form form-page" method="post" action="/create_board"><h2>Create Board</h2>{})"_cf,
           error_banner(error)
         ).write(
           HTML_FIELD("name", "Name", "text", R"( autocomplete="off" placeholder="my_cool_board" pattern=")" USERNAME_REGEX_SRC R"(" required)")
@@ -1571,7 +1593,7 @@ namespace Ludwig {
       ) noexcept -> ResponseWriter& {
         write_fmt(
           R"(<main><form data-component="Form" class="form form-page" method="post" action="/b/{}/create_thread"><h2>Create Thread</h2>{})"
-          R"(<p class="thread-info"><span>Posting as )",
+          R"(<p class="thread-info"><span>Posting as )"_cf,
           Escape(board.board().name()), error_banner(error)
         );
         write_user_link(login.user(), login.local_user().admin(), login);
@@ -1596,7 +1618,7 @@ namespace Ludwig {
       ) noexcept -> ResponseWriter& {
         write_fmt(
           R"(<main><form data-component="Form" class="form form-page" method="post" action="/thread/{:x}/edit"><h2>Edit Thread</h2>{})"
-          R"(<p class="thread-info"><span>Posting as )",
+          R"(<p class="thread-info"><span>Posting as )"_cf,
           thread.id, error_banner(error)
         );
         write_user_link(login.user(), login.local_user().admin(), login);
@@ -1605,7 +1627,8 @@ namespace Ludwig {
         write_fmt(
           "</span></p><br>"
           HTML_FIELD("title", "Title", "text", R"( value="{}" autocomplete="off" required)")
-          HTML_TEXTAREA("text_content", "Text content", "{}", "{}"),
+          HTML_TEXTAREA("text_content", "Text content", "{}", "{}")
+          ""_cf,
           Escape(display_name_as_text(thread.thread())),
           thread.thread().content_url() ? "" : " required",
           Escape(thread.thread().content_text_raw())
@@ -1615,8 +1638,8 @@ namespace Ludwig {
       }
 
       template <typename T> auto write_tab(T tab, T selected, string_view name, string_view url) {
-        if (tab == selected) write_fmt(R"(<li><span class="selected">{}</span>)", name);
-        else write_fmt(R"(<li><a href="{}">{}</a>)", url, name);
+        if (tab == selected) write_fmt(R"(<li><span class="selected">{}</span>)"_cf, name);
+        else write_fmt(R"(<li><a href="{}">{}</a>)"_cf, url, name);
       }
 
       auto write_site_admin_tabs(const SiteDetail* site, SiteAdminTab selected) noexcept -> ResponseWriter& {
@@ -1640,13 +1663,13 @@ namespace Ludwig {
             R"(<option value="All" disabled{}>All - Display top content from all federated sites (not yet supported))"
             R"(<option value="BoardList"{}>Board List - Display a curated list of boards, like a classic forum)"
             R"(<option value="SingleBoard"{}>Single Board - The site has only one board, which is always the homepage)"
-          "</select></label>",
+          "</select></label>"_cf,
           selected == HomePageType::SingleBoard ? "<br><strong>Important: Once you select an option other than Single Board, you can never select Single Board again!</strong>" : "",
-          selected == HomePageType::Subscribed ? " selected" : "",
-          selected == HomePageType::Local ? " selected" : "",
-          selected == HomePageType::All ? " selected" : "",
-          selected == HomePageType::BoardList ? " selected" : "",
-          selected == HomePageType::SingleBoard ? " selected" : " disabled"
+          select(selected, HomePageType::Subscribed),
+          select(selected, HomePageType::Local),
+          select(selected, HomePageType::All),
+          select(selected, HomePageType::BoardList),
+          select(selected, HomePageType::SingleBoard)
         );
       }
 
@@ -1661,7 +1684,7 @@ namespace Ludwig {
             R"(<option value="2"{}{}>Rank posts using upvotes and downvotes)"
             R"(<option value="1"{}>Rank posts using only upvotes)"
             R"(<option value="0"{}>No voting, posts can only be ranked by age and comments)"
-          R"(</select></label>)",
+          R"(</select></label>)"_cf,
           sitewide_downvotes_enabled ? "" : " disabled",
           voting_enabled && downvotes_enabled ? " selected" : "",
           voting_enabled && !downvotes_enabled ? " selected" : "",
@@ -1678,7 +1701,8 @@ namespace Ludwig {
           HTML_FIELD("banner_url", "Banner URL", "text", R"( value="{}" autocomplete="off")")
           HTML_FIELD("color_accent", "Accent Color", "color", R"( value="{}" autocomplete="off")")
           HTML_FIELD("color_accent_dim", "Accent Color (Dim)", "color", R"( value="{}" autocomplete="off")")
-          HTML_FIELD("color_accent_hover", "Accent Color (Hover)", "color", R"( value="{}" autocomplete="off")"),
+          HTML_FIELD("color_accent_hover", "Accent Color (Hover)", "color", R"( value="{}" autocomplete="off")")
+          ""_cf,
           error_banner(error),
           Escape{site->name}, Escape{site->description},
           Escape{site->icon_url.value_or("")}, Escape{site->banner_url.value_or("")},
@@ -1700,7 +1724,7 @@ namespace Ludwig {
             HTML_FIELD("post_max_length", "Max post length (bytes)", "number", R"( min="512" value="{:d}" autocomplete="off")")
             HTML_CHECKBOX("javascript_enabled", "Enable JavaScript?", R"( {} autocomplete="off")")
             HTML_CHECKBOX("infinite_scroll_enabled", "Enable infinite scroll?", R"( {} autocomplete="off")")
-          R"(</fieldset></details><input type="submit" value="Submit"></form>)",
+          R"(</fieldset></details><input type="submit" value="Submit"></form>)"_cf,
           site->cws_enabled ? "checked" : "", site->board_creation_admin_only ? "" : "checked",
           site->registration_enabled ? "checked" : "", site->registration_application_required ? "checked" : "",
           Escape{site->application_question.value_or("")},
@@ -1730,7 +1754,7 @@ namespace Ludwig {
         write_fmt(
           R"(<div class="table-page"><h2>Registration Applications</h2>{}<table>)"
           R"(<thead><th>Name<th>Email<th>Date<th>IP Addr<th>User Agent<th class="table-reason">Reason<th>Approved</thead>)"
-          R"(<tbody id="application-table">)",
+          R"(<tbody id="application-table">)"_cf,
           error_banner(error)
         );
         bool any_entries = false;
@@ -1738,7 +1762,7 @@ namespace Ludwig {
           any_entries = true;
           auto& [application, detail] = p;
           write_fmt(
-            R"(<tr><td>{}<td>{}<td>{:%D}<td>{}<td>{}<td class="table-reason"><div class="reason">{}</div><td class="table-approve">)",
+            R"(<tr><td>{}<td>{}<td>{:%D}<td>{}<td>{}<td class="table-reason"><div class="reason">{}</div><td class="table-approve">)"_cf,
             Escape{detail.user().name()},
             Escape{detail.local_user().email()},
             detail.created_at(),
@@ -1753,7 +1777,7 @@ namespace Ludwig {
               R"(<form method="post"><button type="submit" formaction="/site_admin/applications/approve/{0:x}">)"
               R"(<span class="a11y">Approve</span>)" ICON("check") "</button>"
               R"(&nbsp;<button type="submit" formaction="/site_admin/applications/reject/{0:x}">)"
-              R"(<span class="a11y">Reject</span>)" ICON("x") "</button></form></tr>",
+              R"(<span class="a11y">Reject</span>)" ICON("x") "</button></form></tr>"_cf,
               detail.id
             );
           }
@@ -1774,7 +1798,7 @@ namespace Ludwig {
           R"(<div class="table-page"><h2>Invite Codes</h2>{})"
           R"(<form action="invites/new" method="post"><input type="submit" value="Generate New Invite Code"></form><table>)"
           R"(<thead><th>Code<th>Created<th>Expires<th>Accepted<th>Acceptor</thead>)"
-          R"(<tbody id="invite-table">)",
+          R"(<tbody id="invite-table">)"_cf,
           error_banner(error)
         );
         bool any_entries = false;
@@ -1782,13 +1806,13 @@ namespace Ludwig {
           any_entries = true;
           auto& [id, invite] = p;
           write_fmt(
-            R"(<tr><td>{}<td>{:%D}<td>)",
+            R"(<tr><td>{}<td>{:%D}<td>)"_cf,
             invite_id_to_code(id),
             uint_to_timestamp(invite.created_at())
           );
           if (auto to = invite.to()) {
             write_fmt(
-              R"(N/A<td>{:%D}<td>)",
+              R"(N/A<td>{:%D}<td>)"_cf,
               uint_to_timestamp(*invite.accepted_at())
             );
             try {
@@ -1800,7 +1824,7 @@ namespace Ludwig {
             }
           } else {
             write_fmt(
-              R"({:%D}<td>N/A<td>N/A</tr>)",
+              R"({:%D}<td>N/A<td>N/A</tr>)"_cf,
               uint_to_timestamp(invite.expires_at())
             );
           }
@@ -1817,7 +1841,7 @@ namespace Ludwig {
         write_fmt(
           R"(<form data-component="Form" class="form form-page" method="post" action="/site_admin/first_run_setup">{})"
           HTML_FIELD("name", "What is this server's name?", "text", R"( required value="Ludwig" autocomplete="off")")
-          "{}",
+          "{}"_cf,
           error_banner(error),
           options.base_url_set ? "" : HTML_FIELD("base_url",
             "What domain will this server be accessed at?<br><strong>Important: This cannot be changed later!</strong>",
@@ -1839,7 +1863,7 @@ namespace Ludwig {
             HTML_FIELD("post_max_length", "Max post length (bytes)", "number", R"( min="512" value="1048576" autocomplete="off")")
             HTML_CHECKBOX("javascript_enabled", "Enable JavaScript?", R"( checked autocomplete="off")")
             HTML_CHECKBOX("infinite_scroll_enabled", "Enable infinite scroll?", R"( checked autocomplete="off")")
-          R"(</blockquote></fieldset></details>{}{}<input type="submit" value="Submit"></form>)",
+          R"(</blockquote></fieldset></details>{}{}<input type="submit" value="Submit"></form>)"_cf,
           options.admin_exists ? "" : "<fieldset><legend>Create Admin Account</legend>"
             HTML_FIELD("admin_username", "Admin Username", "text", R"( required pattern=")" USERNAME_REGEX_SRC R"(" placeholder="admin")")
             HTML_FIELD("admin_password", "Admin Password", "password", " required")
@@ -1866,30 +1890,42 @@ namespace Ludwig {
         const LocalUserDetail& login,
         optional<string_view> error = {}
       ) noexcept -> ResponseWriter& {
-        uint8_t cw_mode = 1;
-        if (login.local_user().hide_cw_posts()) cw_mode = 0;
-        else if (login.local_user().expand_cw_images()) cw_mode = 3;
-        else if (login.local_user().expand_cw_posts()) cw_mode = 2;
+        int cw_mode = 1;
+        const auto& u = login.local_user();
+        if (u.hide_cw_posts()) cw_mode = 0;
+        else if (u.expand_cw_images()) cw_mode = 3;
+        else if (u.expand_cw_posts()) cw_mode = 2;
         write_fmt(
           R"(<form data-component="Form" class="form form-page" method="post" action="/settings"><h2>User settings</h2>{})"
-          HTML_CHECKBOX("open_links_in_new_tab", "Open links in new tab", "{}")
+          R"(<fieldset><legend>Sorting</legend>)"
+          R"(<label for="default_sort_type"><span>Default sort</span>)"_cf,
+          error_banner(error)
+        );
+        write_sort_select("default_sort_type", u.default_sort_type());
+        write(R"(</label><label for="default_comment_sort_type"><span>Default comment sort</span>)");
+        write_sort_select("default_comment_sort_type", u.default_comment_sort_type());
+        write_fmt(
+          R"(</label></fieldset><fieldset><legend>Show/Hide</legend>)"
           HTML_CHECKBOX("show_avatars", "Show avatars", "{}")
-          HTML_CHECKBOX("show_images_threads", "Show images on threads by default", "{}")
-          HTML_CHECKBOX("show_images_comments", "Show inline images in comments by default", "{}")
-          HTML_CHECKBOX("show_bot_accounts", "Show bot accounts", "{}"),
-          error_banner(error),
-          login.local_user().open_links_in_new_tab() ? " checked" : "",
-          login.local_user().show_avatars() ? " checked" : "",
-          login.local_user().show_images_threads() ? " checked" : "",
-          login.local_user().show_images_comments() ? " checked" : "",
-          login.local_user().show_bot_accounts() ? " checked" : ""
+          ""_cf,
+          check(u.show_avatars())
         );
         if (site->votes_enabled) {
-          write_fmt(
-            HTML_CHECKBOX("show_karma", "Show karma", "{}"),
-            login.local_user().show_karma() ? " checked" : ""
-          );
+          write_fmt(HTML_CHECKBOX("show_karma", "Show karma (score)", "{}") ""_cf, check(u.show_karma()));
         }
+        write_fmt(
+          HTML_CHECKBOX("show_images_threads", "Show images on threads by default", "{}")
+          HTML_CHECKBOX("show_images_comments", "Show inline images in comments by default", "{}")
+          HTML_CHECKBOX("show_bot_accounts", "Show bot accounts", "{}")
+          HTML_CHECKBOX("show_new_post_notifs", "Show new post notifications", "{}")
+          HTML_CHECKBOX("show_read_posts", "Show read posts", "{}")
+          ""_cf,
+          check(u.show_images_threads()),
+          check(u.show_images_comments()),
+          check(u.show_bot_accounts()),
+          check(u.show_new_post_notifs()),
+          check(u.show_read_posts())
+        );
         if (site->cws_enabled) {
           write_fmt(
             R"(<label><span>Content warnings</span><select name="content_warnings" autocomplete="off">)"
@@ -1897,24 +1933,25 @@ namespace Ludwig {
               R"(<option value="1"{}> Collapse posts with content warnings (default))"
               R"(<option value="2"{}> Expand text content of posts with content warnings but hide images)"
               R"(<option value="3"{}> Always expand text and images with content warnings)"
-            R"(</select></label>)",
-            cw_mode == 0 ? " selected" : "", cw_mode == 1 ? " selected" : "", cw_mode == 2 ? " selected" : "", cw_mode == 3 ? " selected" : ""
+            R"(</select></label>)"_cf,
+            select(cw_mode, 0), select(cw_mode, 1), select(cw_mode, 2), select(cw_mode, 3)
           );
         }
+        write_fmt(
+          R"(</fieldset><fieldset><legend>Misc</legend>)"
+          HTML_CHECKBOX("open_links_in_new_tab", "Open links in new tab", "{}")
+          HTML_CHECKBOX("send_notifications_to_email", "Send notifications to email", "{}")
+          ""_cf,
+          check(u.open_links_in_new_tab()),
+          check(u.send_notifications_to_email())
+        );
         if (site->javascript_enabled) {
-          write_fmt(
-            HTML_CHECKBOX("javascript_enabled", "JavaScript enabled", "{}"),
-            login.local_user().javascript_enabled() ? " checked" : ""
-          );
+          write_fmt(HTML_CHECKBOX("javascript_enabled", "JavaScript enabled", "{}") ""_cf, check(u.javascript_enabled()));
         }
         if (site->infinite_scroll_enabled) {
-          write_fmt(
-            HTML_CHECKBOX("infinite_scroll_enabled", "Infinite scroll enabled", "{}"),
-            login.local_user().infinite_scroll_enabled() ? " checked" : ""
-          );
+          write_fmt(HTML_CHECKBOX("infinite_scroll_enabled", "Infinite scroll enabled", "{}") ""_cf, check(u.infinite_scroll_enabled()));
         }
-        // TODO: Default sort, default comment sort
-        return write(R"(<input type="submit" value="Submit"></form>)");
+        return write(R"(</fieldset><input type="submit" value="Submit"></form>)");
       }
 
       auto write_user_settings_profile_form(
@@ -1930,7 +1967,7 @@ namespace Ludwig {
           HTML_TEXTAREA("bio", "Bio", "", "{}")
           HTML_FIELD("avatar_url", "Avatar URL", "text", R"( value="{}")")
           HTML_FIELD("banner_url", "Banner URL", "text", R"( value="{}")")
-          R"(<input type="submit" value="Submit"></form>)",
+          R"(<input type="submit" value="Submit"></form>)"_cf,
           error_banner(error),
           Escape(login.user().name()),
           Escape(rich_text_to_plain_text(login.user().display_name_type(), login.user().display_name())),
@@ -1957,7 +1994,7 @@ namespace Ludwig {
           HTML_FIELD("delete_password", "Type your password here", "password", R"( required autocomplete="off")")
           HTML_FIELD("delete_confirm", R"(Type "delete" here to confirm)", "text", R"( required autocomplete="off")")
           HTML_CHECKBOX("delete_posts", "Also delete all of my posts", R"( autocomplete="off")")
-          R"(<input type="submit" value="Delete Account"></form>)",
+          R"(<input type="submit" value="Delete Account"></form>)"_cf,
           error_banner(error)
         );
       }
@@ -1979,16 +2016,16 @@ namespace Ludwig {
           HTML_CHECKBOX("approve_subscribe", "Approval required to join", "{}")
           //HTML_CHECKBOX("invite_required", "Invite code required to join", "{}")
           //HTML_CHECKBOX("invite_mod_only", "Only moderators can invite new members", "{}")
-          ,
+          ""_cf,
           Escape(board.board().name()), error_banner(error),
           Escape(rich_text_to_plain_text(board.board().display_name_type(), board.board().display_name())),
           Escape(board.board().description_raw()),
           Escape(board.board().content_warning()),
           Escape(board.board().icon_url()),
           Escape(board.board().banner_url()),
-          board.local_board().private_() ? " checked" : "",
-          board.board().restricted_posting() ? " checked" : "",
-          board.board().approve_subscribe() ? " checked" : ""
+          check(board.local_board().private_()),
+          check(board.board().restricted_posting()),
+          check(board.board().approve_subscribe())
         ) .write_voting_select(board.board().can_upvote(), board.board().can_downvote(), site->votes_enabled, site->downvotes_enabled)
           .write(R"(<input type="submit" value="Submit"></form>)");
       }
@@ -2001,7 +2038,7 @@ namespace Ludwig {
         writer(
           rsp->writeStatus(http_status(e.http_status))
             ->writeHeader("Content-Type", TYPE_HTML)
-        ) .write_fmt("Error {:d}: {}", e.http_status, Escape(e.message))
+        ) .write_fmt("Error {:d}: {}"_cf, e.http_status, Escape(e.message))
           .finish();
       } else if (m.is_get && e.http_status == 401) {
         rsp->writeStatus(http_status(303))
@@ -2014,7 +2051,7 @@ namespace Ludwig {
         m.populate(txn);
         writer(rsp->writeStatus(http_status(e.http_status)))
           .write_html_header(m, {})
-          .write_fmt(R"(<main><div class="error-page"><h2>Error {}</h2><p>{}</p></div></main>)", http_status(e.http_status), e.message)
+          .write_fmt(R"(<main><div class="error-page"><h2>Error {}</h2><p>{}</p></div></main>)"_cf, http_status(e.http_status), e.message)
           .write_html_footer(m)
           .finish();
       } catch (...) {
@@ -2022,7 +2059,7 @@ namespace Ludwig {
         writer(
           rsp->writeStatus(http_status(e.http_status))
             ->writeHeader("Content-Type", TYPE_HTML)
-        ) .write_fmt("Error {:d}: {}", e.http_status, Escape(e.message))
+        ) .write_fmt("Error {:d}: {}"_cf, e.http_status, Escape(e.message))
           .finish();
       }
     }
@@ -2054,7 +2091,7 @@ namespace Ludwig {
       string_view mimetype,
       string_view src
     ) noexcept -> void {
-      const auto hash = fmt::format("\"{:016x}\"", XXH3_64bits(src.data(), src.length()));
+      const auto hash = format("\"{:016x}\""_cf, XXH3_64bits(src.data(), src.length()));
       app.get(path, [src, mimetype, hash](auto* res, auto* req) {
         if (req->getHeader("if-none-match") == hash) {
           res->writeStatus(http_status(304))->end();
@@ -2069,14 +2106,14 @@ namespace Ludwig {
     static inline auto user_name_param(ReadTxn& txn, Request req, uint16_t param) {
       const auto name = req->getParameter(param);
       const auto user_id = txn.get_user_id_by_name(name);
-      if (!user_id) throw ApiError(fmt::format("User \"{}\" does not exist", name), 410);
+      if (!user_id) die_fmt(410, R"(User "{}" does not exist)", name);
       return *user_id;
     }
 
     static inline auto board_name_param(ReadTxn& txn, Request req, uint16_t param) {
       const auto name = req->getParameter(param);
       const auto board_id = txn.get_board_id_by_name(name);
-      if (!board_id) throw ApiError(fmt::format("Board \"{}\" does not exist", name), 410);
+      if (!board_id) die_fmt(410, R"(Board "{}" does not exist)", name);
       return *board_id;
     }
 
@@ -2084,13 +2121,13 @@ namespace Ludwig {
     auto do_submenu_action(SubmenuAction action, uint64_t user, uint64_t id) -> optional<string> {
       switch (action) {
         case SubmenuAction::Reply:
-          return fmt::format("/{}/{:x}#reply", T::noun, id);
+          return format("/{}/{:x}#reply"_cf, T::noun, id);
         case SubmenuAction::Edit:
-          return fmt::format("/{}/{:x}/edit", T::noun, id);
+          return format("/{}/{:x}/edit"_cf, T::noun, id);
         case SubmenuAction::Delete:
-          throw ApiError("Delete is not yet implemented", 500);
+          die(500, "Delete is not yet implemented");
         case SubmenuAction::Share:
-          throw ApiError("Share is not yet implemented", 500);
+          die(500, "Share is not yet implemented");
         case SubmenuAction::Save:
           controller->save_post(user, id, true);
           return {};
@@ -2104,7 +2141,7 @@ namespace Ludwig {
           controller->hide_post(user, id, false);
           return {};
         case SubmenuAction::Report:
-          throw ApiError("Report is not yet implemented", 500);
+          die(500, "Report is not yet implemented");
         case SubmenuAction::MuteUser: {
           auto txn = controller->open_read_txn();
           auto e = T::get(txn, id, LocalUserDetail::get_login(txn, id));
@@ -2135,7 +2172,7 @@ namespace Ludwig {
         case SubmenuAction::ModLock:
         case SubmenuAction::ModRemove:
         case SubmenuAction::ModRemoveUser:
-          throw ApiError("Mod actions are not yet implemented", 500);
+          die(500, "Mod actions are not yet implemented");
         case SubmenuAction::AdminRestore:
         case SubmenuAction::AdminApprove:
         case SubmenuAction::AdminFlag:
@@ -2144,11 +2181,11 @@ namespace Ludwig {
         case SubmenuAction::AdminRemoveUser:
         case SubmenuAction::AdminPurge:
         case SubmenuAction::AdminPurgeUser:
-          throw ApiError("Admin actions are not yet implemented", 500);
+          die(500, "Admin actions are not yet implemented");
         case SubmenuAction::None:
-          throw ApiError("No action selected", 400);
+          die(400, "No action selected");
       }
-      throw ApiError("Invalid action", 400, fmt::format("Unrecognized SubmenuAction: {:d}", action));
+      throw ApiError("Invalid action", 400, format("Unrecognized SubmenuAction: {:d}"_cf, action));
     }
 
     auto feed_route(uint64_t feed_id, Response rsp, Request req, Meta& m) -> void {
@@ -2157,12 +2194,18 @@ namespace Ludwig {
       const auto sort = parse_sort_type(req->getQuery("sort"), m.login);
       const auto show_threads = req->getQuery("type") != "comments",
         show_images = req->getQuery("images") == "1" || (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_threads() : false);
-      const auto base_url = fmt::format("{}?type={}&sort={}&images={}",
+      const auto base_url = format("{}?type={}&sort={}&images={}"_cf,
         req->getUrl(),
         show_threads ? "threads" : "comments",
         EnumNameSortType(sort),
         show_images ? 1 : 0
       );
+      if (
+        feed_id == InstanceController::FEED_HOME &&
+        (!m.logged_in_user_id || txn.list_subscribed_boards(*m.logged_in_user_id).is_done())
+      ) {
+        feed_id = InstanceController::FEED_LOCAL;
+      }
       auto r = writer(rsp);
       if (m.is_htmx) {
         rsp->writeHeader("Content-Type", TYPE_HTML);
@@ -2187,7 +2230,10 @@ namespace Ludwig {
           .write_sort_options(req->getUrl(), sort, show_threads, show_images)
           .write(R"(</section><main>)");
       }
-      r.write_fmt(R"(<ol class="{}-list" id="top-level-list">)", show_threads ? "thread" : "comment");
+      r.write_fmt(R"(<ol class="{}-list{}" id="top-level-list">)"_cf,
+        show_threads ? "thread" : "comment",
+        m.site->votes_enabled ? "" : " no-votes"
+      );
       const auto from = req->getQuery("from");
       bool any_entries = false;
       const auto next = show_threads ?
@@ -2211,8 +2257,8 @@ namespace Ludwig {
         .banner_link = req->getUrl(),
         .page_title = title,
         .banner_title = display_name_as_text(board),
-        .banner_image = board.banner_url() ? optional(fmt::format("/media/board/{}/banner.webp", board.name()->string_view())) : nullopt,
-        .card_image = board.icon_url() ? optional(fmt::format("/media/board/{}/icon.webp", board.name()->string_view())) : nullopt
+        .banner_image = board.banner_url() ? optional(format("/media/board/{}/banner.webp"_cf, board.name()->string_view())) : nullopt,
+        .card_image = board.icon_url() ? optional(format("/media/board/{}/icon.webp"_cf, board.name()->string_view())) : nullopt
       };
     }
 
@@ -2241,13 +2287,21 @@ namespace Ludwig {
       };
     }
 
+    static inline void require_admin(const shared_ptr<Webapp<SSL>>& self, const std::unique_ptr<Meta>& m) {
+      auto txn = self->controller->open_read_txn();
+      const auto login = m->require_login(txn);
+      if (!InstanceController::can_change_site_settings(login)) {
+        die(403, "Admin login required to perform this action");
+      }
+    }
+
     auto register_routes(App& app) -> void {
 
       // Static Files
       /////////////////////////////////////////////////////
 
       serve_static(app, "/favicon.ico", "image/vnd.microsoft.icon", twemoji_piano_ico_str());
-      serve_static(app, "/static/default-theme.css", TYPE_CSS, default_theme_css_str());
+      serve_static(app, "/static/default-theme.css", TYPE_CSS, default_theme_min_css_str());
       serve_static(app, "/static/htmx.min.js", TYPE_JS, htmx_min_js_str());
       serve_static(app, "/static/ludwig.js", TYPE_JS, ludwig_js_str());
       serve_static(app, "/static/feather-sprite.svg", TYPE_SVG, feather_sprite_svg_str());
@@ -2267,7 +2321,7 @@ namespace Ludwig {
         } else {
           auto txn = self->controller->open_read_txn();
           if (!m.require_login(txn).local_user().admin()) {
-            throw ApiError("Only an admin user can perform first-run setup.", 403);
+            die(403, "Only an admin user can perform first-run setup.");
           }
           self->writer(rsp)
             .write_html_header(m, {
@@ -2293,7 +2347,7 @@ namespace Ludwig {
         const auto local = req->getQuery("local") == "1";
         const auto sort = parse_board_sort_type(req->getQuery("sort"));
         const auto sub = req->getQuery("sub") == "1";
-        const auto base_url = fmt::format("/boards?local={}&sort={}&sub={}",
+        const auto base_url = format("/boards?local={}&sort={}&sub={}"_cf,
           local ? "1" : "0",
           EnumNameBoardSortType(sort),
           sub ? "1" : "0"
@@ -2327,7 +2381,7 @@ namespace Ludwig {
         m.populate(txn);
         const auto local = req->getQuery("local") == "1";
         const auto sort = parse_user_sort_type(req->getQuery("sort"));
-        const auto base_url = fmt::format("/users?local={}&sort={}",
+        const auto base_url = format("/users?local={}&sort={}"_cf,
           local ? "1" : "0",
           EnumNameUserSortType(sort)
         );
@@ -2359,7 +2413,7 @@ namespace Ludwig {
       .get("/c/:name", [self](auto* rsp, auto* req, Meta& m) {
         // Compatibility alias for Lemmy community URLs
         // Needed because some Lemmy apps expect URLs in exactly this format
-        write_redirect_to(rsp, m, fmt::format("/b/{}", req->getParameter(0)));
+        write_redirect_to(rsp, m, format("/b/{}"_cf, req->getParameter(0)));
       })
       .get("/b/:name", [self](auto* rsp, auto* req, Meta& m) {
         auto txn = self->controller->open_read_txn();
@@ -2369,7 +2423,7 @@ namespace Ludwig {
         const auto sort = parse_sort_type(req->getQuery("sort"), m.login);
         const auto show_threads = req->getQuery("type") != "comments",
           show_images = req->getQuery("images") == "1" || (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_threads() : false);
-        const auto base_url = fmt::format("/b/{}?type={}&sort={}&images={}",
+        const auto base_url = format("/b/{}?type={}&sort={}&images={}"_cf,
           board.board().name()->string_view(),
           show_threads ? "threads" : "comments",
           EnumNameSortType(sort),
@@ -2387,7 +2441,10 @@ namespace Ludwig {
             .write_sort_options(req->getUrl(), sort, show_threads, show_images)
             .write(R"(</section><main>)");
         }
-        r.write_fmt(R"(<ol class="{}-list" id="top-level-list">)", show_threads ? "thread" : "comment");
+        r.write_fmt(R"(<ol class="{}-list{}" id="top-level-list">)"_cf,
+          show_threads ? "thread" : "comment",
+          board.should_show_votes(m.login, m.site) ? "" : " no-votes"
+        );
         bool any_entries = false;
         const auto from = req->getQuery("from");
         const auto next = show_threads ?
@@ -2424,7 +2481,7 @@ namespace Ludwig {
         const auto sort = parse_user_post_sort_type(req->getQuery("sort"));
         const auto show_threads = req->getQuery("type") != "comments",
           show_images = req->getQuery("images") == "1" || (req->getQuery("sort").empty() ? !m.login || m.login->local_user().show_images_threads() : false);
-        const auto base_url = fmt::format("/u/{}?type={}&sort={}&images={}",
+        const auto base_url = format("/u/{}?type={}&sort={}&images={}"_cf,
           user.user().name()->string_view(),
           show_threads ? "threads" : "comments",
           EnumNameUserPostSortType(sort),
@@ -2439,8 +2496,8 @@ namespace Ludwig {
               .canonical_path = req->getUrl(),
               .banner_link = req->getUrl(),
               .banner_title = display_name_as_text(user.user()),
-              .banner_image = user.user().banner_url() ? optional(fmt::format("/media/user/{}/banner.webp", user.user().name()->string_view())) : nullopt,
-              .card_image = user.user().avatar_url() ? optional(fmt::format("/media/user/{}/avatar.webp", user.user().name()->string_view())) : nullopt
+              .banner_image = user.user().banner_url() ? optional(format("/media/user/{}/banner.webp"_cf, user.user().name()->string_view())) : nullopt,
+              .card_image = user.user().avatar_url() ? optional(format("/media/user/{}/avatar.webp"_cf, user.user().name()->string_view())) : nullopt
             })
             .write("<div>")
             .write_sidebar(m.login, m.site, user)
@@ -2448,7 +2505,10 @@ namespace Ludwig {
             .write_sort_options(req->getUrl(), sort, show_threads, show_images)
             .write(R"(</section><main>)");
         }
-        r.write_fmt(R"(<ol class="{}-list" id="top-level-list">)", show_threads ? "thread" : "comment");
+        r.write_fmt(R"(<ol class="{}-list{}" id="top-level-list">)"_cf,
+          show_threads ? "thread" : "comment",
+          m.site->votes_enabled ? "" : " no-votes"
+        );
         bool any_entries = false;
         const auto from = req->getQuery("from");
         const auto next = show_threads ?
@@ -2480,7 +2540,7 @@ namespace Ludwig {
           r.write_comment_tree(comments, detail.id, sort, m.site, m.login, show_images, false, false);
         } else {
           r.write_html_header(m, board_header_options(req, detail.board(),
-              fmt::format("{} - {}", display_name_as_text(detail.board()), display_name_as_text(detail.thread()))))
+              format("{} - {}"_cf, display_name_as_text(detail.board()), display_name_as_text(detail.thread()))))
             .write("<div>")
             .write_sidebar(m.login, m.site, self->controller->board_detail(txn, detail.thread().board(), m.login))
             .write("<main>")
@@ -2495,7 +2555,7 @@ namespace Ludwig {
         const auto id = hex_id_param(req, 0);
         const auto login = m.require_login(txn);
         const auto thread = ThreadDetail::get(txn, id, login);
-        if (!thread.can_edit(login)) throw ApiError("Cannot edit this post", 403);
+        if (!thread.can_edit(login)) die(403, "Cannot edit this post");
         self->writer(rsp)
           .write_html_header(m, board_header_options(req, thread.board(), "Edit Thread"))
           .write_edit_thread_form(thread, login)
@@ -2517,7 +2577,7 @@ namespace Ludwig {
           r.write_comment_tree(comments, detail.id, sort, m.site, m.login, show_images, false, false);
         } else {
           r.write_html_header(m, board_header_options(req, detail.board(),
-              fmt::format("{} - {}'s comment on “{}”",
+              format("{} - {}'s comment on “{}”"_cf,
                 display_name_as_text(detail.board()),
                 display_name_as_text(detail.author()),
                 display_name_as_text(detail.thread()))))
@@ -2561,7 +2621,7 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn();
         const auto& login = m.require_login(txn);
         if (!self->controller->can_create_board(login)) {
-          throw ApiError("User cannot create boards", 403);
+          die(403, "User cannot create boards");
         }
         self->writer(rsp)
           .write_html_header(m, {
@@ -2598,7 +2658,7 @@ namespace Ludwig {
         }
       })
       .get("/register", [self](auto* rsp, auto*, Meta& m) {
-        if (!m.site->registration_enabled) throw ApiError("Registration is not enabled on this site", 403);
+        if (!m.site->registration_enabled) die(403, "Registration is not enabled on this site");
         auto txn = self->controller->open_read_txn();
         m.populate(txn);
         if (m.login) {
@@ -2643,7 +2703,7 @@ namespace Ludwig {
         const auto login = m.require_login(txn);
         const auto board = self->controller->local_board_detail(txn, board_id, m.login);
         if (!login.local_user().admin() && login.id != board.local_board().owner()) {
-          throw ApiError("Must be admin or board owner to view this page", 403);
+          die(403, "Must be admin or board owner to view this page");
         }
         self->writer(rsp)
           .write_html_header(m, board_header_options(req, board.board(), "Board Settings"))
@@ -2669,7 +2729,7 @@ namespace Ludwig {
         auto txn = self->controller->open_read_txn(); \
         const auto login = m.require_login(txn); \
         if (!InstanceController::can_change_site_settings(login)) { \
-          throw ApiError("Admin login required to view this page", 403); \
+          die(403, "Admin login required to view this page"); \
         } \
         ADMIN_PAGE(PATH, TAB, CONTENT, m) \
       })
@@ -2689,7 +2749,7 @@ namespace Ludwig {
         rsp->end();
       })
       .post_form("/login", [self](auto* req, auto m) {
-        if (m->logged_in_user_id) throw ApiError("Already logged in", 403);
+        if (m->logged_in_user_id) die(403, "Already logged in");
         return [self,
           user_agent = string(req->getHeader("user-agent")),
           referer = string(req->getHeader("referer")),
@@ -2712,7 +2772,7 @@ namespace Ludwig {
             )](auto* rsp) mutable {
               rsp->writeStatus(http_status(303))
                 ->writeHeader("Set-Cookie",
-                  fmt::format(COOKIE_NAME "={:x}; path=/; expires={:%a, %d %b %Y %T %Z}",
+                  format(COOKIE_NAME "={:x}; path=/; expires={:%a, %d %b %Y %T %Z}"_cf,
                     login.session_id, fmt::gmtime(login.expiration)))
                 ->writeHeader("Location", (referer.empty() || referer == "/login" || !self->controller->site_detail()->setup_done) ? "/" : referer)
                 ->end();
@@ -2733,8 +2793,8 @@ namespace Ludwig {
         };
       })
       .post_form("/register", [self](auto* req, auto m) {
-        if (!m->site->registration_enabled) throw ApiError("Registration is not enabled on this site", 403);
-        if (m->logged_in_user_id) throw ApiError("Already logged in", 403);
+        if (!m->site->registration_enabled) die(403, "Registration is not enabled on this site");
+        if (m->logged_in_user_id) die(403, "Already logged in");
         return [self,
           user_agent = string(req->getHeader("user-agent")),
           referer = string(req->getHeader("referer")),
@@ -2751,7 +2811,7 @@ namespace Ludwig {
               SecretString password = body.required_string("password"),
                 confirm_password = body.required_string("confirm_password");
               if (password.data != confirm_password.data) {
-                throw ApiError("Passwords do not match", 400);
+                die(400, "Passwords do not match");
               }
               self->controller->register_local_user(
                 body.required_string("actual_username"),
@@ -2802,7 +2862,7 @@ namespace Ludwig {
           write([=, m = std::move(m)](auto* rsp) mutable {
             rsp->writeStatus(http_status(303));
             m->write_cookie(rsp);
-            rsp->writeHeader("Location", fmt::format("/b/{}", name))
+            rsp->writeHeader("Location", format("/b/{}"_cf, name))
               ->end();
           });
         };
@@ -2825,7 +2885,7 @@ namespace Ludwig {
           write([=, m = std::move(m)](auto* rsp) mutable {
             rsp->writeStatus(http_status(303));
             m->write_cookie(rsp);
-            rsp->writeHeader("Location", fmt::format("/thread/{:x}", id))
+            rsp->writeHeader("Location", format("/thread/{:x}"_cf, id))
               ->end();
           });
         };
@@ -2846,17 +2906,18 @@ namespace Ludwig {
             if (m->is_htmx) {
               auto txn = self->controller->open_read_txn();
               m->populate(txn);
-              const auto comment = CommentDetail::get(txn, id, m->login);
+              CommentTree tree;
+              tree.emplace(thread_id, CommentDetail::get(txn, id, m->login));
               rsp->writeHeader("Content-Type", TYPE_HTML);
               m->write_cookie(rsp);
               self->writer(rsp)
-                .write_comment_entry(comment, m->site, m->login, PostContext::Reply, true)
+                .write_comment_tree(tree, thread_id, CommentSortType::New, m->site, m->login, true, true, false)
                 .write_toast("Reply submitted")
                 .finish();
             } else {
               rsp->writeStatus(http_status(303));
               m->write_cookie(rsp);
-              rsp->writeHeader("Location", fmt::format("/thread/{:x}", thread_id))
+              rsp->writeHeader("Location", format("/thread/{:x}"_cf, thread_id))
                 ->end();
             }
           });
@@ -2878,17 +2939,18 @@ namespace Ludwig {
             if (m->is_htmx) {
               auto txn = self->controller->open_read_txn();
               m->populate(txn);
-              const auto comment = CommentDetail::get(txn, id, m->login);
+              CommentTree tree;
+              tree.emplace(comment_id, CommentDetail::get(txn, id, m->login));
               rsp->writeHeader("Content-Type", TYPE_HTML);
               m->write_cookie(rsp);
               self->writer(rsp)
-                .write_comment_entry(comment, m->site, m->login, PostContext::Reply, true)
+                .write_comment_tree(tree, comment_id, CommentSortType::New, m->site, m->login, true, true, false)
                 .write_toast("Reply submitted")
                 .finish();
             } else {
               rsp->writeStatus(http_status(303));
               m->write_cookie(rsp);
-              rsp->writeHeader("Location", fmt::format("/comment/{:x}", comment_id))
+              rsp->writeHeader("Location", format("/comment/{:x}"_cf, comment_id))
                 ->end();
             }
           });
@@ -3018,12 +3080,12 @@ namespace Ludwig {
       })
       .post("/settings/invites/new", [self](auto*, auto m) {
         if (!m->site->registration_invite_required || m->site->invite_admin_only) {
-          throw ApiError("Users cannot generate invite codes on this server", 403);
+          die(403, "Users cannot generate invite codes on this server");
         }
         auto txn = self->controller->open_read_txn();
         const auto login = m->require_login(txn);
         if (login.mod_state().state >= ModState::Locked) {
-          throw ApiError("User does not have permission to create an invite code", 403);
+          die(403, "User does not have permission to create an invite code");
         }
         return [self, id=login.id](string, auto&& write) mutable {
           self->controller->create_site_invite(id);
@@ -3032,15 +3094,8 @@ namespace Ludwig {
           });
         };
       })
-#     define REQUIRE_ADMIN() { \
-        auto txn = self->controller->open_read_txn(); \
-        const auto login = m->require_login(txn); \
-        if (!InstanceController::can_change_site_settings(login)) { \
-          throw ApiError("Admin login required to perform this action", 403); \
-        } \
-      }
       .post_form("/site_admin", [self](auto*, auto m) {
-        REQUIRE_ADMIN()
+        require_admin(self, m);
         return [self, m=std::move(m)](QueryString<string> body, auto&& write) mutable {
           try {
             self->controller->update_site(form_to_site_update(body), m->logged_in_user_id);
@@ -3057,9 +3112,9 @@ namespace Ludwig {
       })
       .post_form("/site_admin/first_run_setup", [self](auto*, auto m) {
         if (m->site->setup_done) {
-          throw ApiError("First-run setup is already complete", 403);
+          die(403, "First-run setup is already complete");
         }
-        REQUIRE_ADMIN()
+        require_admin(self, m);
         return [self, m=std::move(m)](QueryString<string> body, auto&& write) mutable {
           try {
             self->controller->first_run_setup({
@@ -3091,14 +3146,14 @@ namespace Ludwig {
         };
       })
       .post("/site_admin/export", [self](auto*, auto m) {
-        REQUIRE_ADMIN()
+        require_admin(self, m);
         return [self](string, auto&& write) {
           write([](auto rsp) {
             rsp->writeHeader("Content-Type", "application/zstd")
               ->writeHeader(
                 "Content-Disposition",
-                fmt::format(
-                  R"(attachment; filename="ludwig-{:%F-%H%M%S}.dbdump.zst")",
+                format(
+                  R"(attachment; filename="ludwig-{:%F-%H%M%S}.dbdump.zst")"_cf,
                   now_t()
                 )
               );
@@ -3124,8 +3179,8 @@ namespace Ludwig {
         bool is_approve;
         if (req->getParameter(0) == "approve") is_approve = true;
         else if (req->getParameter(0) == "reject") is_approve = false;
-        else throw ApiError("Page not found", 404);
-        REQUIRE_ADMIN()
+        else die(404, "Page not found");
+        require_admin(self, m);
         return [self, is_approve, id=hex_id_param(req, 1), m=std::move(m)](string, auto&& write) mutable {
           try {
             if (is_approve) {
@@ -3146,7 +3201,7 @@ namespace Ludwig {
         };
       })
       .post("/site_admin/invites/new", [self](auto*, auto m) {
-        REQUIRE_ADMIN()
+        require_admin(self, m);
         return [self, m=std::move(m)](string, auto&& write) mutable {
           self->controller->create_site_invite(m->logged_in_user_id);
           write([](auto* rsp) {
@@ -3155,7 +3210,7 @@ namespace Ludwig {
         };
       })
       .any("/*", [](auto*, auto*, auto&) {
-        throw ApiError("Page not found", 404);
+        die(404, "Page not found");
       });
     }
   };

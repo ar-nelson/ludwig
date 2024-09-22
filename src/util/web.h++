@@ -493,7 +493,8 @@ namespace Ludwig {
 
 namespace fmt {
   template <> struct formatter<Ludwig::Escape> : public Ludwig::CustomFormatter {
-    auto format(Ludwig::Escape e, format_context& ctx) const {
+    template <typename FormatContext>
+    auto format(Ludwig::Escape e, FormatContext& ctx) const {
       size_t start = 0;
       for (
         size_t i = e.str.find_first_of(Ludwig::ESCAPED);
@@ -502,21 +503,11 @@ namespace fmt {
       ) {
         if (i > start) std::copy(e.str.begin() + start, e.str.begin() + i, ctx.out());
         switch (e.str[i]) {
-          case '<':
-            fmt::format_to(ctx.out(), "&lt;");
-            break;
-          case '>':
-            fmt::format_to(ctx.out(), "&gt;");
-            break;
-          case '\'':
-            fmt::format_to(ctx.out(), "&apos;");
-            break;
-          case '"':
-            fmt::format_to(ctx.out(), "&quot;");
-            break;
-          case '&':
-            fmt::format_to(ctx.out(), "&amp;");
-            break;
+          case '<': format_to(ctx.out(), "&lt;"_cf); break;
+          case '>': format_to(ctx.out(), "&gt;"_cf); break;
+          case '\'': format_to(ctx.out(), "&apos;"_cf); break;
+          case '"': format_to(ctx.out(), "&quot;"_cf); break;
+          case '&': format_to(ctx.out(), "&amp;"_cf); break;
         }
       }
       return std::copy(e.str.begin() + start, e.str.end(), ctx.out());
@@ -526,6 +517,17 @@ namespace fmt {
 
 namespace Ludwig {
   static inline auto escape_html(std::string_view str) -> std::string {
-    return fmt::format("{}", Escape(str));
+    using fmt::operator""_cf;
+    return fmt::format("{}"_cf, Escape(str));
   }
 }
+
+#define ICON(NAME) \
+  R"(<svg aria-hidden="true" class="icon"><use href="/static/feather-sprite.svg#)" NAME R"("></svg>)"
+#define HTML_FIELD(ID, LABEL, TYPE, EXTRA) \
+  "<label for=\"" ID "\"><span>" LABEL "</span><input type=\"" TYPE "\" name=\"" ID "\" id=\"" ID "\"" EXTRA "></label>"
+#define HTML_CHECKBOX(ID, LABEL, EXTRA) \
+  "<label for=\"" ID "\"><span>" LABEL "</span><input type=\"checkbox\" class=\"a11y\" name=\"" ID "\" id=\"" ID "\"" EXTRA "><div class=\"toggle-switch\"></div></label>"
+#define HTML_TEXTAREA(ID, LABEL, EXTRA, CONTENT) \
+  "<label for=\"" ID "\"><span>" LABEL "</span><div><textarea name=\"" ID "\" id=\"" ID "\"" EXTRA ">" CONTENT \
+  R"(</textarea><small><a href="https://www.markdownguide.org/cheat-sheet/" rel="nofollow" target="_blank">Markdown</a> formatting is supported.</small></div></label>)"

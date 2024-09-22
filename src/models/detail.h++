@@ -125,6 +125,7 @@ namespace Ludwig {
     auto should_show(Login login) const noexcept -> bool;
     auto can_create_thread(Login login) const noexcept -> bool;
     auto can_change_settings(Login login) const noexcept -> bool;
+    auto should_show_votes(Login login, const SiteDetail* site) const noexcept -> bool;
 
     static constexpr std::string_view noun = "board";
     static auto get(ReadTxn& txn, uint64_t id, Login login) -> BoardDetail;

@@ -12,15 +12,6 @@ namespace Ludwig {
 
   static inline auto update_opt_str(
     FlatBufferBuilder& fbb,
-    optional<string_view> updated,
-    const String* existing
-  ) -> Offset<String> {
-    if (!updated) return fbb.CreateString(existing);
-    else return fbb.CreateString(*updated);
-  }
-
-  static inline auto update_opt_str(
-    FlatBufferBuilder& fbb,
     optional<optional<string_view>> updated,
     const String* existing
   ) -> Offset<String> {

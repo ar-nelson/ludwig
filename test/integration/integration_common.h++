@@ -11,7 +11,7 @@
 #include "views/media.h++"
 #include "views/lemmy_api.h++"
 
-using std::future, std::promise, std::unique_ptr;
+using std::promise, std::unique_ptr;
 
 namespace Ludwig {
 

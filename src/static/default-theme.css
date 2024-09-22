@@ -81,6 +81,23 @@ summary, input[type=submit], button, select {
   height: 0.1px;
 }
 
+h1 {
+  font-weight: bold;
+  font-size: 1.5rem;
+}
+h2 {
+  font-weight: bold;
+  font-size: 1.25rem;
+}
+h3 {
+  font-weight: normal;
+  font-size: 1.25rem;
+}
+h4, h5, h6 {
+  font-weight: bold;
+  font-size: 1rem;
+}
+
 /* borrowed from Skeleton CSS framework */
 input[type="email"],
 input[type="number"],
@@ -261,6 +278,48 @@ a:link.big-button, a:visited.big-button {
   color: var(--color-accent-fg);
 }
 
+.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  text-decoration: underline;
+  text-decoration-color: var(--color-fg-dim);
+}
+.markdown code {
+  background-color: var(--color-bg);
+  color: var(--color-fg-dim);
+  font-size: 0.8rem;
+  border: 1px solid var(--color-bg-dim);
+  border-radius: 0.25rem;
+  padding-left: 0.25rem;
+  padding-right: 0.25rem;
+}
+.markdown pre {
+  background-color: var(--color-bg);
+  color: var(--color-fg-dim);
+  border: 1px solid var(--color-bg-dim);
+  border-radius: 0.25rem;
+  padding: 0.25rem;
+}
+.markdown pre code {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+.markdown blockquote {
+  background-color: var(--color-bg-dim);
+  color: var(--color-fg-dim);
+  border-left: 2px solid var(--color-fg-dim);
+  margin-left: 0;
+  margin-right: 0;
+  padding: 0 1rem;
+}
+.markdown ul, .markdown ol {
+  padding-left: 1rem;
+}
+.markdown ul > li {
+  list-style-type: disc;
+}
+
 .topbar {
   width: 100%;
   align-self: stretch;
@@ -359,6 +418,7 @@ body > div, body > main, body > header, body > footer {
 #page-header h1 {
   display: inline-block;
   padding: 0.5rem;
+  font-size: 2rem;
 }
 
 .banner-image {
@@ -385,10 +445,6 @@ a.page-header-link:hover {
   width: 19rem;
   padding-left: 1rem;
   float: right;
-}
-
-#sidebar h2 {
-  font-size: 1.25rem;
 }
 
 #sidebar label {
@@ -536,6 +592,15 @@ ol.thread-list, ol.comment-list, ol.board-list, ol.user-list {
   backdrop-filter: blur(0.75rem);
 }
 
+.no-votes .thread {
+  grid-template-columns: 5rem 1fr;
+  grid-template-areas:
+    "thumbnail title"
+    "thumbnail warnings"
+    "thumbnail info"
+    "thumbnail controls";
+}
+
 .comment {
   display: flex;
   flex-direction: column;
@@ -559,6 +624,14 @@ ol.thread-list, ol.comment-list, ol.board-list, ol.user-list {
     "votes content"
     "votes controls";
   min-width: 0;
+}
+
+.no-votes .comment-body {
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "content"
+    "controls";
+  padding-left: 0.5rem;
 }
 
 .thread-title {
@@ -728,6 +801,10 @@ time, abbr {
   justify-content: flex-start;
 }
 
+.no-votes .vote-buttons {
+  display: none;
+}
+
 .karma {
   order: 2;
   transform: translate(0, 1px);
@@ -791,6 +868,7 @@ label.upvote, label.downvote {
   -webkit-appearance: none;
   -webkit-user-select: none;
   -moz-user-select: none;
+  user-select: none;
   -webkit-padding-end: 0;
   -moz-padding-end: 0;
   -webkit-padding-start: 0;
@@ -900,11 +978,11 @@ body:not(.has-js) .js {
   border-left: 2px solid var(--color-accent);
 }
 
-.comment-tree li {
+.comment-tree > li {
   margin-top: 0.5rem;
 }
 
-.comment-tree li > .more-link {
+.comment-tree > li > .more-link {
   margin-left: 0;
 }
 
@@ -1226,6 +1304,15 @@ body > footer {
       "votes votes controls";
   }
 
+  .no-votes .thread {
+    grid-template-columns: min-content 1fr;
+    grid-template-areas:
+      "title title title"
+      "thumbnail warnings warnings"
+      "thumbnail info info"
+      "controls controls controls";
+  }
+
   .thread-title {
     font-size: 1rem;
     margin: 0.25rem;
@@ -1241,6 +1328,13 @@ body > footer {
     grid-template-areas:
       "content content"
       "votes controls";
+  }
+
+  .no-votes .comment-body {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "content"
+      "controls";
   }
 
   .comment-collapse .comment-body {

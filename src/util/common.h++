@@ -12,6 +12,7 @@
 #include <string_view>
 #include <glib.h>
 #include <fmt/core.h>
+#include <fmt/compile.h>
 #include <spdlog/spdlog.h>
 #include <uWebSockets/MoveOnlyFunction.h>
 #include <openssl/crypto.h>
@@ -109,7 +110,8 @@ namespace Ludwig {
     }
 
     inline auto to_string() const noexcept -> std::string {
-      return fmt::format("{}://{}{}{}{}{}{}{}{}",
+      using fmt::operator""_cf;
+      return fmt::format("{}://{}{}{}{}{}{}{}{}"_cf,
         scheme,
         user.empty() ? "" : user,
         user.empty() ? "" : "@",
@@ -161,17 +163,19 @@ namespace Ludwig {
   }
 
   static inline auto invite_code_to_id(std::string_view invite_code) noexcept -> std::optional<uint64_t> {
+    using fmt::operator""_cf;
     std::match_results<std::string_view::const_iterator> match;
     if (std::regex_match(invite_code.begin(), invite_code.end(), match, invite_code_regex)) {
       try {
-        return std::stoull(fmt::format("{}{}{}{}", match[1].str(), match[2].str(), match[3].str(), match[4].str()), nullptr, 16);
+        return std::stoull(fmt::format("{}{}{}{}"_cf, match[1].str(), match[2].str(), match[3].str(), match[4].str()), nullptr, 16);
       } catch (...) {}
     }
     return {};
   }
 
   static inline auto invite_id_to_code(uint64_t id) noexcept -> std::string {
-    return fmt::format("{:05X}-{:03X}-{:03X}-{:05X}", id >> 44, (id >> 32) & 0xfff, (id >> 20) & 0xfff, id & 0xfffff);
+    using fmt::operator""_cf;
+    return fmt::format("{:05X}-{:03X}-{:03X}-{:05X}"_cf, id >> 44, (id >> 32) & 0xfff, (id >> 20) & 0xfff, id & 0xfffff);
   }
 
   static inline auto glib_log_level_to_spdlog_level(GLogLevelFlags level) -> spdlog::level::level_enum {

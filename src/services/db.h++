@@ -108,6 +108,7 @@ namespace Ludwig {
 
     auto open_read_txn() -> ReadTxnImpl;
     auto open_write_txn() -> WriteTxn;
+    auto debug_print_settings() -> void;
 
     friend class ReadTxn;
     friend class ReadTxnImpl;

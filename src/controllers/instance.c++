@@ -14,7 +14,7 @@ using std::function, std::max, std::min, std::nullopt, std::optional, std::pair,
     std::priority_queue, std::regex, std::regex_match, std::runtime_error,
     std::shared_ptr, std::string, std::string_view, std::unique_ptr,
     std::vector, flatbuffers::Offset, flatbuffers::FlatBufferBuilder,
-    flatbuffers::GetRoot;
+    flatbuffers::GetRoot, fmt::format, fmt::operator""_cf;
 namespace chrono = std::chrono;
 
 namespace Ludwig {
@@ -281,15 +281,6 @@ namespace Ludwig {
     }
   }
 
-  static inline auto expect_post_stats(ReadTxn& txn, uint64_t post_id) -> const PostStats& {
-    const auto stats = txn.get_post_stats(post_id);
-    if (!stats) {
-      spdlog::error("Post {:x} has no corresponding post_stats (database is inconsistent!)", post_id);
-      throw ApiError("Database error");
-    }
-    return *stats;
-  }
-
   InstanceController::InstanceController(
     shared_ptr<DB> db,
     shared_ptr<HttpClient> http_client,
@@ -404,14 +395,14 @@ namespace Ludwig {
         : txn.get_user_id_by_email(username_or_email);
       if (!user_id_opt && !is_first_run_admin) {
         throw ApiError("Invalid username or password", 400,
-          fmt::format("Tried to log in as nonexistent user {}", username_or_email)
+          format("Tried to log in as nonexistent user {}"_cf, username_or_email)
         );
       }
       user_id = *user_id_opt;
       const auto local_user = txn.get_local_user(user_id);
       if (!local_user) {
         throw ApiError("Invalid username or password", 400,
-          fmt::format("Tried to log in as non-local user {}", username_or_email)
+          format("Tried to log in as non-local user {}"_cf, username_or_email)
         );
       }
       target_hash = local_user->get().password_hash();
@@ -424,7 +415,7 @@ namespace Ludwig {
     if (CRYPTO_memcmp(hash, target_hash->bytes()->Data(), 32)) {
       // TODO: Lock users out after repeated failures
       throw ApiError("Invalid username or password", 400,
-        fmt::format("Tried to login with wrong password for user {}", username_or_email)
+        format("Tried to login with wrong password for user {}"_cf, username_or_email)
       );
     }
     const auto [session_id, expiration] = txn.create_session(
@@ -848,7 +839,7 @@ namespace Ludwig {
         break;
       }
       default:
-        throw ApiError(fmt::format("No feed with ID {:x}", feed_id), 410);
+        throw ApiError(format("No feed with ID {:x}"_cf, feed_id), 410);
     }
     const auto out_with_card = [&](const ThreadDetail& thread) {
       if (thread.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, thread.id);
@@ -954,7 +945,7 @@ namespace Ludwig {
         break;
       }
       default:
-        throw ApiError(fmt::format("No feed with ID {:x}", feed_id), 410);
+        throw ApiError(format("No feed with ID {:x}"_cf, feed_id), 410);
     }
     const auto get_entry = [&](uint64_t id) -> optional<CommentDetail> {
       const auto e = optional(CommentDetail::get(txn, id, login));
@@ -1250,8 +1241,9 @@ namespace Ludwig {
     txn.set_setting(SettingsKey::post_max_length, update.post_max_length.value_or(MiB / 2));
     txn.set_setting(SettingsKey::remote_post_max_length, update.remote_post_max_length.value_or(MiB));
     txn.set_setting(SettingsKey::home_page_type, (uint64_t)update.home_page_type.value_or(HomePageType::Local));
-    txn.set_setting(SettingsKey::votes_enabled, update.votes_enabled.value_or(false));
-    txn.set_setting(SettingsKey::downvotes_enabled, update.downvotes_enabled.value_or(false));
+    txn.set_setting(SettingsKey::votes_enabled, update.votes_enabled.value_or(true));
+    txn.set_setting(SettingsKey::downvotes_enabled, update.downvotes_enabled.value_or(true));
+    txn.set_setting(SettingsKey::cws_enabled, update.cws_enabled.value_or(true));
     txn.set_setting(SettingsKey::javascript_enabled, update.javascript_enabled.value_or(false));
     txn.set_setting(SettingsKey::infinite_scroll_enabled, update.infinite_scroll_enabled.value_or(false));
     txn.set_setting(SettingsKey::board_creation_admin_only, update.board_creation_admin_only.value_or(true));
@@ -1264,6 +1256,7 @@ namespace Ludwig {
     txn.set_setting(SettingsKey::color_accent_hover, update.color_accent_hover.value_or(SiteDetail::DEFAULT_COLOR_ACCENT_HOVER));
     txn.set_setting(SettingsKey::updated_at, now);
     txn.commit();
+    db->debug_print_settings();
     event_bus->dispatch(Event::SiteUpdate);
   }
   auto InstanceController::first_run_setup_options(ReadTxn& txn) -> FirstRunSetupOptions {
@@ -1303,6 +1296,7 @@ namespace Ludwig {
       if (const auto v = update.color_accent_hover) txn.set_setting(SettingsKey::color_accent_hover, *v);
       txn.set_setting(SettingsKey::updated_at, now_s());
       txn.commit();
+      db->debug_print_settings();
     }
     {
       auto txn = db->open_read_txn();
@@ -1715,7 +1709,7 @@ namespace Ludwig {
     union { uint8_t bytes[4]; uint32_t n; } salt;
     RAND_pseudo_bytes(salt.bytes, 4);
     auto user = txn.get_user(author);
-    if (!user) throw ApiError(fmt::format("User {:x} does not exist", author), 400);
+    if (!user) throw ApiError(format("User {:x} does not exist"_cf, author), 400);
     FlatBufferBuilder fbb;
     const auto submission_s = submission_url ? fbb.CreateString(*submission_url) : 0,
       content_raw_s = text_content_markdown ? fbb.CreateString(*text_content_markdown) : 0,
@@ -1771,7 +1765,7 @@ namespace Ludwig {
     if (text_content_markdown) {
       auto len = text_content_markdown->length();
       if (len > site->remote_post_max_length) {
-        throw ApiError(fmt::format("Post text content cannot be larger than {:d} bytes", site->remote_post_max_length), 400);
+        throw ApiError(format("Post text content cannot be larger than {:d} bytes"_cf, site->remote_post_max_length), 400);
       } else if (len < 1) {
         text_content_markdown = {};
       }
@@ -1801,7 +1795,7 @@ namespace Ludwig {
     if (text_content_markdown) {
       auto len = text_content_markdown->length();
       if (len > site->post_max_length) {
-        throw ApiError(fmt::format("Post text content cannot be larger than {:d} bytes", site->post_max_length), 400);
+        throw ApiError(format("Post text content cannot be larger than {:d} bytes"_cf, site->post_max_length), 400);
       } else if (len < 1) {
         text_content_markdown = {};
       }
@@ -1863,7 +1857,7 @@ namespace Ludwig {
     union { uint8_t bytes[4]; uint32_t n; } salt;
     RAND_pseudo_bytes(salt.bytes, 4);
     auto user = txn.get_user(author);
-    if (!user) throw ApiError(fmt::format("User {:x} does not exist", author), 400);
+    if (!user) throw ApiError(format("User {:x} does not exist"_cf, author), 400);
     FlatBufferBuilder fbb;
     const auto content_raw_s = fbb.CreateString(text_content_markdown),
       content_warning_s = content_warning ? fbb.CreateString(*content_warning) : 0,
@@ -1908,7 +1902,7 @@ namespace Ludwig {
   ) -> uint64_t {
     const auto site = site_detail();
     if (text_content_markdown.length() > site->remote_post_max_length) {
-      throw ApiError(fmt::format("Comment text content cannot be larger than {:d} bytes", site->remote_post_max_length), 400);
+      throw ApiError(format("Comment text content cannot be larger than {:d} bytes"_cf, site->remote_post_max_length), 400);
     }
     auto txn = db->open_write_txn();
     optional<ThreadDetail> parent_thread;
@@ -1938,7 +1932,7 @@ namespace Ludwig {
   ) -> uint64_t {
     const auto site = site_detail();
     if (text_content_markdown.length() > site->post_max_length) {
-      throw ApiError(fmt::format("Comment text content cannot be larger than {:d} bytes", site->post_max_length), 400);
+      throw ApiError(format("Comment text content cannot be larger than {:d} bytes"_cf, site->post_max_length), 400);
     }
     auto txn = db->open_write_txn();
     const auto login = LocalUserDetail::get_login(txn, author);

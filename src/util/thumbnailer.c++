@@ -16,7 +16,7 @@ namespace Ludwig {
         VImage::thumbnail_buffer((void*)data.data(), data.length(), width,
           VImage::option()
           ->set("height", height)
-          ->set("crop", VIPS_INTERESTING_ATTENTION)
+          ->set("crop", VIPS_INTERESTING_CENTRE)
         ).webpsave_buffer(
           VImage::option()->set("target_size", width * (height ? height : width))
         )

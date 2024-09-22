@@ -3,14 +3,14 @@
 #include "models/emoji_table.h++"
 #include "static/emoji_table.fb.h++"
 #include <stdio.h>
+#include <md4c.h>
 #include <static_block.hpp>
 #include <static_vector.hpp>
-#include <md4c.h>
 
 using std::back_inserter, std::min, std::regex, std::regex_iterator,
     std::runtime_error, std::shared_ptr, std::string, std::string_view,
     std::vector, flatbuffers::FlatBufferBuilder, flatbuffers::Offset,
-    flatbuffers::Vector;
+    flatbuffers::Vector, fmt::format, fmt::format_to, fmt::operator""_cf;
 
 namespace Ludwig {
   static const regex
@@ -40,7 +40,7 @@ namespace Ludwig {
       HTML_PARSE_NOBLANKS | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET
     );
     if (doc == nullptr) {
-      throw runtime_error(fmt::format("Failed to parse HTML at {}", url));
+      throw runtime_error(format("Failed to parse HTML at {}"_cf, url));
     }
     xpath_ctx = xmlXPathNewContext(doc);
     if (xpath_ctx == nullptr) throw runtime_error("XPath setup failed");
@@ -102,12 +102,12 @@ namespace Ludwig {
       case MD_BLOCK_P: return "<p>";
       case MD_BLOCK_QUOTE: return "<blockquote>";
       case MD_BLOCK_H:
-        return fmt::format("<h{:d}>", ((MD_BLOCK_H_DETAIL*)detail)->level);
+        return format("<h{:d}>"_cf, ((MD_BLOCK_H_DETAIL*)detail)->level);
       case MD_BLOCK_UL: return "<ul>";
       case MD_BLOCK_OL: {
         const auto* ol_detail = (MD_BLOCK_OL_DETAIL*)detail;
         if (ol_detail->start != 1) {
-          return fmt::format(R"(<ol start="{:d}">)", ol_detail->start);
+          return format(R"(<ol start="{:d}">)"_cf, ol_detail->start);
         }
         return "<ol>";
       }
@@ -115,7 +115,7 @@ namespace Ludwig {
       case MD_BLOCK_CODE: {
         const auto* code_detail = (MD_BLOCK_CODE_DETAIL*)detail;
         if (code_detail->lang.size) {
-          return fmt::format(R"(<pre data-language="{}"><code>)", Escape{attr_to_text(code_detail->lang)});
+          return format(R"(<pre data-language="{}"><code>)"_cf, Escape{attr_to_text(code_detail->lang)});
         }
         return "<pre><code>";
       }
@@ -142,7 +142,7 @@ namespace Ludwig {
       case MD_BLOCK_P: return "</p>";
       case MD_BLOCK_QUOTE: return "</blockquote>";
       case MD_BLOCK_H:
-        return fmt::format("</h{:d}>", ((MD_BLOCK_H_DETAIL*)detail)->level);
+        return format("</h{:d}>"_cf, ((MD_BLOCK_H_DETAIL*)detail)->level);
       case MD_BLOCK_UL: return "</ul>";
       case MD_BLOCK_OL: return "</ol>";
       case MD_BLOCK_LI: return "</li>";
@@ -265,7 +265,7 @@ namespace Ludwig {
           size_t last_offset = 0;
           for (auto i = inlines_begin; i != inlines_end; ++i) {
             const auto match = *i;
-            fmt::format_to(back_inserter(st->text_buf), "{}", Escape{str.substr(last_offset, (size_t)match.position(0) - last_offset)});
+            format_to(back_inserter(st->text_buf), "{}"_cf, Escape{str.substr(last_offset, (size_t)match.position(0) - last_offset)});
             last_offset = (size_t)(match.position(0) + match.length(0));
             const auto builtin_emoji = shortcode_to_emoji.find(match.str(1));
             if (builtin_emoji != shortcode_to_emoji.end()) {
@@ -281,14 +281,14 @@ namespace Ludwig {
             }  else {
               st->types.push_back(match.str(3) == "/u/" || match.str(3) == "@" ? RichText::UserLink : RichText::BoardLink);
               st->chunks.push_back(st->fbb.CreateString(match.str(4)).Union());
-              fmt::format_to(back_inserter(st->text_buf), "{}{}</a>", Escape{match.str(3)}, Escape{match.str(4)});
+              format_to(back_inserter(st->text_buf), "{}{}</a>"_cf, Escape{match.str(3)}, Escape{match.str(4)});
             }
           }
-          fmt::format_to(back_inserter(st->text_buf), "{}", Escape{str.substr(last_offset)});
+          format_to(back_inserter(st->text_buf), "{}"_cf, Escape{str.substr(last_offset)});
           break;
         }
         case MD_TEXT_CODE:
-          fmt::format_to(back_inserter(st->text_buf), "{}", Escape{string_view{text, size}});
+          format_to(back_inserter(st->text_buf), "{}"_cf, Escape{string_view{text, size}});
           break;
         case MD_TEXT_ENTITY: // TODO: HTML entity parsing
         case MD_TEXT_NULLCHAR: st->text_buf += "�"; break;
@@ -323,7 +323,7 @@ namespace Ludwig {
     size_t last_offset = 0;
     for (auto i = emoji_begin; i != emoji_end; ++i) {
       const auto match = *i;
-      fmt::format_to(back_inserter(text_buf), "{}", Escape{text.substr(last_offset, (size_t)match.position(0) - last_offset)});
+      format_to(back_inserter(text_buf), "{}"_cf, Escape{text.substr(last_offset, (size_t)match.position(0) - last_offset)});
       last_offset = (size_t)(match.position(0) + match.length(0));
       const auto builtin_emoji = shortcode_to_emoji.find(match.str(1));
       if (builtin_emoji != shortcode_to_emoji.end()) {
@@ -338,7 +338,7 @@ namespace Ludwig {
       types.push_back(RichText::Emoji);
       chunks.push_back(fbb.CreateString(match[1].str()).Union());
     }
-    fmt::format_to(back_inserter(text_buf), "{}", Escape{text.substr(last_offset)});
+    format_to(back_inserter(text_buf), "{}"_cf, Escape{text.substr(last_offset)});
     if (!text_buf.empty()) {
       types.push_back(RichText::Text);
       chunks.push_back(fbb.CreateString(text_buf).Union());
@@ -362,24 +362,24 @@ namespace Ludwig {
           if (auto emoji = opts.lookup_emoji(values->GetAsString(i)->string_view())) {
             out += *emoji;
           } else {
-            fmt::format_to(back_inserter(out), ":{}:", Escape{values->GetAsString(i)});
+            format_to(back_inserter(out), ":{}:"_cf, Escape{values->GetAsString(i)});
           }
           break;
         case RichText::Link:
-          fmt::format_to(back_inserter(out), R"(<a href="{}" rel="noopener noreferrer{}"{}>)",
+          format_to(back_inserter(out), R"(<a href="{}" rel="noopener noreferrer{}"{}>)"_cf,
             Escape{values->GetAsString(i)},
             opts.links_nofollow ? " nofollow" : "",
             opts.open_links_in_new_tab ? R"( target="_blank")" : ""
           );
           break;
         case RichText::UserLink:
-          fmt::format_to(back_inserter(out), R"(<a href="/u/{}"{}>)",
+          format_to(back_inserter(out), R"(<a href="/u/{}"{}>)"_cf,
             Escape{values->GetAsString(i)},
             opts.open_links_in_new_tab ? R"( target="_blank")" : ""
           );
           break;
         case RichText::BoardLink:
-          fmt::format_to(back_inserter(out), R"(<a href="/b/{}"{}>)",
+          format_to(back_inserter(out), R"(<a href="/b/{}"{}>)"_cf,
             Escape{values->GetAsString(i)},
             opts.open_links_in_new_tab ? R"( target="_blank")" : ""
           );
@@ -387,13 +387,13 @@ namespace Ludwig {
         case RichText::Image: {
           const auto* img = values->GetAs<RichTextImage>(i);
           if (!opts.show_images) {
-            fmt::format_to(back_inserter(out), R"(<details><summary>Image{}{}</summary>)",
+            format_to(back_inserter(out), R"(<details><summary>Image{}{}</summary>)"_cf,
               img->alt() ? ": " : "", Escape{img->alt()}
             );
           }
-          fmt::format_to(back_inserter(out), R"(<img src="{}" loading="lazy")", Escape{img->src()});
+          format_to(back_inserter(out), R"(<img src="{}" loading="lazy")"_cf, Escape{img->src()});
           if (img->alt()) {
-            fmt::format_to(back_inserter(out), R"( alt="{0}" title="{0}")", Escape{img->alt()});
+            format_to(back_inserter(out), R"( alt="{0}" title="{0}")"_cf, Escape{img->alt()});
           }
           out += opts.show_images ? ">" : "></details>";
           break;
@@ -431,7 +431,7 @@ namespace Ludwig {
           break;
         }
         case RichText::Emoji:
-          fmt::format_to(back_inserter(out), ":{}:", values->GetAsString(i)->string_view());
+          format_to(back_inserter(out), ":{}:"_cf, values->GetAsString(i)->string_view());
           break;
         default:
           // Do nothing

@@ -201,11 +201,14 @@ namespace Ludwig {
            board().can_downvote() &&
            (board().instance() || site->downvotes_enabled);
   }
+  auto BoardDetail::should_show_votes(Login, const SiteDetail* site) const noexcept -> bool {
+    return site->votes_enabled && board().can_upvote();
+  }
   auto ThreadDetail::should_show_votes(Login, const SiteDetail* site) const noexcept -> bool {
-    return board().can_upvote() && (board().instance() || site->votes_enabled);
+    return site->votes_enabled && board().can_upvote();
   }
   auto CommentDetail::should_show_votes(Login, const SiteDetail* site) const noexcept -> bool {
-    return board().can_upvote() && (board().instance() || site->votes_enabled);
+    return site->votes_enabled && board().can_upvote();
   }
   auto UserDetail::can_change_settings(Login login) const noexcept -> bool {
     return maybe_local_user() && login && (login->local_user().admin() || login->id == id);

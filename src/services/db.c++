@@ -6,6 +6,9 @@
 #include <openssl/bio.h>
 #include <openssl/pem.h>
 #include <openssl/rand.h>
+#include "lmdb.h"
+#include "simdjson.h"
+#include "util/base64.h++"
 #include "util/lambda_macros.h++"
 
 using std::function, std::min, std::nullopt, std::runtime_error, std::optional,
@@ -85,10 +88,6 @@ namespace Ludwig {
     DBI_MAX
   };
 
-  static inline auto db_get(MDB_txn* txn, MDB_dbi dbi, MDB_val& k, MDB_val& v) -> int {
-    return mdb_get(txn, dbi, &k, &v);
-  }
-
   static inline auto db_get(MDB_txn* txn, MDB_dbi dbi, string_view k, MDB_val& v) -> int {
     MDB_val kval { k.length(), const_cast<char*>(k.data()) };
     return mdb_get(txn, dbi, &kval, &v);
@@ -96,11 +95,6 @@ namespace Ludwig {
 
   static inline auto db_get(MDB_txn* txn, MDB_dbi dbi, uint64_t k, MDB_val& v) -> int {
     MDB_val kval { sizeof(uint64_t), &k };
-    return mdb_get(txn, dbi, &kval, &v);
-  }
-
-  static inline auto db_get(MDB_txn* txn, MDB_dbi dbi, Cursor k, MDB_val& v) -> int {
-    MDB_val kval = k.val();
     return mdb_get(txn, dbi, &kval, &v);
   }
 
@@ -147,18 +141,6 @@ namespace Ludwig {
   static inline auto db_put(MDB_txn* txn, MDB_dbi dbi, uint64_t k, span<uint8_t> span, unsigned flags = 0) -> void {
     MDB_val kval{ sizeof(uint64_t), &k }, vval{ span.size(), span.data() };
     db_put(txn, dbi, kval, vval, flags);
-  }
-
-  static inline auto db_put(MDB_txn* txn, MDB_dbi dbi, Cursor k, MDB_val& v, unsigned flags = 0) -> void {
-    MDB_val kval = k.val();
-    db_put(txn, dbi, kval, v, flags);
-  }
-
-  static inline auto db_del(MDB_txn* txn, MDB_dbi dbi, Cursor k) -> void {
-    MDB_val kval = k.val();
-    if (auto err = mdb_del(txn, dbi, &kval, nullptr)) {
-      if (err != MDB_NOTFOUND) throw DBError("Delete failed", err);
-    }
   }
 
   static inline auto db_del(MDB_txn* txn, MDB_dbi dbi, uint64_t k) -> void {
@@ -465,6 +447,32 @@ namespace Ludwig {
       ++iter;
     }
     return n;
+  }
+
+  auto DB::debug_print_settings() -> void {
+    if (!spdlog::should_log(spdlog::level::debug)) return;
+    auto txn = open_read_txn();
+    MDB_cursor* cur;
+    MDB_val k, v;
+    int err = mdb_cursor_open(txn.txn, dbis[Settings], &cur);
+    if (err) return;
+    spdlog::debug("=== SETTINGS ===");
+    for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) {
+      string_view key{(const char*)k.mv_data, k.mv_size};
+      // don't log sensitive info
+      if (key == SettingsKey::jwt_secret || key == SettingsKey::private_key) {
+        continue;
+      }
+      if (v.mv_size == 8 && ((uint8_t*)v.mv_data)[7] == 0) {
+        spdlog::debug("{} = {:d}", key, *((uint64_t*)v.mv_data));
+      } else if (simdjson::validate_utf8(string{(char*)v.mv_data, v.mv_size})) {
+        spdlog::debug("{} = {}", key, string_view{(const char*)v.mv_data, v.mv_size});
+      } else {
+        spdlog::debug("{} = {}", key, Base64::encode(string{(const char*)v.mv_data, v.mv_size}));
+      }
+    }
+    spdlog::debug("=== END SETTINGS ===");
+    mdb_cursor_close(cur);
   }
 
   auto ReadTxn::get_setting_str(string_view key) -> string_view {

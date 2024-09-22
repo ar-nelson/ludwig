@@ -11,6 +11,7 @@ test_sources = [
   'integration/first_run_setup_test.c++',
   'integration/post_listings_test.c++',
   'integration/registration_test.c++',
+  'integration/user_settings_test.c++',
 ]
 
 if not get_option('buildtype').startswith('release')
@@ -37,4 +38,5 @@ if not get_option('buildtype').startswith('release')
   test('first_run', test_exe, args: '[first_run]', timeout: 120)
   test('post_listings', test_exe, args: '[post_listings]', timeout: 120)
   test('registration', test_exe, args: '[registration]', timeout: 120)
+  test('user_settings', test_exe, args: '[user_settings]', timeout: 120)
 endif
