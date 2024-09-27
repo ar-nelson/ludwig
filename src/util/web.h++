@@ -1,8 +1,6 @@
 #pragma once
 #include "util/common.h++"
-#include "util/json.h++"
 #include "models/db.h++"
-#include <variant>
 #include <uWebSockets/App.h>
 
 namespace Ludwig {
@@ -48,8 +46,7 @@ namespace Ludwig {
     }
   }
 
-  class ApiError : public std::runtime_error {
-  public:
+  struct ApiError : public std::runtime_error {
     uint16_t http_status;
     std::string message, internal_message;
     ApiError(std::string message, uint16_t http_status = 500, std::string internal_message = { nullptr, 0 })
@@ -157,337 +154,16 @@ namespace Ludwig {
     return id;
   }
 
-  template <bool SSL, typename M = std::monostate, typename E = std::monostate> class Router {
-  public:
-    using Middleware = std::function<M (uWS::HttpResponse<SSL>*, uWS::HttpRequest*)>;
-    using ErrorMiddleware = std::function<E (const uWS::HttpResponse<SSL>*, uWS::HttpRequest*)>;
-    using ErrorHandler = std::function<void (uWS::HttpResponse<SSL>*, const ApiError&, const E&)>;
-
-    using GetAsyncHandler = uWS::MoveOnlyFunction<void (
-      uWS::HttpResponse<SSL>*,
-      uWS::HttpRequest*,
-      std::unique_ptr<M>,
-      uWS::MoveOnlyFunction<void (uWS::MoveOnlyFunction<void ()>&&)>
-    )>;
-    template <typename T> using PostBodyHandler = uWS::MoveOnlyFunction<void (T, uWS::MoveOnlyFunction<void (uWS::MoveOnlyFunction<void (uWS::HttpResponse<SSL>*)>)>&&)>;
-    template <typename T> using PostHandler = uWS::MoveOnlyFunction<PostBodyHandler<T> (uWS::HttpRequest*, std::unique_ptr<M>)>;
-  private:
-    uWS::TemplatedApp<SSL>& app;
-
-    static auto default_error_handler(uWS::HttpResponse<SSL>* rsp, const ApiError& err, const E&) -> void {
-      rsp->writeStatus(http_status(err.http_status))
-        ->writeHeader("Content-Type", "text/plain; charset=utf-8")
-        ->end(fmt::format("Error {:d} - {}", err.http_status, err.message));
-    }
-
-    struct Impl {
-      Middleware middleware;
-      ErrorMiddleware error_middleware;
-      ErrorHandler error_handler;
-      std::unordered_map<std::string, std::set<std::string_view>> options_allow_by_pattern;
-      std::optional<std::string> access_control_allow_origin;
-
-      auto handle_error(
-        const ApiError& e,
-        uWS::HttpResponse<SSL>* rsp,
-        const E& meta,
-        std::string_view method,
-        std::string_view url
-      ) noexcept -> void {
-        if (e.http_status >= 500) {
-          spdlog::error("[{} {}] - {:d} {}", method, url, e.http_status, e.internal_message.empty() ? e.message : e.internal_message);
-        } else {
-          spdlog::info("[{} {}] - {:d} {}", method, url, e.http_status, e.internal_message.empty() ? e.message : e.internal_message);
-        }
-        if (rsp->getWriteOffset()) {
-          spdlog::critical("Route {} threw exception after starting to respond; response has been truncated. This is a bug.", url);
-          rsp->end();
-          return;
-        }
-        try {
-          error_handler(rsp, e, meta);
-        } catch (...) {
-          spdlog::critical("Route {} threw exception in error page callback; response has been truncated. This is a bug.", url);
-          rsp->end();
-        }
-      }
-
-      auto handle_error(
-        std::exception_ptr eptr,
-        uWS::HttpResponse<SSL>* rsp,
-        const E& meta,
-        std::string_view method,
-        std::string_view url
-      ) noexcept -> void {
-        try {
-          rethrow_exception(eptr);
-        } catch (const ApiError& e) {
-          handle_error(e, rsp, meta, method, url);
-        } catch (const std::exception& e) {
-          handle_error(ApiError("Unhandled internal exception", 500, e.what()), rsp, meta, method, url);
-        } catch (...) {
-          handle_error(
-            ApiError("Unhandled internal exception", 500, "Unhandled internal exception, no information available"),
-            rsp, meta, method, url
-          );
-        }
-      }
-    };
-
-    std::shared_ptr<Impl> impl;
-
-    auto register_route(const std::string& pattern, std::string_view method) -> void {
-      impl->options_allow_by_pattern.try_emplace({ pattern, {} }).first->second.insert(method);
-    }
-  public:
-    Router(
-      uWS::TemplatedApp<SSL>& app,
-      Middleware middleware,
-      ErrorMiddleware error_middleware,
-      ErrorHandler error_handler = default_error_handler
-    ) : app(app), impl(std::make_shared<Impl>(middleware, error_middleware, error_handler)) {}
-
-    Router(
-      uWS::TemplatedApp<SSL>& app,
-      Middleware middleware,
-      ErrorHandler error_handler = default_error_handler
-    ) requires std::same_as<E, std::monostate>
-      : Router(app, middleware, [](auto*, auto*){return std::monostate();}, error_handler) {}
-
-    Router(
-      uWS::TemplatedApp<SSL>& app,
-      ErrorHandler error_handler = default_error_handler
-    ) requires std::same_as<M, std::monostate> && std::same_as<E, std::monostate>
-      : Router(app, [](auto*, auto*){return std::monostate();}, [](auto*, auto*){return std::monostate();}, error_handler) {}
-
-    ~Router() {
-      // uWebSockets doesn't provide OPTIONS or CORS preflight handlers,
-      // so we have to add those manually, after all routes have been defined.
-      for (const auto [pattern, methods] : impl->options_allow_by_pattern) {
-        std::string allow = "OPTIONS";
-        for (const auto method : methods) fmt::format_to(std::back_inserter(allow), ", {}", method);
-        app.any(pattern, [=, origin = impl->access_control_allow_origin](auto* rsp, auto* req) {
-          if (req->getMethod() == "options") {
-            if (origin && !req->getHeader("origin").empty() && !req->getHeader("access-control-request-method").empty()) {
-              rsp->writeHeader("Allow", allow)
-                ->writeHeader("Access-Control-Allow-Origin", *origin)
-                ->writeHeader("Access-Control-Allow-Methods", allow)
-                ->writeHeader("Access-Control-Allow-Headers", "authorization,content-type")
-                ->writeHeader("Access-Control-Max-Age", "86400")
-                ->end();
-            } else {
-              rsp->writeStatus(http_status(204))
-                ->writeHeader("Allow", allow)
-                ->end();
-            }
-          } else {
-            spdlog::info("[{} {}] - 405 Method Not Found", req->getMethod(), req->getUrl());
-            rsp->writeStatus(http_status(405))->end();
-          }
-        });
-      }
-    }
-
-    Router &&access_control_allow_origin(std::string origin) {
-      impl->access_control_allow_origin = origin;
-      return std::move(*this);
-    }
-
-    Router &&get(std::string pattern, uWS::MoveOnlyFunction<void (uWS::HttpResponse<SSL>*, uWS::HttpRequest*, M&)> &&handler) {
-      app.get(pattern, [impl = impl, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
-        const auto url = req->getUrl();
-        try {
-          auto meta = impl->middleware(rsp, req);
-          handler(rsp, req, meta);
-          spdlog::debug("[GET {}] - {} {}", url, rsp->getRemoteAddressAsText(), req->getHeader("user-agent"));
-        } catch (...) {
-          impl->handle_error(std::current_exception(), rsp, impl->error_middleware(rsp, req), "GET", url);
-        }
-      });
-      register_route(pattern, "GET");
-      return std::move(*this);
-    }
-
-    Router &&any(std::string pattern, uWS::MoveOnlyFunction<void (uWS::HttpResponse<SSL>*, uWS::HttpRequest*, M&)> &&handler) {
-      app.any(pattern, [impl = impl, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
-        const auto url = req->getUrl();
-        try {
-          auto meta = impl->middleware(rsp, req);
-          handler(rsp, req, meta);
-          spdlog::debug("[{} {}] - {} {}", req->getMethod(), url, rsp->getRemoteAddressAsText(), req->getHeader("user-agent"));
-        } catch (...) {
-          impl->handle_error(std::current_exception(), rsp, impl->error_middleware(rsp, req), req->getMethod(), url);
-        }
-      });
-      return std::move(*this);
-    }
-
-    Router &&get_async(std::string pattern, GetAsyncHandler&& handler) {
-      using std::current_exception, std::make_shared, std::string;
-      app.get(pattern, [impl = impl, handler = std::move(handler)](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
-        auto abort_flag = make_shared<std::atomic<bool>>(false);
-        const string url(req->getUrl());
-        rsp->onAborted([abort_flag, url]{
-          *abort_flag = true;
-          spdlog::debug("[GET {}] - HTTP session aborted", url);
-        });
-        auto error_meta = make_shared<E>(impl->error_middleware(rsp, req));
-        try {
-          auto meta = std::make_unique<M>(impl->middleware(rsp, req));
-          handler(rsp, req, std::move(meta), [
-            impl = impl, loop = uWS::Loop::get(), rsp, url, error_meta, abort_flag
-          ](uWS::MoveOnlyFunction<void()>&& body) mutable {
-            if (*abort_flag) return;
-            loop->defer([impl = impl, body = std::move(body), rsp, url, error_meta, abort_flag] mutable {
-              if (*abort_flag) return;
-              rsp->cork([&]{
-                try { body(); }
-                catch (...) {
-                  if (*abort_flag) return;
-                  impl->handle_error(current_exception(), rsp, *error_meta, "GET", url);
-                }
-              });
-            });
-          });
-          spdlog::debug("[GET {}] - {} {}", url, rsp->getRemoteAddressAsText(), req->getHeader("user-agent"));
-        } catch (...) {
-          impl->handle_error(current_exception(), rsp, *error_meta, "GET", url);
-        }
-      });
-      register_route(pattern, "GET");
-      return std::move(*this);
-    }
-
-    template <typename T> auto post_handler(
-      PostHandler<T>&& handler,
-      std::string_view method,
-      size_t max_size,
-      std::optional<std::string_view> expected_content_type,
-      std::string body_prefix,
-      uWS::MoveOnlyFunction<T (std::string&&)>&& parse_body
-    ) {
-      using std::current_exception, std::make_shared, std::string;
-      return [
-        impl = impl, max_size, expected_content_type, body_prefix, method,
-        handler = std::move(handler),
-        parse_body = std::move(parse_body)
-      ](uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req) mutable {
-        auto abort_flag = make_shared<std::atomic<bool>>(false);
-        const string url(req->getUrl());
-        const auto error_meta = make_shared<E>(impl->error_middleware(rsp, req));
-        rsp->onAborted([method, abort_flag, url]{
-          *abort_flag = true;
-          spdlog::debug("[{} {}] - HTTP session aborted", method, url);
-        });
-        const string user_agent(req->getHeader("user-agent"));
-        try {
-          if (expected_content_type) {
-            const auto content_type = req->getHeader("content-type");
-            if (content_type.data() && !content_type.starts_with(*expected_content_type)) {
-              throw ApiError(fmt::format("Wrong request Content-Type (expected {})", *expected_content_type), 415);
-            }
-          }
-          rsp->onData([=,
-            loop = uWS::Loop::get(),
-            &parse_body,
-            body_handler = handler(req, std::make_unique<M>(impl->middleware(rsp, req))),
-            in_buffer = body_prefix
-          ](auto data, bool last) mutable {
-            in_buffer.append(data);
-            try {
-              if (in_buffer.length() > max_size) throw ApiError("Request body is too large", 413);
-              if (!last) return;
-              rsp->cork([&]{
-                try {
-                  body_handler(
-                    parse_body(std::move(in_buffer)),
-                    [abort_flag, loop, rsp](uWS::MoveOnlyFunction<void (uWS::HttpResponse<SSL>*)>&& f) {
-                      if (*abort_flag) throw std::runtime_error("HTTP session aborted");
-                      loop->defer([abort_flag, rsp, f = std::move(f)] mutable {
-                        if (*abort_flag) return;
-                        rsp->cork([rsp, f = std::move(f)] mutable { f(rsp); });
-                      });
-                    }
-                  );
-                  spdlog::debug("[{} {}] - {} {}", method, url, rsp->getRemoteAddressAsText(), user_agent);
-                } catch (...) {
-                  *abort_flag = true;
-                  impl->handle_error(current_exception(), rsp, *error_meta, method, url);
-                }
-              });
-            } catch (...) {
-              rsp->cork([&]{ impl->handle_error(current_exception(), rsp, *error_meta, method, url); });
-            }
-          });
-        } catch (...) {
-          impl->handle_error(current_exception(), rsp, *error_meta, method, url);
-          return;
-        }
-      };
-    }
-
-    Router &&post(std::string pattern, PostHandler<std::string>&& handler, size_t max_size = 10 * MiB) {
-      app.post(pattern, post_handler<std::string>(std::move(handler), "POST", max_size, {}, "", [](auto&& s){return s;}));
-      register_route(pattern, "POST");
-      return std::move(*this);
-    }
-
-    Router &&put(std::string pattern, PostHandler<std::string>&& handler, size_t max_size = 10 * MiB) {
-      app.put(pattern, post_handler<std::string>(std::move(handler), "PUT", max_size, {}, "", [](auto&& s){return s;}));
-      register_route(pattern, "PUT");
-      return std::move(*this);
-    }
-
-    Router &&post_form(std::string pattern, PostHandler<QueryString<std::string>>&& handler, size_t max_size = 10 * MiB) {
-      app.post(pattern, post_handler<QueryString<std::string>>(std::move(handler), "POST", max_size, TYPE_FORM, "?", [](auto&& s){
-        if (!simdjson::validate_utf8(s)) throw ApiError("POST body is not valid UTF-8", 415);
-        return QueryString<std::string>(s);
-      }));
-      register_route(pattern, "POST");
-      return std::move(*this);
-    }
-
-    template <class T> Router &&post_json(
-      std::string pattern,
-      std::shared_ptr<simdjson::ondemand::parser> parser,
-      PostHandler<T>&& handler,
-      size_t max_size = 10 * MiB
-    ) {
-      app.post(pattern, post_handler<T>(std::move(handler), "POST", max_size, "application/json", "", [parser](auto&& s) -> T {
-        try {
-          pad_json_string(s);
-          return JsonSerialize<T>::from_json(parser->iterate(s).value());
-        } catch (const simdjson::simdjson_error& e) {
-          throw ApiError(fmt::format("JSON does not match type ({})", simdjson::error_message(e.error())), 422);
-        }
-      }));
-      register_route(pattern, "POST");
-      return std::move(*this);
-    }
-
-    template <class T> Router &&put_json(
-      std::string pattern,
-      std::shared_ptr<simdjson::ondemand::parser> parser,
-      PostHandler<T>&& handler,
-      size_t max_size = 10 * MiB
-    ) {
-      app.put(pattern, post_handler<T>(std::move(handler), "PUT", max_size, "application/json", "", [parser](auto&& s) -> T {
-        try {
-          pad_json_string(s);
-          return JsonSerialize<T>::from_json(parser->iterate(s).value());
-        } catch (const simdjson::simdjson_error& e) {
-          throw ApiError(fmt::format("JSON does not match type ({})", simdjson::error_message(e.error())), 422);
-        }
-      }));
-      register_route(pattern, "PUT");
-      return std::move(*this);
-    }
-  };
-
   struct Escape {
     std::string_view str;
     Escape(std::string_view str) : str(str) {}
     Escape(const flatbuffers::String* fbs) : str(fbs ? fbs->string_view() : "") {}
+  };
+  struct Suffixed {
+    int64_t n;
+  };
+  struct RelativeTime {
+    Timestamp t;
   };
 }
 
@@ -511,6 +187,65 @@ namespace fmt {
         }
       }
       return std::copy(e.str.begin() + start, e.str.end(), ctx.out());
+    }
+  };
+
+  template <> struct formatter<Ludwig::Suffixed> : public Ludwig::CustomFormatter {
+    // Adapted from https://programming.guide/java/formatting-byte-size-to-human-readable-format.html
+    template <typename FormatContext>
+    auto format(Ludwig::Suffixed x, FormatContext &ctx) const {
+      static constexpr auto SUFFIXES = "KMBTqQ";
+      auto n = x.n;
+      if (-1000 < n && n < 1000)
+        return format_to(ctx.out(), "{:d}"_cf, n);
+      uint8_t i = 0;
+      while (n <= -999'950 || n >= 999'950) {
+        n /= 1000;
+        i++;
+      }
+      return format_to(ctx.out(), "{:.3g}{:c}"_cf, (double)n / 1000.0, SUFFIXES[i]);
+      // SUFFIXES[i] can never overflow, max 64-bit int is ~18 quintillion (Q)
+    }
+  };
+
+  template <> struct formatter<Ludwig::RelativeTime> : public Ludwig::CustomFormatter {
+    template <typename FormatContext>
+    static auto write(FormatContext &ctx, const char s[]) {
+      return std::copy(s, s + std::char_traits<char>::length(s), ctx.out());
+    }
+
+    template <typename FormatContext>
+    auto format(Ludwig::RelativeTime x, FormatContext &ctx) const {
+      using namespace std::chrono;
+      const auto now = Ludwig::now_t();
+      if (x.t > now)
+        return write(ctx, "in the future");
+      const auto diff = now - x.t;
+      if (diff < 1min)
+        return write(ctx, "just now");
+      if (diff < 2min)
+        return write(ctx, "1 minute ago");
+      if (diff < 1h)
+        return format_to(ctx.out(), "{:d} minutes ago"_cf, duration_cast<minutes>(diff).count());
+      if (diff < 2h)
+        return write(ctx, "1 hour ago");
+      if (diff < days{1})
+        return format_to(ctx.out(), "{:d} hours ago"_cf, duration_cast<hours>(diff).count());
+      if (diff < days{2})
+        return write(ctx, "1 day ago");
+      if (diff < weeks{1})
+        return format_to(ctx.out(), "{:d} days ago"_cf, duration_cast<days>(diff).count());
+      if (diff < weeks{2})
+        return write(ctx, "1 week ago");
+      if (diff < months{1})
+        return format_to(ctx.out(), "{:d} weeks ago"_cf, duration_cast<weeks>(diff).count());
+      if (diff < months{2})
+        return write(ctx, "1 month ago");
+      if (diff < years{1})
+        return format_to(ctx.out(), "{:d} months ago"_cf, duration_cast<months>(diff).count());
+      if (diff < years{2})
+        return write(ctx, "1 year ago");
+      return format_to(ctx.out(), "{:d} years ago"_cf, duration_cast<years>(diff).count());
     }
   };
 }

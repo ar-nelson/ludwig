@@ -1,7 +1,8 @@
 #include "zstd_db_dump.h++"
+#include <atomic>
 #include <zstd.h>
 
-using std::copy, std::make_unique, std::runtime_error, std::string_view, std::unique_ptr;
+using std::copy, std::make_unique, std::runtime_error, std::shared_ptr, std::span, std::string_view, std::unique_ptr;
 
 namespace Ludwig {
   auto zstd_db_dump_import(
@@ -49,32 +50,30 @@ namespace Ludwig {
     }, search, map_size_mb);
   }
 
-  auto zstd_db_dump_export(ReadTxn& txn, uWS::MoveOnlyFunction<void (std::unique_ptr<uint8_t[]>&&, size_t)>&& callback) -> void {
+  auto zstd_db_dump_export(ReadTxn& txn) -> std::generator<span<uint8_t>> {
     unique_ptr<ZSTD_CCtx, void(*)(ZSTD_CCtx*)> cctx(ZSTD_createCCtx(), [](auto* c) { ZSTD_freeCCtx(c); });
     if (cctx == nullptr) throw runtime_error("zstd init failed");
     const size_t in_buf_size = ZSTD_CStreamInSize(), out_buf_size = ZSTD_CStreamOutSize();
     auto in_buf = make_unique<uint8_t[]>(in_buf_size), out_buf = make_unique<uint8_t[]>(out_buf_size);
     size_t in_pos = 0;
-    txn.dump([&](auto& span, bool last_chunk){
+    for (auto span : txn.dump()) {
       assert(span.size() <= in_buf_size);
-      if (in_pos + span.size() <= in_buf_size) {
-        copy(span.begin(), span.end(), in_buf.get() + in_pos);
-        in_pos += span.size();
-        if (!last_chunk) return;
+      if (in_pos + span.size() > in_buf_size) {
+        ZSTD_inBuffer input = { in_buf.get(), in_pos, 0 };
+        do {
+          ZSTD_outBuffer output = { out_buf.get(), out_buf_size, 0 };
+          ZSTD_compressStream2(cctx.get(), &output, &input, ZSTD_e_continue);
+          co_yield std::span{out_buf.get(), output.pos};
+        } while (input.pos < input.size);
+        in_pos = 0;
       }
-      ZSTD_inBuffer input = { in_buf.get(), in_pos, 0 };
-      bool finished;
-      do {
-        ZSTD_outBuffer output = { out_buf.get(), out_buf_size, 0 };
-        const auto remaining = ZSTD_compressStream2(cctx.get(), &output, &input, last_chunk ? ZSTD_e_end : ZSTD_e_continue);
-        callback(std::move(out_buf), output.pos);
-        out_buf.reset(new uint8_t[out_buf_size]);
-        finished = last_chunk ? (remaining == 0) : (input.pos == input.size);
-      } while (!finished);
-      if (!last_chunk) {
-        copy(span.begin(), span.end(), in_buf.get());
-        in_pos = span.size();
-      }
-    });
+      copy(span.begin(), span.end(), in_buf.get() + in_pos);
+      in_pos += span.size();
+    }
+    ZSTD_inBuffer input = { in_buf.get(), in_pos, 0 };
+    ZSTD_outBuffer output = { out_buf.get(), out_buf_size, 0 };
+    const auto remaining = ZSTD_compressStream2(cctx.get(), &output, &input, ZSTD_e_end);
+    co_yield span{out_buf.get(), output.pos};
+    assert(remaining == 0);
   }
 }

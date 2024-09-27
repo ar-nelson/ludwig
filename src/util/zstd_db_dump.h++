@@ -10,8 +10,5 @@ namespace Ludwig {
     size_t map_size_mb = 1024
   ) -> DB;
 
-  auto zstd_db_dump_export(
-    ReadTxn& txn,
-    uWS::MoveOnlyFunction<void (std::unique_ptr<uint8_t[]>&&, size_t)>&& callback
-  ) -> void;
+  auto zstd_db_dump_export(ReadTxn& txn) -> std::generator<std::span<uint8_t>>;
 }

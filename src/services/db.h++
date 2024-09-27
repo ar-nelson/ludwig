@@ -5,6 +5,7 @@
 #include "services/search_engine.h++"
 #include "models/db.h++"
 #include <atomic>
+#include <__generator.hpp>
 #include <openssl/evp.h>
 
 namespace Ludwig {
@@ -218,7 +219,7 @@ namespace Ludwig {
 
     // TODO: DMs, Blocks, Admins/Mods, Mod Actions
 
-    auto dump(uWS::MoveOnlyFunction<void (const flatbuffers::span<uint8_t>&, bool)> on_data) -> void;
+    auto dump() -> std::generator<flatbuffers::span<uint8_t>>;
 
     friend class ReadTxnImpl;
   };

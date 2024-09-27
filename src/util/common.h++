@@ -7,7 +7,6 @@
 #include <limits>
 #include <optional>
 #include <regex>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <glib.h>
@@ -213,5 +212,9 @@ namespace Ludwig {
   struct Defer {
     uWS::MoveOnlyFunction<void ()> fn;
     ~Defer() { fn(); }
+  };
+
+  struct Cancelable {
+    virtual void cancel() noexcept {};
   };
 }

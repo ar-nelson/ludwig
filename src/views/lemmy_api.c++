@@ -1,20 +1,42 @@
 #include "lemmy_api.h++"
+#include "util/rate_limiter.h++"
 #include "util/web.h++"
+#include "util/router.h++"
 #include <flatbuffers/minireflect.h>
 
 using std::make_shared, std::nullopt, std::optional, std::shared_ptr, std::string,
     std::string_view;
 
 namespace Ludwig::Lemmy {
-  struct Meta {
+  template <bool SSL>
+  struct Context : public RequestContext<SSL, std::shared_ptr<KeyedRateLimiter>> {
     optional<SecretString> auth;
-    string ip, user_agent;
-  };
+    string ip;
 
-  static inline auto header_or_query_auth(QueryString<uWS::HttpRequest*>& q, Meta& m) -> optional<SecretString> {
-    if (m.auth) return std::move(m.auth);
-    return q.optional_string("auth").transform([](auto s){return SecretString(s);});
-  }
+    void pre_request(uWS::HttpResponse<SSL>* rsp, uWS::HttpRequest* req, std::shared_ptr<KeyedRateLimiter> rate_limiter) override {
+      ip = get_ip(rsp, req);
+      if (rate_limiter && !rate_limiter->try_acquire(ip, this->method == "get" ? 1 : 10)) {
+        throw ApiError("Rate limited, try again later", 429);
+      }
+      const auto auth_header = req->getHeader("authorization");
+      auth = auth_header.starts_with("Bearer ") ? optional(SecretString(auth_header.substr(7))) : nullopt;
+    }
+
+    void error_response(const ApiError& err, uWS::HttpResponse<SSL>* rsp) noexcept override {
+      string s;
+      Error e { err.message, err.http_status };
+      JsonSerialize<Error>::to_json(e, s);
+      rsp->writeStatus(http_status(err.http_status))
+        ->writeHeader("Content-Type", "application/json; charset=utf-8")
+        ->writeHeader("Access-Control-Allow-Origin", "*")
+        ->end(s);
+    }
+
+    auto header_or_query_auth(QueryString<uWS::HttpRequest*>& q) -> optional<SecretString> {
+      if (auth) return std::move(auth);
+      return q.optional_string("auth").transform([](auto s){return SecretString(s);});
+    }
+  };
 
   template <bool SSL>
   static inline auto write_no_content(uWS::HttpResponse<SSL>* rsp) {
@@ -32,32 +54,34 @@ namespace Ludwig::Lemmy {
       ->end(s);
   }
 
-  template <class In, class Out> using PostRetHandler = std::function<Out (In, Meta&)>;
+  template <class Fn, bool SSL, class In, class Out>
+  concept PostRetHandler = requires (Fn&& fn, In in, Context<SSL>& ctx) {
+    std::invocable<Fn, In, Context<SSL>&>;
+    { fn(in, ctx) } -> std::same_as<Out>;
+  };
 
   template <bool SSL, class In, class Out>
   struct JsonRequestBuilder {
-    Router<SSL, Meta>& router;
+    Router<SSL, Context<SSL>, std::shared_ptr<KeyedRateLimiter>>& router;
     string pattern;
     shared_ptr<simdjson::ondemand::parser> parser;
     size_t max_size = 10 * MiB;
 
-    auto post(PostRetHandler<In&, Out> handler) -> void {
-      router.template post_json<In>(pattern, parser, [handler](auto*, auto m) {
-        return [handler, m=std::move(m)](In in, auto&& write) mutable {
-          write([out=handler(in, *m)](auto* rsp) mutable {
-            write_json<SSL, Out>(rsp, std::move(out));
-          });
-        };
+    template <PostRetHandler<SSL, In&, Out> Fn>
+    auto post(Fn handler) -> void {
+      router.template post_json<In>(pattern, parser, [handler = std::move(handler)](auto* rsp, auto c, auto body) -> RouterCoroutine<Context<SSL>> {
+        auto& ctx = co_await c;
+        auto form = co_await body;
+        write_json<SSL, Out>(rsp, handler(form, ctx));
       }, max_size);
     }
 
-    auto put(PostRetHandler<In&, Out> handler) -> void {
-      router.template put_json<In>(pattern, parser, [handler](auto*, auto m) {
-        return [handler, m=std::move(m)](In in, auto&& write) mutable {
-          write([out=handler(in, *m)](auto* rsp) mutable {
-            write_json<SSL, Out>(rsp, std::move(out));
-          });
-        };
+    template <PostRetHandler<SSL, In&, Out> Fn>
+    auto put(Fn handler) -> void {
+      router.template put_json<In>(pattern, parser, [handler = std::move(handler)](auto* rsp, auto c, auto body) -> RouterCoroutine<Context<SSL>> {
+        auto& ctx = co_await c;
+        auto form = co_await body;
+        write_json<SSL, Out>(rsp, handler(form, ctx));
       }, max_size);
     }
   };
@@ -69,44 +93,23 @@ namespace Ludwig::Lemmy {
     shared_ptr<ApiController> controller,
     shared_ptr<KeyedRateLimiter> rate_limiter
   ) -> void {
+    using Coro = RouterCoroutine<Context<SSL>>;
     auto parser = make_shared<simdjson::ondemand::parser>();
-    Router<SSL, Meta> router(app,
-      [rate_limiter](auto* rsp, auto* req) -> Meta {
-        const string ip(get_ip(rsp, req));
-        if (rate_limiter && !rate_limiter->try_acquire(ip, req->getMethod() == "GET" ? 1 : 10)) {
-          throw ApiError("Rate limited, try again later", 429);
-        }
-        const auto auth = req->getHeader("authorization");
-        return {
-          .auth = auth.starts_with("Bearer ") ? optional(SecretString(auth.substr(7))) : nullopt,
-          .ip = ip,
-          .user_agent = string(req->getHeader("user-agent"))
-        };
-      },
-      [parser](auto* rsp, const ApiError& err, auto&) -> void {
-        string s;
-        Error e { err.message, err.http_status };
-        JsonSerialize<Error>::to_json(e, s);
-        rsp->writeStatus(http_status(err.http_status))
-          ->writeHeader("Content-Type", "application/json; charset=utf-8")
-          ->writeHeader("Access-Control-Allow-Origin", "*")
-          ->end(s);
-      }
-    );
+    Router<SSL, Context<SSL>, std::shared_ptr<KeyedRateLimiter>> router(app, rate_limiter);
     router.access_control_allow_origin("*");
 
     // Site
     ///////////////////////////////////////////////////////
 
-    router.get("/api/v3/site", [controller, parser](auto* rsp, auto* req, auto& m) {
+    router.get("/api/v3/site", [controller, parser](auto* rsp, auto* req, auto& ctx) {
       QueryString q(req);
-      write_json<SSL>(rsp, controller->get_site(header_or_query_auth(q, m)));
+      write_json<SSL>(rsp, controller->get_site(ctx.header_or_query_auth(q)));
     });
-    JSON_ROUTE("/api/v3/site", CreateSite, SiteResponse).post([controller](auto& form, auto& m) {
-      return controller->create_site(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/site", CreateSite, SiteResponse).post([controller](auto& form, auto& ctx) {
+      return controller->create_site(form, std::move(ctx.auth));
     });
-    JSON_ROUTE("/api/v3/site", EditSite, SiteResponse).put([controller](auto& form, auto& m) {
-      return controller->edit_site(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/site", EditSite, SiteResponse).put([controller](auto& form, auto& ctx) {
+      return controller->edit_site(form, std::move(ctx.auth));
     });
     // TODO: /api/v3/site/block
 
@@ -121,35 +124,35 @@ namespace Ludwig::Lemmy {
     // Community
     ///////////////////////////////////////////////////////
 
-    router.get("/api/v3/community", [controller, parser](auto* rsp, auto* req, auto& m) {
+    router.get("/api/v3/community", [controller, parser](auto* rsp, auto* req, auto& ctx) {
       QueryString q(req);
       write_json<SSL>(rsp, controller->get_community(
         {.id=q.optional_uint("id").value_or(0),.name=q.optional_string("name").value_or("")},
-        header_or_query_auth(q, m))
+        ctx.header_or_query_auth(q))
       );
     });
-    JSON_ROUTE("/api/v3/community", CreateCommunity, CommunityResponse).post([controller](auto& form, auto& m) {
-      return controller->create_community(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/community", CreateCommunity, CommunityResponse).post([controller](auto&& form, auto& ctx) {
+      return controller->create_community(form, std::move(ctx.auth));
     });
-    JSON_ROUTE("/api/v3/community", EditCommunity, CommunityResponse).put([controller](auto& form, auto& m) {
-      return controller->edit_community(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/community", EditCommunity, CommunityResponse).put([controller](auto&& form, auto& ctx) {
+      return controller->edit_community(form, std::move(ctx.auth));
     });
     // TODO: /api/v3/community/hide
-    router.get("/api/v3/community/list", [controller, parser](auto* rsp, auto* req, auto& m) {
+    router.get("/api/v3/community/list", [controller, parser](auto* rsp, auto* req, auto& ctx) {
       QueryString q(req);
       write_json<SSL>(rsp, controller->list_communities({
         .sort = parse_board_sort_type(q.string("sort")),
         .limit = (uint16_t)q.optional_uint("limit").value_or(0),
         .page = (uint16_t)q.optional_uint("page").value_or(1),
         .show_nsfw = q.optional_bool("show_nsfw")
-      }, header_or_query_auth(q, m)));
+      }, ctx.header_or_query_auth(q)));
     });
-    JSON_ROUTE("/api/v3/community/follow", FollowCommunity, CommunityResponse).post([controller](auto& form, auto& m) {
-      return controller->follow_community(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/community/follow", FollowCommunity, CommunityResponse).post([controller](auto&& form, auto& ctx) {
+      return controller->follow_community(form, std::move(ctx.auth));
     });
     // TODO: /api/v3/community/block
-    JSON_ROUTE("/api/v3/community/delete", DeleteCommunity, CommunityResponse).post([controller](auto& form, auto& m) {
-      return controller->delete_community(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/community/delete", DeleteCommunity, CommunityResponse).post([controller](auto&& form, auto& ctx) {
+      return controller->delete_community(form, std::move(ctx.auth));
     });
     // TODO: /api/v3/community/remove
     // TODO: /api/v3/community/transfer
@@ -159,20 +162,20 @@ namespace Ludwig::Lemmy {
     // Post
     ///////////////////////////////////////////////////////
 
-    router.get("/api/v3/post", [controller, parser](auto* rsp, auto* req, auto& m) {
+    router.get("/api/v3/post", [controller, parser](auto* rsp, auto* req, auto& ctx) {
       QueryString q(req);
       write_json<SSL>(rsp, controller->get_post({
         .id = q.optional_uint("id").value_or(0),
         .comment_id = q.optional_uint("comment_id").value_or(0)
-      }, header_or_query_auth(q, m)));
+      }, ctx.header_or_query_auth(q)));
     });
-    JSON_ROUTE("/api/v3/post", CreatePost, PostResponse).post([controller](auto& form, auto& m) {
-      return controller->create_post(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/post", CreatePost, PostResponse).post([controller](auto& form, auto& ctx) {
+      return controller->create_post(form, std::move(ctx.auth));
     });
-    JSON_ROUTE("/api/v3/post", EditPost, PostResponse).put([controller](auto& form, auto& m) {
-      return controller->edit_post(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/post", EditPost, PostResponse).put([controller](auto& form, auto& ctx) {
+      return controller->edit_post(form, std::move(ctx.auth));
     });
-    router.get("/api/v3/post/list", [controller, parser](auto* rsp, auto* req, auto& m) {
+    router.get("/api/v3/post/list", [controller, parser](auto* rsp, auto* req, auto& ctx) {
       QueryString q(req);
       write_json<SSL>(rsp, controller->get_posts({
         .type = q.optional_string("type").or_else([&](){return q.optional_string("type_");}).transform(parse_listing_type),
@@ -185,22 +188,22 @@ namespace Ludwig::Lemmy {
         .saved_only = q.optional_bool("saved_only"),
         .liked_only = q.optional_bool("liked_only"),
         .disliked_only = q.optional_bool("disliked_only"),
-      }, header_or_query_auth(q, m)));
+      }, ctx.header_or_query_auth(q)));
     });
-    JSON_ROUTE("/api/v3/post/delete", DeletePost, PostResponse).post([controller](auto& form, auto& m) {
-      return controller->delete_post(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/post/delete", DeletePost, PostResponse).post([controller](auto& form, auto& ctx) {
+      return controller->delete_post(form, std::move(ctx.auth));
     });
     // TODO: /api/v3/post/remove
-    JSON_ROUTE("/api/v3/post/mark_as_read", MarkPostAsRead, PostResponse).post([controller](auto& form, auto& m) {
-      return controller->mark_post_as_read(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/post/mark_as_read", MarkPostAsRead, PostResponse).post([controller](auto& form, auto& ctx) {
+      return controller->mark_post_as_read(form, std::move(ctx.auth));
     });
     // TODO: /api/v3/post/lock
     // TODO: /api/v3/post/feature
-    JSON_ROUTE("/api/v3/post/like", CreatePostLike, PostResponse).post([controller](auto& form, auto& m) {
-      return controller->like_post(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/post/like", CreatePostLike, PostResponse).post([controller](auto& form, auto& ctx) {
+      return controller->like_post(form, std::move(ctx.auth));
     });
-    JSON_ROUTE("/api/v3/post/save", SavePost, PostResponse).put([controller](auto& form, auto& m) {
-      return controller->save_post(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/post/save", SavePost, PostResponse).put([controller](auto& form, auto& ctx) {
+      return controller->save_post(form, std::move(ctx.auth));
     });
     // TODO: /api/v3/post/report
     // TODO: /api/v3/post/report/resolve
@@ -210,17 +213,17 @@ namespace Ludwig::Lemmy {
     // Comment
     ///////////////////////////////////////////////////////
 
-    router.get("/api/v3/comment", [controller, parser](auto* rsp, auto* req, auto& m) {
+    router.get("/api/v3/comment", [controller, parser](auto* rsp, auto* req, auto& ctx) {
       QueryString q(req);
-      write_json<SSL>(rsp, controller->get_comment({.id=q.required_hex_id("id")}, header_or_query_auth(q, m)));
+      write_json<SSL>(rsp, controller->get_comment({.id=q.required_hex_id("id")}, ctx.header_or_query_auth(q)));
     });
-    JSON_ROUTE("/api/v3/comment", CreateComment, CommentResponse).post([controller](auto& form, auto& m) {
-      return controller->create_comment(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/comment", CreateComment, CommentResponse).post([controller](auto& form, auto& ctx) {
+      return controller->create_comment(form, std::move(ctx.auth));
     });
-    JSON_ROUTE("/api/v3/comment", EditComment, CommentResponse).put([controller](auto& form, auto& m) {
-      return controller->edit_comment(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/comment", EditComment, CommentResponse).put([controller](auto& form, auto& ctx) {
+      return controller->edit_comment(form, std::move(ctx.auth));
     });
-    router.get("/api/v3/comment/list", [controller, parser](auto* rsp, auto* req, auto& m) {
+    router.get("/api/v3/comment/list", [controller, parser](auto* rsp, auto* req, auto& ctx) {
       QueryString q(req);
       write_json<SSL>(rsp, controller->get_comments({
         .type = q.optional_string("type").or_else([&](){return q.optional_string("type_");}).transform(parse_listing_type),
@@ -235,21 +238,21 @@ namespace Ludwig::Lemmy {
         .saved_only = q.optional_bool("saved_only"),
         .liked_only = q.optional_bool("liked_only"),
         .disliked_only = q.optional_bool("disliked_only"),
-      }, header_or_query_auth(q, m)));
+      }, ctx.header_or_query_auth(q)));
     });
-    JSON_ROUTE("/api/v3/comment/delete", DeleteComment, CommentResponse).post([controller](auto& form, auto& m) {
-      return controller->delete_comment(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/comment/delete", DeleteComment, CommentResponse).post([controller](auto& form, auto& ctx) {
+      return controller->delete_comment(form, std::move(ctx.auth));
     });
     // TODO: /api/v3/comment/remove
-    JSON_ROUTE("/api/v3/comment/mark_as_read", MarkCommentReplyAsRead, CommentReplyResponse).post([controller](auto& form, auto& m) {
-      return controller->mark_comment_reply_as_read(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/comment/mark_as_read", MarkCommentReplyAsRead, CommentReplyResponse).post([controller](auto& form, auto& ctx) {
+      return controller->mark_comment_reply_as_read(form, std::move(ctx.auth));
     });
     // TODO: /api/v3/comment/distinguish
-    JSON_ROUTE("/api/v3/comment/like", CreateCommentLike, CommentResponse).post([controller](auto& form, auto& m) {
-      return controller->like_comment(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/comment/like", CreateCommentLike, CommentResponse).post([controller](auto& form, auto& ctx) {
+      return controller->like_comment(form, std::move(ctx.auth));
     });
-    JSON_ROUTE("/api/v3/comment/save", SaveComment, CommentResponse).put([controller](auto& form, auto& m) {
-      return controller->save_comment(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/comment/save", SaveComment, CommentResponse).put([controller](auto& form, auto& ctx) {
+      return controller->save_comment(form, std::move(ctx.auth));
     });
     // TODO: /api/v3/comment/report
     // TODO: /api/v3/comment/report/resolve
@@ -263,7 +266,7 @@ namespace Ludwig::Lemmy {
     // User
     ///////////////////////////////////////////////////////
 
-    router.get("/api/v3/user", [controller, parser](auto* rsp, auto* req, auto& m) {
+    router.get("/api/v3/user", [controller, parser](auto* rsp, auto* req, auto& ctx) {
       QueryString q(req);
       write_json<SSL>(rsp, controller->get_person_details({
         .username = q.optional_string("username").value_or(""),
@@ -273,15 +276,15 @@ namespace Ludwig::Lemmy {
         .page = (uint16_t)q.optional_uint("page").value_or(1),
         .sort = parse_user_post_sort_type(q.string("sort")),
         .saved_only = q.optional_bool("saved_only")
-      }, header_or_query_auth(q, m)));
+      }, ctx.header_or_query_auth(q)));
     });
-    JSON_ROUTE("/api/v3/user/register", Register, LoginResponse).post([controller](auto& form, auto& m) {
-      return controller->register_account(form, m.ip, m.user_agent);
+    JSON_ROUTE("/api/v3/user/register", Register, LoginResponse).post([controller](auto& form, auto& ctx) {
+      return controller->register_account(form, ctx.ip, ctx.user_agent);
     });
     // TODO: /api/v3/user/get_captcha
-    router.get("/api/v3/user/mentions", [controller, parser](auto* rsp, auto* req, auto& m) {
+    router.get("/api/v3/user/mentions", [controller, parser](auto* rsp, auto* req, auto& ctx) {
       QueryString q(req);
-      auto auth = header_or_query_auth(q, m);
+      auto auth = ctx.header_or_query_auth(q);
       if (!auth) throw ApiError("Auth required", 401);
       write_json<SSL>(rsp,controller->get_person_mentions({
         .sort = parse_user_post_sort_type(q.optional_string("sort").value_or("")),
@@ -290,12 +293,12 @@ namespace Ludwig::Lemmy {
         .unread_only = q.optional_bool("unread_only")
       }, std::move(*auth)));
     });
-    JSON_ROUTE("/api/v3/user/mention/mark_as_read", MarkPersonMentionAsRead, PersonMentionResponse).post([controller](auto& form, auto& m) {
-      return controller->mark_person_mentions_as_read(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/user/mention/mark_as_read", MarkPersonMentionAsRead, PersonMentionResponse).post([controller](auto& form, auto& ctx) {
+      return controller->mark_person_mentions_as_read(form, std::move(ctx.auth));
     });
-    router.get("/api/v3/user/replies", [controller, parser](auto* rsp, auto* req, auto& m) {
+    router.get("/api/v3/user/replies", [controller, parser](auto* rsp, auto* req, auto& ctx) {
       QueryString q(req);
-      auto auth = header_or_query_auth(q, m);
+      auto auth = ctx.header_or_query_auth(q);
       if (!auth) throw ApiError("Auth required", 401);
       write_json<SSL>(rsp, controller->get_replies({
         .sort = parse_user_post_sort_type(q.optional_string("sort").value_or("")),
@@ -307,41 +310,37 @@ namespace Ludwig::Lemmy {
     // TODO: /api/v3/user/ban
     // TODO: /api/v3/user/banned
     // TODO: /api/v3/user/block
-    JSON_ROUTE("/api/v3/user/login", Login, LoginResponse).post([controller](auto& form, auto& m) {
-      return controller->login(form, m.ip, m.user_agent);
+    JSON_ROUTE("/api/v3/user/login", Login, LoginResponse).post([controller](auto& form, auto& ctx) {
+      return controller->login(form, ctx.ip, ctx.user_agent);
     });
-    router.template post_json<DeleteAccount>("/api/v3/user/delete_account", parser, [controller](auto*, auto m) {
-      return [controller, m = std::move(m)](auto form, auto&& write) {
-        controller->delete_account(form, std::move(m->auth));
-        write(write_no_content<SSL>);
-      };
-    }).template post_json<PasswordReset>("/api/v3/user/password_reset", parser, [controller](auto*, auto) {
-      return [controller](auto form, auto&& write) {
-        controller->password_reset(form);
-        write(write_no_content<SSL>);
-      };
-    }).template post_json<PasswordChangeAfterReset>("/api/v3/user/password_change", parser, [controller](auto*, auto) {
-      return [controller](auto form, auto&& write) {
-        controller->password_change_after_reset(form);
-        write(write_no_content<SSL>);
-      };
+    router.template post_json<DeleteAccount>("/api/v3/user/delete_account", parser, [controller](auto* rsp, auto ctx, auto body) -> Coro {
+      auto form = co_await body;
+      controller->delete_account(form, std::move((co_await ctx).auth));
+      write_no_content(rsp);
+    }).template post_json<PasswordReset>("/api/v3/user/password_reset", parser, [controller](auto* rsp, auto, auto body) -> Coro {
+      auto form = co_await body;
+      controller->password_reset(form);
+      write_no_content(rsp);
+    }).template post_json<PasswordChangeAfterReset>("/api/v3/user/password_change", parser, [controller](auto* rsp, auto, auto body) -> Coro {
+      auto form = co_await body;
+      controller->password_change_after_reset(form);
+      write_no_content(rsp);
     });
-    JSON_ROUTE("/api/v3/user/mention/mark_all_as_read", MarkAllAsRead, GetRepliesResponse).post([controller](auto& form, auto& m) {
-      return controller->mark_all_as_read(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/user/mention/mark_all_as_read", MarkAllAsRead, GetRepliesResponse).post([controller](auto& form, auto& ctx) {
+      return controller->mark_all_as_read(form, std::move(ctx.auth));
     });
-    JSON_ROUTE("/api/v3/user/save_user_settings", SaveUserSettings, LoginResponse).put([controller](auto& form, auto& m) {
-      return controller->save_user_settings(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/user/save_user_settings", SaveUserSettings, LoginResponse).put([controller](auto& form, auto& ctx) {
+      return controller->save_user_settings(form, std::move(ctx.auth));
     });
-    JSON_ROUTE("/api/v3/user/change_password", ChangePassword, LoginResponse).put([controller](auto& form, auto& m) {
-      return controller->change_password(form, std::move(m.auth));
+    JSON_ROUTE("/api/v3/user/change_password", ChangePassword, LoginResponse).put([controller](auto& form, auto& ctx) {
+      return controller->change_password(form, std::move(ctx.auth));
     });
     // TODO: /api/v3/user/report_count
     // TODO: /api/v3/user/unread_count
-    router.template post_json<VerifyEmail>("/api/v3/user/verify_email", parser, [controller](auto*, auto m) {
-      return [controller, m = std::move(m)](auto form, auto&& write) {
-        controller->verify_email(form);
-        write(write_no_content<SSL>);
-      };
+    router.template post_json<VerifyEmail>("/api/v3/user/verify_email", parser, [controller](auto* rsp, auto, auto body) -> Coro {
+      auto form = co_await body;
+      controller->verify_email(form);
+      write_no_content(rsp);
     });
     // TODO: /api/v3/user/leave_admin
     // TODO: /api/v3/user/totp/generate
@@ -349,14 +348,14 @@ namespace Ludwig::Lemmy {
     // TODO: /api/v3/user/export_settings
     // TODO: /api/v3/user/import_settings
     // TODO: /api/v3/user/list_logins
-    router.get("/api/v3/user/validate_auth", [controller](auto* rsp, auto*, auto& m) {
-      controller->validate_auth(std::move(m.auth));
+    router.get("/api/v3/user/validate_auth", [controller](auto* rsp, auto*, auto& ctx) {
+      controller->validate_auth(std::move(ctx.auth));
       write_no_content(rsp);
-    }).post("/api/v3/user/logout", [controller](auto*, auto m) {
-      if (m->auth) controller->logout(std::move(*m->auth));
-      return [controller, m = std::move(m)](auto, auto&& write) {
-        write(write_no_content<SSL>);
-      };
+    }).post("/api/v3/user/logout", [controller](auto* rsp, auto _ctx, auto body) -> Coro {
+      auto& ctx = co_await _ctx;
+      co_await body;
+      if (ctx.auth) controller->logout(std::move(*ctx.auth));
+      write_no_content(rsp);
     });
 
     // Admin
@@ -374,11 +373,13 @@ namespace Ludwig::Lemmy {
     });
   }
 
+#ifndef LUDWIG_DEBUG
   template auto api_routes<true>(
     uWS::TemplatedApp<true>& app,
     shared_ptr<ApiController> controller,
     shared_ptr<KeyedRateLimiter> rate_limiter
   ) -> void;
+#endif
 
   template auto api_routes<false>(
     uWS::TemplatedApp<false>& app,

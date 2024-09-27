@@ -160,9 +160,9 @@ int main(int argc, char** argv) {
     try {
       spdlog::info("Exporting database dump to {}", exportfile);
       auto txn = db->open_read_txn();
-      zstd_db_dump_export(txn, [&](auto&& buf, auto sz) {
-        fwrite(buf.get(), 1, sz, f.get());
-      });
+      for (auto chunk : zstd_db_dump_export(txn)) {
+        fwrite(chunk.data(), 1, chunk.size(), f.get());
+      };
       spdlog::info("Export complete.");
       return EXIT_SUCCESS;
     } catch (const runtime_error& e) {

@@ -1,6 +1,9 @@
 {
+  "mesonbuild.downloadLanguageServer": true,
   "mesonbuild.buildFolder": "build",
+  "mesonbuild.mesonlsp.others.ignoreDiagnosticsFromSubprojects": true,
   "mesonbuild.configureOptions": [
+    "buildtype=debug",
     "b_sanitize=address"
   ]
 }

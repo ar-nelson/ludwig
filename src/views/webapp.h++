@@ -10,11 +10,13 @@ namespace Ludwig {
     std::shared_ptr<KeyedRateLimiter> rate_limiter = nullptr
   ) -> void;
 
+#ifndef LUDWIG_DEBUG
   extern template auto webapp_routes<true>(
     uWS::TemplatedApp<true>& app,
     std::shared_ptr<InstanceController> controller,
     std::shared_ptr<KeyedRateLimiter> rate_limiter = nullptr
   ) -> void;
+#endif
 
   extern template auto webapp_routes<false>(
     uWS::TemplatedApp<false>& app,

@@ -185,7 +185,7 @@ subdir('vendor')
 subdir('src')
 subdir('test')
 
-ludwig_exe = executable(
+executable(
   'ludwig',
   'src/ludwig.c++',
   ludwig_sources,

@@ -60,24 +60,34 @@ namespace Ludwig {
     return entry_cell;
   }
 
-  auto ThumbnailCache::thumbnail(string url, Callback&& callback) -> void {
+  auto ThumbnailCache::thumbnail(string url, Callback&& callback) -> shared_ptr<Cancelable> {
     auto handle = cache[url];
     auto& value = handle.value();
-    visit(overload{
+    return visit(overload{
       [&](Promise& p) {
         if (p.empty()) {
-          visit(overload{
+          return visit(overload{
             [&callback](Promise& p) {
-              p.push_back(make_shared<Callback>(std::move(callback)));
+              auto sp = make_shared<CancelableCallback>(std::move(callback));
+              p.push_back(sp);
+              return sp;
             },
-            [&callback](ImageRef i) { callback(i); }
+            [&callback](ImageRef i) -> shared_ptr<CancelableCallback> {
+              callback(i);
+              return nullptr;
+            }
           }, fetch_thumbnail(url, value));
         } else {
           spdlog::debug("Adding callback to in-flight thumbnail request for {}", url);
-          p.push_back(make_shared<Callback>(std::move(callback)));
+          auto sp = make_shared<CancelableCallback>(std::move(callback));
+          p.push_back(sp);
+          return sp;
         }
       },
-      [&callback](ImageRef i) { callback(i); }
+      [&callback](ImageRef i) -> shared_ptr<CancelableCallback> {
+        callback(i);
+        return nullptr;
+      }
     }, value);
   }
 

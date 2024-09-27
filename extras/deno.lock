@@ -1,5 +1,26 @@
 {
-  "version": "2",
+  "version": "3",
+  "packages": {
+    "specifiers": {
+      "npm:@faker-js/faker": "npm:@faker-js/faker@8.0.2",
+      "npm:@types/node": "npm:@types/node@18.16.19",
+      "npm:flatbuffers": "npm:flatbuffers@23.5.26"
+    },
+    "npm": {
+      "@faker-js/faker@8.0.2": {
+        "integrity": "sha512-Uo3pGspElQW91PCvKSIAXoEgAUlRnH29sX2/p89kg7sP1m2PzCufHINd0FhTXQf6DYGiUlVncdSPa2F9wxed2A==",
+        "dependencies": {}
+      },
+      "@types/node@18.16.19": {
+        "integrity": "sha512-IXl7o+R9iti9eBW4Wg2hx1xQDig183jj7YLn8F7udNceyfkbn1ZxmzZXuak20gR40D7pIkIY1kYGx5VIGbaHKA==",
+        "dependencies": {}
+      },
+      "flatbuffers@23.5.26": {
+        "integrity": "sha512-vE+SI9vrJDwi1oETtTIFldC/o9GsVKRM+s6EL0nQgxXlYV1Vc4Tk30hj4xGICftInKQKj1F3up2n8UbIVobISQ==",
+        "dependencies": {}
+      }
+    }
+  },
   "remote": {
     "https://deno.land/std@0.170.0/_util/asserts.ts": "d0844e9b62510f89ce1f9878b046f6a57bf88f208a10304aab50efcb48365272",
     "https://deno.land/std@0.170.0/_util/os.ts": "8a33345f74990e627b9dfe2de9b040004b08ea5146c7c9e8fe9a29070d193934",
@@ -252,21 +273,5 @@
     "https://deno.land/x/denoflate@v2.1.4/wasm/pkg/foras.d.ts": "5b06a06fd8e354680ca239fdca03c124b2e58193fbcb14c1d8255a667bee8e16",
     "https://deno.land/x/denoflate@v2.1.4/wasm/pkg/foras.js": "06f8875b456918b9671d52133f64f3047f1c95540feda87fdd4a55ba3d30091d",
     "https://deno.land/x/denoflate@v2.1.4/wasm/pkg/foras.wasm.js": "2df8522df7243b0f05b1d188e220629cd5d2c92080a5f1407e15396fc35bebb3"
-  },
-  "npm": {
-    "specifiers": {
-      "@faker-js/faker": "@faker-js/faker@8.0.2",
-      "flatbuffers": "flatbuffers@23.5.26"
-    },
-    "packages": {
-      "@faker-js/faker@8.0.2": {
-        "integrity": "sha512-Uo3pGspElQW91PCvKSIAXoEgAUlRnH29sX2/p89kg7sP1m2PzCufHINd0FhTXQf6DYGiUlVncdSPa2F9wxed2A==",
-        "dependencies": {}
-      },
-      "flatbuffers@23.5.26": {
-        "integrity": "sha512-vE+SI9vrJDwi1oETtTIFldC/o9GsVKRM+s6EL0nQgxXlYV1Vc4Tk30hj4xGICftInKQKj1F3up2n8UbIVobISQ==",
-        "dependencies": {}
-      }
-    }
   }
 }

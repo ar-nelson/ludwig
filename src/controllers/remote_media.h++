@@ -26,11 +26,11 @@ namespace Ludwig {
       std::optional<std::shared_ptr<SearchEngine>> search_engine = {}
     );
 
-    auto user_avatar(std::string_view user_name, ThumbnailCache::Callback&& cb) -> void;
-    auto user_banner(std::string_view user_name, ThumbnailCache::Callback&& cb) -> void;
-    auto board_icon(std::string_view board_name, ThumbnailCache::Callback&& cb) -> void;
-    auto board_banner(std::string_view board_name, ThumbnailCache::Callback&& cb) -> void;
-    auto thread_link_card_image(uint64_t thread_id, ThumbnailCache::Callback&& cb) -> void;
+    auto user_avatar(std::string_view user_name, ThumbnailCache::Callback&& cb) -> std::shared_ptr<Cancelable>;
+    auto user_banner(std::string_view user_name, ThumbnailCache::Callback&& cb) -> std::shared_ptr<Cancelable>;
+    auto board_icon(std::string_view board_name, ThumbnailCache::Callback&& cb) -> std::shared_ptr<Cancelable>;
+    auto board_banner(std::string_view board_name, ThumbnailCache::Callback&& cb) -> std::shared_ptr<Cancelable>;
+    auto thread_link_card_image(uint64_t thread_id, ThumbnailCache::Callback&& cb) -> std::shared_ptr<Cancelable>;
     auto fetch_link_card_for_thread(uint64_t thread_id) -> void;
   };
 }

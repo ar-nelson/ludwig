@@ -8,10 +8,12 @@ namespace Ludwig {
     std::shared_ptr<RemoteMediaController> controller
   ) -> void;
 
+#ifndef LUDWIG_DEBUG
   extern template auto media_routes<true>(
     uWS::TemplatedApp<true>& app,
     std::shared_ptr<RemoteMediaController> controller
   ) -> void;
+#endif
 
   extern template auto media_routes<false>(
     uWS::TemplatedApp<false>& app,

@@ -1,4 +1,5 @@
 #include "services/db.h++"
+#include <atomic>
 #include <span>
 #include <vector>
 #include <sys/stat.h>
@@ -971,7 +972,7 @@ namespace Ludwig {
     }
   }
 
-  auto ReadTxn::dump(uWS::MoveOnlyFunction<void (const flatbuffers::span<uint8_t>&, bool)> on_data) -> void {
+  auto ReadTxn::dump() -> std::generator<span<uint8_t>> {
     FlatBufferBuilder fbb, fbb2;
     MDB_val k, v, v2;
     MDB_cursor* cur;
@@ -982,7 +983,7 @@ namespace Ludwig {
       if (!SettingsKey::is_exported(string_view{(const char*)k.mv_data, k.mv_size})) continue;
       if (first) first = false;
       else {
-        on_data(fbb.GetBufferSpan(), false);
+        co_yield fbb.GetBufferSpan();
         fbb.Clear();
       }
       fbb2.Finish(CreateSettingRecord(fbb2, fbb2.CreateString((const char*)k.mv_data, k.mv_size), 0, fbb2.CreateString((const char*)v.mv_data, v.mv_size)));
@@ -994,12 +995,12 @@ namespace Ludwig {
     // Users
     err = mdb_cursor_open(txn, db.dbis[User_User], &cur);
     for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) {
-      on_data(fbb.GetBufferSpan(), false);
+      co_yield fbb.GetBufferSpan();
       fbb.Clear();
       fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::User, fbb.CreateVector((uint8_t*)v.mv_data, v.mv_size)));
       err = mdb_get(txn, db.dbis[LocalUser_User], &k, &v2);
       if (!err) {
-        on_data(fbb.GetBufferSpan(), false);
+        co_yield fbb.GetBufferSpan();
         fbb.Clear();
         fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::LocalUser, fbb.CreateVector((uint8_t*)v2.mv_data, v2.mv_size)));
       } else if (err == MDB_NOTFOUND) err = 0;
@@ -1009,12 +1010,12 @@ namespace Ludwig {
     // Boards
     err = mdb_cursor_open(txn, db.dbis[Board_Board], &cur);
     for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) {
-      on_data(fbb.GetBufferSpan(), false);
+      co_yield fbb.GetBufferSpan();
       fbb.Clear();
       fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::Board, fbb.CreateVector((uint8_t*)v.mv_data, v.mv_size)));
       err = mdb_get(txn, db.dbis[LocalBoard_Board], &k, &v2);
       if (!err) {
-        on_data(fbb.GetBufferSpan(), false);
+        co_yield fbb.GetBufferSpan();
         fbb.Clear();
         fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::LocalBoard, fbb.CreateVector((uint8_t*)v2.mv_data, v2.mv_size)));
       } else if (err == MDB_NOTFOUND) err = 0;
@@ -1024,7 +1025,7 @@ namespace Ludwig {
     // Threads
     err = mdb_cursor_open(txn, db.dbis[Thread_Thread], &cur);
     for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) {
-      on_data(fbb.GetBufferSpan(), false);
+      co_yield fbb.GetBufferSpan();
       fbb.Clear();
       fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::Thread, fbb.CreateVector((uint8_t*)v.mv_data, v.mv_size)));
     }
@@ -1033,19 +1034,17 @@ namespace Ludwig {
     // Comments
     err = mdb_cursor_open(txn, db.dbis[Comment_Comment], &cur);
     for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) {
-      on_data(fbb.GetBufferSpan(), false);
+      co_yield fbb.GetBufferSpan();
       fbb.Clear();
       fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::Comment, fbb.CreateVector((uint8_t*)v.mv_data, v.mv_size)));
     }
     if (err != MDB_NOTFOUND) throw DBError("Export failed (step: comments)", err);
     mdb_cursor_close(cur);
     // Votes
-    spdlog::info("in votes step");
     err = mdb_cursor_open(txn, db.dbis[UpvotePost_User], &cur);
     for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT_NODUP)) {
       for (err = mdb_cursor_get(cur, &k, &v, MDB_GET_MULTIPLE); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT_MULTIPLE)) {
-        on_data(fbb.GetBufferSpan(), false);
-        spdlog::info("upvote batch of {}", v.mv_size / sizeof(uint64_t));
+        co_yield fbb.GetBufferSpan();
         fbb.Clear();
         fbb2.Finish(CreateVoteBatch(fbb2, fbb2.CreateVector((uint64_t*)v.mv_data, v.mv_size / sizeof(uint64_t))));
         fbb.FinishSizePrefixed(
@@ -1061,8 +1060,7 @@ namespace Ludwig {
     err = mdb_cursor_open(txn, db.dbis[DownvotePost_User], &cur);
     for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT_NODUP)) {
       for (err = mdb_cursor_get(cur, &k, &v, MDB_GET_MULTIPLE); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT_MULTIPLE)) {
-        on_data(fbb.GetBufferSpan(), false);
-        spdlog::info("downvote batch of {}", v.mv_size / sizeof(uint64_t));
+        co_yield fbb.GetBufferSpan();
         fbb.Clear();
         fbb2.Finish(CreateVoteBatch(fbb2, fbb2.CreateVector((uint64_t*)v.mv_data, v.mv_size / sizeof(uint64_t))));
         fbb.FinishSizePrefixed(
@@ -1079,7 +1077,7 @@ namespace Ludwig {
     err = mdb_cursor_open(txn, db.dbis[BoardsSubscribed_User], &cur);
     for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT_NODUP)) {
       for (err = mdb_cursor_get(cur, &k, &v, MDB_GET_MULTIPLE); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT_MULTIPLE)) {
-        on_data(fbb.GetBufferSpan(), false);
+        co_yield fbb.GetBufferSpan();
         fbb.Clear();
         fbb2.Finish(CreateSubscriptionBatch(fbb2, fbb2.CreateVector((uint64_t*)v.mv_data, v.mv_size / sizeof(uint64_t))));
         fbb.FinishSizePrefixed(
@@ -1092,7 +1090,7 @@ namespace Ludwig {
     }
     if (err != MDB_NOTFOUND) throw DBError("Export failed (step: subscriptions)", err);
     mdb_cursor_close(cur);
-    on_data(fbb.GetBufferSpan(), true);
+    co_yield fbb.GetBufferSpan();
   }
 
   auto WriteTxn::next_id() -> uint64_t {

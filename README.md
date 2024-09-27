@@ -31,8 +31,8 @@ Run `task build-release` from within the Docker container, then copy the
 Ludwig will create two `.mdb` files in its directory by default: `ludwig.mdb`
 contains the site database, and `search.mdb` is a full-text search index.
 
-By default, Ludwig serves a web interface on port 2023. Just put this behind
-a reverse proxy, and it should be ready to go.
+By default, Ludwig serves a web interface on port 2023. Just put this behind a
+reverse proxy, and it should be ready to go.
 
 ### Options
 
@@ -61,25 +61,25 @@ options.
 - `--search=PROVIDER`: Full-text search configuration. Default is
   `lmdb:search.mdb`. Potential providers are:
 
-    - `none` - Full-text search is disabled.
+  - `none` - Full-text search is disabled.
 
-    - `lmdb:FILE` - Use [sentencepiece][sentencepiece] to build an LMDB search
-      index of tokens. This approach is very limited: it only has token mappings
-      for English, and it can only check whether posts contain all of the
-      searched tokens, but not the tokens' order. `FILE` is the filename of the
-      search database.
+  - `lmdb:FILE` - Use [sentencepiece][sentencepiece] to build an LMDB search
+    index of tokens. This approach is very limited: it only has token mappings
+    for English, and it can only check whether posts contain all of the searched
+    tokens, but not the tokens' order. `FILE` is the filename of the search
+    database.
 
-    More search providers will be added in the future.
+  More search providers will be added in the future.
 
-    Note that, currently, switching search providers will only index future
-    posts; if you change from `none` to `lmdb` or switch `lmdb` files, the new
-    search index will not contain any posts from before the switch.
+  Note that, currently, switching search providers will only index future posts;
+  if you change from `none` to `lmdb` or switch `lmdb` files, the new search
+  index will not contain any posts from before the switch.
 
-- `-r N`, `--rate-limit=N`: Maximum HTTP requests allowed per 5 minutes from a single
-  IP. POST and PUT requests count as 10 requests. Default is 3000.
+- `-r N`, `--rate-limit=N`: Maximum HTTP requests allowed per 5 minutes from a
+  single IP. POST and PUT requests count as 10 requests. Default is 3000.
 
-- `-t N`, `--threads=N`: Number of request handler threads. Default is the number of
-  physical cores on the machine.
+- `-t N`, `--threads=N`: Number of request handler threads. Default is the
+  number of physical cores on the machine.
 
 - `--export=FILE`: Exports the database to a dump file, then exits.
 
@@ -121,11 +121,12 @@ Because, unlike Lemmy, my project is named after the _best_ Koopaling.
 ## Roadmap
 
 - [ ] MVP release
-  - [ ] Integration tests
+  - [ ] Post editing
   - [ ] User settings
   - [ ] Board list
   - [ ] User list
   - [ ] Async write locking (performance improvements)
+  - [ ] Integration tests
   - [ ] Docker build
 - [ ] Notifications
 - [ ] DMs
@@ -150,10 +151,10 @@ Because, unlike Lemmy, my project is named after the _best_ Koopaling.
 - [ ] [Sonic][sonic] search provider
 - [ ] Gracefully handle switching search providers
 - [ ] Federation
-    - [ ] Webfinger and nodeinfo endpoints
-    - [ ] ActivityPub compatibility with Lemmy
-    - [ ] Parse HTML messages from AP
-    - [ ] Backfill new federated boards using the Lemmy API
+  - [ ] Webfinger and nodeinfo endpoints
+  - [ ] ActivityPub compatibility with Lemmy
+  - [ ] Parse HTML messages from AP
+  - [ ] Backfill new federated boards using the Lemmy API
 - [ ] Archive/compress old database entries when low on space
 - [ ] Emoji reactions
 - [ ] Board-specific user flair
