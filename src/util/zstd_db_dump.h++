@@ -8,7 +8,7 @@ namespace Ludwig {
     size_t file_size,
     std::optional<std::shared_ptr<SearchEngine>> search = {},
     size_t map_size_mb = 1024
-  ) -> DB;
+  ) -> void;
 
   auto zstd_db_dump_export(ReadTxn& txn) -> std::generator<std::span<uint8_t>>;
 }

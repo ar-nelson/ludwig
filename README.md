@@ -121,20 +121,21 @@ Because, unlike Lemmy, my project is named after the _best_ Koopaling.
 ## Roadmap
 
 - [ ] MVP release
-  - [ ] Post editing
+  - [x] Async write locking (performance improvements)
   - [ ] User settings
+  - [ ] Post editing
+  - [ ] Post deletion
   - [ ] Board list
   - [ ] User list
-  - [ ] Async write locking (performance improvements)
+  - [ ] Notifications
+  - [ ] DMs
+  - [ ] Media uploads
   - [ ] Integration tests
   - [ ] Docker build
-- [ ] Notifications
-- [ ] DMs
 - [ ] Board moderators
 - [ ] Mod log
 - [ ] RSS feeds
 - [ ] Pinned threads
-- [ ] Media uploads
 - [ ] Full static linking with musl
 - [ ] Aarch64 build
 - [ ] Rich text editor UI

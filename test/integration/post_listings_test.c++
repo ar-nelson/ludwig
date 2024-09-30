@@ -23,13 +23,13 @@ static void expect_thread_numbers(const unique_ptr<const HttpClientResponse>& rs
 }
 
 SCENARIO_METHOD(IntegrationTest, "post listings", "[integration][post_listings]") {
-  instance->first_run_setup({
+  instance->first_run_setup(db->open_write_txn_sync(), {
     .default_board_name = "main",
     .admin_name = "admin",
     .admin_password = "password"
   });
   spdlog::set_level(spdlog::level::info);
-  uint64_t user_id = instance->create_local_user("myuser", {}, "mypassword", false, {}, IsApproved::Yes),
+  uint64_t user_id = instance->create_local_user(db->open_write_txn_sync(), "myuser", {}, "mypassword", false, {}, IsApproved::Yes),
     board_id;
   {
     auto txn = instance->open_read_txn();
@@ -39,11 +39,12 @@ SCENARIO_METHOD(IntegrationTest, "post listings", "[integration][post_listings]"
   GIVEN("30 threads by 10 users in one board, each two hours apart") {
     uint64_t user_ids[10] = {user_id}, thread_ids[30];
     for (size_t i = 1; i < 10; i++) {
-      user_ids[i] = instance->create_local_user(fmt::format("user{:d}", i), {}, "mypassword", false, {}, IsApproved::Yes);
+      user_ids[i] = instance->create_local_user(db->open_write_txn_sync(), fmt::format("user{:d}", i), {}, "mypassword", false, {}, IsApproved::Yes);
     }
     const auto start_time = now_t() - 60h;
     for (size_t i = 0; i < 30; i++) {
       thread_ids[i] = instance->create_thread(
+        db->open_write_txn_sync(), 
         user_ids[i % 10],
         board_id,
         {},
@@ -113,7 +114,7 @@ SCENARIO_METHOD(IntegrationTest, "post listings", "[integration][post_listings]"
 
     AND_GIVEN("10 upvotes on the second-newest thread") {
       for (size_t i = 1; i < 10; i++) {
-        instance->vote(user_ids[i], thread_ids[28], Vote::Upvote);
+        instance->vote(db->open_write_txn_sync(), user_ids[i], thread_ids[28], Vote::Upvote);
       }
 
       WHEN("a user views the board with the Active sort order") {

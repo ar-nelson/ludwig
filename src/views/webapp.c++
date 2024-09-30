@@ -13,7 +13,6 @@
 #include "util/router.h++"
 #include "util/web.h++"
 #include "util/zstd_db_dump.h++"
-#include <atomic>
 #include <iterator>
 #include <regex>
 #include <semaphore>
@@ -2039,7 +2038,7 @@ namespace Ludwig {
     }
 
     template <class T>
-    auto do_submenu_action(SubmenuAction action, uint64_t user, uint64_t id) -> optional<string> {
+    auto do_submenu_action(WriteTxn txn, SubmenuAction action, uint64_t user, uint64_t id) -> optional<string> {
       switch (action) {
         case SubmenuAction::Reply:
           return format("/{}/{:x}#reply"_cf, T::noun, id);
@@ -2050,41 +2049,37 @@ namespace Ludwig {
         case SubmenuAction::Share:
           die(500, "Share is not yet implemented");
         case SubmenuAction::Save:
-          controller->save_post(user, id, true);
+          controller->save_post(std::move(txn), user, id, true);
           return {};
         case SubmenuAction::Unsave:
-          controller->save_post(user, id, false);
+          controller->save_post(std::move(txn), user, id, false);
           return {};
         case SubmenuAction::Hide:
-          controller->hide_post(user, id, true);
+          controller->hide_post(std::move(txn), user, id, true);
           return {};
         case SubmenuAction::Unhide:
-          controller->hide_post(user, id, false);
+          controller->hide_post(std::move(txn), user, id, false);
           return {};
         case SubmenuAction::Report:
           die(500, "Report is not yet implemented");
         case SubmenuAction::MuteUser: {
-          auto txn = controller->open_read_txn();
           auto e = T::get(txn, id, LocalUserDetail::get_login(txn, id));
-          controller->hide_user(user, e.author_id(), true);
+          controller->hide_user(std::move(txn), user, e.author_id(), true);
           return {};
         }
         case SubmenuAction::UnmuteUser: {
-          auto txn = controller->open_read_txn();
           auto e = T::get(txn, id, LocalUserDetail::get_login(txn, id));
-          controller->hide_user(user, e.author_id(), false);
+          controller->hide_user(std::move(txn), user, e.author_id(), false);
           return {};
         }
         case SubmenuAction::MuteBoard: {
-          auto txn = controller->open_read_txn();
           auto e = T::get(txn, id, LocalUserDetail::get_login(txn, id));
-          controller->hide_board(user, e.thread().board(), true);
+          controller->hide_board(std::move(txn), user, e.thread().board(), true);
           return {};
         }
         case SubmenuAction::UnmuteBoard:{
-          auto txn = controller->open_read_txn();
           auto e = T::get(txn, id, LocalUserDetail::get_login(txn, id));
-          controller->hide_board(user, e.thread().board(), false);
+          controller->hide_board(std::move(txn), user, e.thread().board(), false);
           return {};
         }
         case SubmenuAction::ModRestore:
@@ -2231,9 +2226,9 @@ namespace Ludwig {
       /////////////////////////////////////////////////////
 
       using Coro = RouterCoroutine<Context>;
-      auto self = this->shared_from_this();
-      Router<SSL, Context, shared_ptr<Webapp<SSL>>>(app, self)
-      .get("/", [self](auto* rsp, auto* req, Context& c) {
+      shared_ptr<Webapp<SSL>> self = this->shared_from_this();
+      Router<SSL, Context, shared_ptr<Webapp<SSL>>> r(app, self);
+      r.get("/", [self](auto* rsp, auto* req, Context& c) {
         if (c.site->setup_done) {
           self->feed_route(c.logged_in_user_id ? InstanceController::FEED_HOME : InstanceController::FEED_LOCAL, rsp, req, c);
         } else {
@@ -2252,14 +2247,14 @@ namespace Ludwig {
             .write_html_footer(c)
             .finish();
         }
-      })
-      .get("/all", [self](auto* rsp, auto* req, Context& c) {
+      });
+      r.get("/all", [self](auto* rsp, auto* req, Context& c) {
         self->feed_route(InstanceController::FEED_ALL, rsp, req, c);
-      })
-      .get("/local", [self](auto* rsp, auto* req, Context& c) {
+      });
+      r.get("/local", [self](auto* rsp, auto* req, Context& c) {
         self->feed_route(InstanceController::FEED_LOCAL, rsp, req, c);
-      })
-      .get("/boards", [self](auto* rsp, auto* req, Context& c) {
+      });
+      r.get("/boards", [self](auto* rsp, auto* req, Context& c) {
         auto txn = self->controller->open_read_txn();
         c.populate(txn);
         const auto local = req->getQuery("local") == "1";
@@ -2293,8 +2288,8 @@ namespace Ludwig {
         r.write("</ol>").write_pagination(base_url, req->getQuery("from").empty(), next);
         if (!c.is_htmx) r.write("</main></div>").write_html_footer(c);
         r.finish();
-      })
-      .get("/users", [self](auto* rsp, auto* req, Context& c) {
+      });
+      r.get("/users", [self](auto* rsp, auto* req, Context& c) {
         auto txn = self->controller->open_read_txn();
         c.populate(txn);
         const auto local = req->getQuery("local") == "1";
@@ -2326,13 +2321,13 @@ namespace Ludwig {
         r.write("</ol>").write_pagination(base_url, req->getQuery("from").empty(), next);
         if (!c.is_htmx) r.write("</main></div>").write_html_footer(c);
         r.finish();
-      })
-      .get("/c/:name", [self](auto* rsp, auto* req, Context& c) {
+      });
+      r.get("/c/:name", [self](auto* rsp, auto* req, Context& c) {
         // Compatibility alias for Lemmy community URLs
         // Needed because some Lemmy apps expect URLs in exactly this format
         write_redirect_to(rsp, c, format("/b/{}"_cf, req->getParameter(0)));
-      })
-      .get("/b/:name", [self](auto* rsp, auto* req, Context& c) {
+      });
+      r.get("/b/:name", [self](auto* rsp, auto* req, Context& c) {
         auto txn = self->controller->open_read_txn();
         c.populate(txn);
         const auto board_id = board_name_param(txn, req, 0);
@@ -2377,8 +2372,8 @@ namespace Ludwig {
         r.write("</ol>").write_pagination(base_url, from.empty(), next);
         if (!c.is_htmx) r.write("</main></div>").write_html_footer(c);
         r.finish();
-      })
-      .get("/b/:name/create_thread", [self](auto* rsp, auto* req, Context& c) {
+      });
+      r.get("/b/:name/create_thread", [self](auto* rsp, auto* req, Context& c) {
         auto txn = self->controller->open_read_txn();
         const auto board_id = board_name_param(txn, req, 0);
         const auto show_url = req->getQuery("text") != "1";
@@ -2389,8 +2384,8 @@ namespace Ludwig {
           .write_create_thread_form(show_url, board, login)
           .write_html_footer(c)
           .finish();
-      })
-      .get("/u/:name", [self](auto* rsp, auto* req, Context& c) {
+      });
+      r.get("/u/:name", [self](auto* rsp, auto* req, Context& c) {
         auto txn = self->controller->open_read_txn();
         c.populate(txn);
         const auto user_id = user_name_param(txn, req, 0);
@@ -2441,8 +2436,8 @@ namespace Ludwig {
         r.write("</ol>").write_pagination(base_url, from.empty(), next);
         if (!c.is_htmx) r.write("</main></div>").write_html_footer(c);
         r.finish();
-      })
-      .get("/thread/:id", [self](auto* rsp, auto* req, Context& c) {
+      });
+      r.get("/thread/:id", [self](auto* rsp, auto* req, Context& c) {
         auto txn = self->controller->open_read_txn();
         c.populate(txn);
         const auto id = hex_id_param(req, 0);
@@ -2466,8 +2461,8 @@ namespace Ludwig {
             .write_html_footer(c);
         }
         r.finish();
-      })
-      .get("/thread/:id/edit", [self](auto* rsp, auto* req, Context& c) {
+      });
+      r.get("/thread/:id/edit", [self](auto* rsp, auto* req, Context& c) {
         auto txn = self->controller->open_read_txn();
         const auto id = hex_id_param(req, 0);
         const auto login = c.require_login(txn);
@@ -2478,8 +2473,8 @@ namespace Ludwig {
           .write_edit_thread_form(thread, login)
           .write_html_footer(c)
           .finish();
-      })
-      .get("/comment/:id", [self](auto* rsp, auto* req, Context& c) {
+      });
+      r.get("/comment/:id", [self](auto* rsp, auto* req, Context& c) {
         auto txn = self->controller->open_read_txn();
         c.populate(txn);
         const auto id = hex_id_param(req, 0);
@@ -2506,8 +2501,8 @@ namespace Ludwig {
             .write_html_footer(c);
         }
         r.finish();
-      })
-      .get_async("/search", [self](auto* rsp, auto _c) -> Coro {
+      });
+      r.get_async("/search", [self](auto* rsp, auto _c) -> Coro {
         auto query = co_await _c.with_request([](Request req) {
           return SearchQuery{
             .query = req->getQuery("search"),
@@ -2538,8 +2533,8 @@ namespace Ludwig {
           });
         });
         */
-      })
-      .get("/create_board", [self](auto* rsp, auto*, Context& c) {
+      });
+      r.get("/create_board", [self](auto* rsp, auto*, Context& c) {
         auto txn = self->controller->open_read_txn();
         const auto& login = c.require_login(txn);
         if (!self->controller->can_create_board(login)) {
@@ -2555,8 +2550,8 @@ namespace Ludwig {
           .write("</main>")
           .write_html_footer(c)
           .finish();
-      })
-      .get("/login", [self](auto* rsp, auto*, Context& c) {
+      });
+      r.get("/login", [self](auto* rsp, auto*, Context& c) {
         auto txn = self->controller->open_read_txn();
         c.populate(txn);
         if (c.login) {
@@ -2578,8 +2573,8 @@ namespace Ludwig {
             .write_html_footer(c)
             .finish();
         }
-      })
-      .get("/register", [self](auto* rsp, auto*, Context& c) {
+      });
+      r.get("/register", [self](auto* rsp, auto*, Context& c) {
         if (!c.site->registration_enabled) die(403, "Registration is not enabled on this site");
         auto txn = self->controller->open_read_txn();
         c.populate(txn);
@@ -2597,7 +2592,7 @@ namespace Ludwig {
             .write_html_footer(c)
             .finish();
         }
-      })
+      });
 #     define SETTINGS_PAGE(PATH, TAB, CONTENT, CTX) \
         self->writer(rsp) \
           .write_html_header(CTX, { \
@@ -2610,16 +2605,16 @@ namespace Ludwig {
           .write("</main>") \
           .write_html_footer(CTX) \
           .finish();
-#     define SETTINGS_ROUTE(PATH, TAB, CONTENT) .get(PATH, [self](auto* rsp, auto*, Context& c) { \
+#     define SETTINGS_ROUTE(PATH, TAB, CONTENT) r.get(PATH, [self](auto* rsp, auto*, Context& c) { \
         auto txn = self->controller->open_read_txn(); \
         const auto login = c.require_login(txn); \
         SETTINGS_PAGE(PATH, TAB, CONTENT, c) \
-      })
+      });
       SETTINGS_ROUTE("/settings", Settings, write_user_settings_form(c.site, login))
       SETTINGS_ROUTE("/settings/profile", Profile, write_user_settings_profile_form(c.site, login))
       SETTINGS_ROUTE("/settings/account", Account, write_user_settings_account_form(c.site, login))
       SETTINGS_ROUTE("/settings/invites", Invites, write_invites_list(*self->controller, txn, login, ""))
-      .get("/b/:name/settings", [self](auto* rsp, auto* req, Context& c) {
+      r.get("/b/:name/settings", [self](auto* rsp, auto* req, Context& c) {
         auto txn = self->controller->open_read_txn();
         const auto board_id = board_name_param(txn, req, 0);
         const auto login = c.require_login(txn);
@@ -2634,7 +2629,7 @@ namespace Ludwig {
           .write("</main>")
           .write_html_footer(c)
           .finish();
-      })
+      });
 #     define ADMIN_PAGE(PATH, TAB, CONTENT, CTX) \
         self->writer(rsp) \
           .write_html_header(CTX, { \
@@ -2647,14 +2642,14 @@ namespace Ludwig {
           .write("</main>") \
           .write_html_footer(CTX) \
           .finish();
-#     define ADMIN_ROUTE(PATH, TAB, CONTENT) .get(PATH, [self](auto* rsp, auto*, Context& c) { \
+#     define ADMIN_ROUTE(PATH, TAB, CONTENT) r.get(PATH, [self](auto* rsp, auto*, Context& c) { \
         auto txn = self->controller->open_read_txn(); \
         const auto login = c.require_login(txn); \
         if (!InstanceController::can_change_site_settings(login)) { \
           die(403, "Admin login required to view this page"); \
         } \
         ADMIN_PAGE(PATH, TAB, CONTENT, c) \
-      })
+      });
       ADMIN_ROUTE("/site_admin", Settings, write_site_admin_form(c.site))
       ADMIN_ROUTE("/site_admin/import_export", ImportExport, write_site_admin_import_export_form())
       ADMIN_ROUTE("/site_admin/applications", Applications, write_site_admin_applications_list(*self->controller, txn, c.login, {}))
@@ -2663,14 +2658,16 @@ namespace Ludwig {
       // API Actions
       //////////////////////////////////////////////////////
 
-      .get("/logout", [self](auto* rsp, auto* req, Context&) {
+#     define WRITE_TXN co_await self->controller->template open_write_txn<Context>()
+
+      r.get("/logout", [self](auto* rsp, auto* req, Context&) {
         rsp->writeStatus(http_status(303))
           ->writeHeader("Set-Cookie", COOKIE_NAME "=deleted; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT");
         if (req->getHeader("referer").empty()) rsp->writeHeader("Location", "/");
         else rsp->writeHeader("Location", req->getHeader("referer"));
         rsp->end();
-      })
-      .post_form("/login", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post_form("/login", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         if (c.logged_in_user_id) die(403, "Already logged in");
         auto referer = co_await _c.with_request([](Request req){ return string(req->getHeader("referer")); });
@@ -2684,6 +2681,7 @@ namespace Ludwig {
         bool remember = form.optional_bool("remember");
         try {
           auto login = self->controller->login(
+            WRITE_TXN,
             form.required_string("actual_username"),
             form.required_string("password"),
             c.ip,
@@ -2707,8 +2705,8 @@ namespace Ludwig {
             .write_html_footer(c)
             .finish();
         }
-      })
-      .post_form("/register", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post_form("/register", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         if (!c.site->registration_enabled) die(403, "Registration is not enabled on this site");
         if (c.logged_in_user_id) die(403, "Already logged in");
@@ -2727,6 +2725,7 @@ namespace Ludwig {
             die(400, "Passwords do not match");
           }
           self->controller->register_local_user(
+            WRITE_TXN,
             form.required_string("actual_username"),
             form.required_string("email"),
             std::move(password),
@@ -2757,13 +2756,14 @@ namespace Ludwig {
             "</div></main>")
           .write_html_footer(c)
           .finish();
-      })
-      .post_form("/create_board", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post_form("/create_board", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         auto user = c.require_login();
         auto form = co_await body;
         const auto name = form.required_string("name");
         self->controller->create_local_board(
+          WRITE_TXN,
           user,
           name,
           form.optional_string("display_name"),
@@ -2775,8 +2775,8 @@ namespace Ludwig {
         rsp->writeStatus(http_status(303));
         c.write_cookie(rsp);
         rsp->writeHeader("Location", format("/b/{}"_cf, name))->end();
-      })
-      .post_form("/b/:name/create_thread", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post_form("/b/:name/create_thread", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         auto user = c.require_login();
         const auto board_id = co_await _c.with_request([&](Request req) {
@@ -2785,6 +2785,7 @@ namespace Ludwig {
         });
         auto form = co_await body;
         const auto id = self->controller->create_local_thread(
+          WRITE_TXN,
           user,
           board_id,
           form.required_string("title"),
@@ -2795,13 +2796,14 @@ namespace Ludwig {
         rsp->writeStatus(http_status(303));
         c.write_cookie(rsp);
         rsp->writeHeader("Location", format("/thread/{:x}"_cf, id))->end();
-      })
-      .post_form("/thread/:id/reply", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post_form("/thread/:id/reply", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         const auto thread_id = co_await _c.with_request([](Request req){ return hex_id_param(req, 0); });
         auto user = c.require_login();
         auto form = co_await body;
         const auto id = self->controller->create_local_comment(
+          WRITE_TXN,
           user,
           thread_id,
           form.required_string("text_content"),
@@ -2822,13 +2824,14 @@ namespace Ludwig {
           c.write_cookie(rsp);
           rsp->writeHeader("Location", format("/thread/{:x}"_cf, thread_id))->end();
         }
-      })
-      .post_form("/comment/:id/reply", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post_form("/comment/:id/reply", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         const auto comment_id = co_await _c.with_request([](Request req){ return hex_id_param(req, 0); });
         auto user = c.require_login();
         auto form = co_await body;
         const auto id = self->controller->create_local_comment(
+          WRITE_TXN,
           user,
           comment_id,
           form.required_string("text_content"),
@@ -2849,8 +2852,8 @@ namespace Ludwig {
           c.write_cookie(rsp);
           rsp->writeHeader("Location", format("/comment/{:x}"_cf, comment_id))->end();
         }
-      })
-      .post_form("/thread/:id/action", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post_form("/thread/:id/action", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         const auto [id, referer] = co_await _c.with_request([](Request req) {
           return std::pair(hex_id_param(req, 0), string(req->getHeader("referer")));
@@ -2858,7 +2861,9 @@ namespace Ludwig {
         auto user = c.require_login();
         auto form = co_await body;
         const auto action = static_cast<SubmenuAction>(form.required_int("action"));
-        const auto redirect = self->template do_submenu_action<ThreadDetail>(action, user, id);
+        const auto redirect = self->template do_submenu_action<ThreadDetail>(
+          WRITE_TXN, action, user, id
+        );
         if (redirect) {
           write_redirect_to(rsp, c, *redirect);
         } else if (c.is_htmx) {
@@ -2873,8 +2878,8 @@ namespace Ludwig {
         } else {
           write_redirect_back(rsp, referer);
         }
-      })
-      .post_form("/comment/:id/action", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post_form("/comment/:id/action", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         const auto [id, referer] = co_await _c.with_request([](Request req) {
           return std::pair(hex_id_param(req, 0), string(req->getHeader("referer")));
@@ -2882,7 +2887,9 @@ namespace Ludwig {
         auto user = c.require_login();
         auto form = co_await body;
         const auto action = static_cast<SubmenuAction>(form.required_int("action"));
-        const auto redirect = self->template do_submenu_action<CommentDetail>(action, user, id);
+        const auto redirect = self->template do_submenu_action<CommentDetail>(
+          WRITE_TXN, action, user, id
+        );
         if (redirect) {
           write_redirect_to(rsp, c, *redirect);
         } else if (c.is_htmx) {
@@ -2897,8 +2904,8 @@ namespace Ludwig {
         } else {
           write_redirect_back(rsp, referer);
         }
-      })
-      .post_form("/thread/:id/vote", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post_form("/thread/:id/vote", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         const auto [post_id, referer] = co_await _c.with_request([](Request req) {
           return std::pair(hex_id_param(req, 0), string(req->getHeader("referer")));
@@ -2906,7 +2913,7 @@ namespace Ludwig {
         auto user = c.require_login();
         auto form = co_await body;
         const auto vote = form.required_vote("vote");
-        self->controller->vote(user, post_id, vote);
+        self->controller->vote(WRITE_TXN, user, post_id, vote);
         if (c.is_htmx) {
           auto txn = self->controller->open_read_txn();
           const auto thread = ThreadDetail::get(txn, post_id, c.login);
@@ -2915,8 +2922,8 @@ namespace Ludwig {
         } else {
           write_redirect_back(rsp, referer);
         }
-      })
-      .post_form("/comment/:id/vote", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post_form("/comment/:id/vote", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         const auto [post_id, referer] = co_await _c.with_request([](Request req) {
           return std::pair(hex_id_param(req, 0), string(req->getHeader("referer")));
@@ -2924,7 +2931,7 @@ namespace Ludwig {
         auto user = c.require_login();
         auto form = co_await body;
         const auto vote = form.required_vote("vote");
-        self->controller->vote(user, post_id, vote);
+        self->controller->vote(WRITE_TXN, user, post_id, vote);
         if (c.is_htmx) {
           auto txn = self->controller->open_read_txn();
           const auto comment = CommentDetail::get(txn, post_id, c.login);
@@ -2933,8 +2940,8 @@ namespace Ludwig {
         } else {
           write_redirect_back(rsp, referer);
         }
-      })
-      .post_form("/b/:name/subscribe", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post_form("/b/:name/subscribe", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         const auto [name, board_id, referer] = co_await _c.with_request([&](Request req) {
           auto txn = self->controller->open_read_txn();
@@ -2942,15 +2949,15 @@ namespace Ludwig {
         });
         auto user = c.require_login();
         auto form = co_await body;
-        self->controller->subscribe(user, board_id, !form.optional_bool("unsubscribe"));
+        self->controller->subscribe(WRITE_TXN, user, board_id, !form.optional_bool("unsubscribe"));
         if (c.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
           self->writer(rsp).write_subscribe_button(name, !form.optional_bool("unsubscribe")).finish();
         } else {
           write_redirect_back(rsp, referer);
         }
-      })
-      .post("/settings/invites/new", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post("/settings/invites/new", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         if (!c.site->registration_invite_required || c.site->invite_admin_only) {
           die(403, "Users cannot generate invite codes on this server");
@@ -2960,22 +2967,22 @@ namespace Ludwig {
         if (login.mod_state().state >= ModState::Locked) {
           die(403, "User does not have permission to create an invite code");
         }
-        self->controller->create_site_invite(login.id);
+        self->controller->create_site_invite(WRITE_TXN, login.id);
         write_redirect_back(rsp, "/settings/invites");
-      })
-      .post_form("/site_admin", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post_form("/site_admin", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         require_admin(self, c);
         auto form = co_await body;
         try {
-          self->controller->update_site(form_to_site_update(form), c.logged_in_user_id);
+          self->controller->update_site(WRITE_TXN, form_to_site_update(form), c.logged_in_user_id);
           write_redirect_back(rsp, "/site_admin");
         } catch (const ApiError& e) {
           rsp->writeStatus(http_status(e.http_status));
           ADMIN_PAGE("/site_admin", Settings, write_site_admin_form(c.site, {e.message}), c)
         }
-      })
-      .post_form("/site_admin/first_run_setup", [self](auto* rsp, auto _c, auto body) -> Coro {
+      });
+      r.post_form("/site_admin/first_run_setup", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         if (c.site->setup_done) {
           die(403, "First-run setup is already complete");
@@ -2983,7 +2990,7 @@ namespace Ludwig {
         require_admin(self, c);
         auto form = co_await body;
         try {
-          self->controller->first_run_setup({
+          self->controller->first_run_setup(WRITE_TXN, {
             form_to_site_update(form),
             form.optional_string("base_url"),
             form.optional_string("default_board_name"),
@@ -3005,8 +3012,8 @@ namespace Ludwig {
             .write_html_footer(c)
             .finish();
         }
-      })
-      .post("/site_admin/export", [self](auto* rsp, auto _c, auto) -> Coro {
+      });
+      r.post("/site_admin/export", [self](auto* rsp, auto _c, auto) -> Coro {
         auto& c = co_await _c;
         require_admin(self, c);
         rsp->writeHeader("Content-Type", "application/zstd")
@@ -3046,8 +3053,8 @@ namespace Ludwig {
         };
         co_await DumpAwaiter(self, c);
         rsp->end();
-      })
-      .post("/site_admin/applications/:action/:id", [self](auto* rsp, auto _c, auto) -> Coro {
+      });
+      r.post("/site_admin/applications/:action/:id", [self](auto* rsp, auto _c, auto) -> Coro {
         auto [is_approve, id] = co_await _c.with_request([](Request req) {
           bool is_approve;
           if (req->getParameter(0) == "approve") is_approve = true;
@@ -3059,9 +3066,9 @@ namespace Ludwig {
         require_admin(self, c);
         try {
           if (is_approve) {
-            self->controller->approve_local_user_application(id, c.logged_in_user_id);
+            self->controller->approve_local_user_application(WRITE_TXN, id, c.logged_in_user_id);
           } else {
-            self->controller->reject_local_user_application(id, c.logged_in_user_id);
+            self->controller->reject_local_user_application(WRITE_TXN, id, c.logged_in_user_id);
           }
           write_redirect_back(rsp, "/site_admin/applications");
         } catch (const ApiError& e) {
@@ -3069,14 +3076,14 @@ namespace Ludwig {
           auto txn = self->controller->open_read_txn();
           ADMIN_PAGE("/site_admin/applications", Applications, write_site_admin_applications_list(*self->controller, txn, c.login, {}, e.message), c)
         }
-      })
-      .post("/site_admin/invites/new", [self](auto* rsp, auto _c, auto) -> Coro {
+      });
+      r.post("/site_admin/invites/new", [self](auto* rsp, auto _c, auto) -> Coro {
         auto& c = co_await _c;
         require_admin(self, c);
-        self->controller->create_site_invite(c.logged_in_user_id);
+        self->controller->create_site_invite(WRITE_TXN, c.logged_in_user_id);
         write_redirect_back(rsp, "/site_admin/invites");
-      })
-      .any("/*", [](auto*, auto*, auto&) {
+      });
+      r.any("/*", [](auto*, auto*, auto&) {
         die(404, "Page not found");
       });
     }

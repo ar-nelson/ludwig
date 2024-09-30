@@ -28,8 +28,8 @@ namespace Ludwig {
     auto http_fetch(HttpClientRequest& req) -> Async<AsioHttpClientResponse*>;
     auto check_for_unsafe_local_requests(const asio::ip::basic_resolver_results<asio::ip::tcp>& endpoint_iterator, const Url& url) -> void;
   protected:
-    auto fetch(HttpClientRequest&& req) -> Async<std::unique_ptr<const HttpClientResponse>>;
-    auto fetch(HttpClientRequest&& req, HttpResponseCallback&& callback) -> void;
+    Async<std::unique_ptr<const HttpClientResponse>> fetch(HttpClientRequest&& req) override;
+    void fetch(HttpClientRequest&& req, HttpResponseCallback&& callback) override;
   public:
     AsioHttpClient(
       std::shared_ptr<asio::io_context> io,

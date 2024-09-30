@@ -1,6 +1,7 @@
 #pragma once
-#include "util/web.h++"
+#include "services/db.h++"
 #include "util/json.h++"
+#include "util/web.h++"
 #include <atomic>
 #include <concepts>
 #include <coroutine>
@@ -194,7 +195,7 @@ namespace Ludwig {
   protected:
     std::mutex mutex;
     bool canceled;
-    void set_value(T&& v) {
+    void set_value(T&& v) noexcept {
       {
         std::lock_guard<std::mutex> lock(mutex);
         if (handle.address() == nullptr) {
@@ -212,7 +213,7 @@ namespace Ludwig {
     }
   public:
     using result_type = T;
-    void cancel() noexcept override {
+    virtual void cancel() noexcept override {
       {
         std::lock_guard<std::mutex> lock(mutex);
         canceled = true;
@@ -235,6 +236,22 @@ namespace Ludwig {
       handle = h;
       h.promise().ctx.current_awaiter = this;
       return true;
+    }
+  };
+
+  template <IsRequestContext Ctx>
+  class WriteTxnAwaiter : public RouterAwaiter<WriteTxn, Ctx> {
+    std::optional<DB::WriteCancel> canceler;
+  public:
+    WriteTxnAwaiter(DB& db, WritePriority priority = WritePriority::Medium) : canceler(
+      db.open_write_txn_async([this](auto txn, bool) noexcept {
+        this->set_value(std::move(txn));
+      }, priority)
+    ) {}
+
+    void cancel() noexcept override {
+      if (canceler) canceler->cancel();
+      RouterAwaiter<WriteTxn, Ctx>::cancel();
     }
   };
 

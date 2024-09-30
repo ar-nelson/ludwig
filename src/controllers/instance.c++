@@ -346,14 +346,14 @@ namespace Ludwig {
 
     // Don't allow logins as the temp admin user after setup is done
     if (!user && site_detail()->setup_done) {
-      auto txn = db->open_write_txn();
+      auto txn = db->open_write_txn_sync();
       txn.delete_session(session_id);
       txn.commit();
       return {};
     }
 
     if (session.remember() && now_t() - uint_to_timestamp(session.created_at()) >= hours(24)) {
-      auto txn = db->open_write_txn();
+      auto txn = db->open_write_txn_sync();
       const auto [id, expiration] = txn.create_session(
         user,
         ip,
@@ -368,6 +368,7 @@ namespace Ludwig {
     return { { .user_id = user, .session_id = session_id, .expiration = uint_to_timestamp(session.expires_at()) } };
   }
   auto InstanceController::login(
+    WriteTxn txn,
     string_view username_or_email,
     SecretString&& password,
     string_view ip,
@@ -380,7 +381,6 @@ namespace Ludwig {
     const Salt* salt;
     uint64_t user_id = 0;
 
-    auto txn = db->open_write_txn();
     const bool is_first_run_admin =
       first_run_admin_password &&
       !site_detail()->setup_done &&
@@ -1141,10 +1141,9 @@ namespace Ludwig {
     return out;
   }
 
-  auto InstanceController::first_run_setup(FirstRunSetup&& update) -> void {
+  auto InstanceController::first_run_setup(WriteTxn txn, FirstRunSetup&& update) -> void {
     update.validate();
     const auto now = now_s();
-    auto txn = db->open_write_txn();
     if (!txn.get_setting_int(SettingsKey::setup_done)) {
       if (!txn.get_setting_int(SettingsKey::next_id)) txn.set_setting(SettingsKey::next_id, ID_MIN_USER);
 
@@ -1267,41 +1266,38 @@ namespace Ludwig {
       .home_page_type_set = !!txn.get_setting_int(SettingsKey::home_page_type),
     };
   }
-  auto InstanceController::update_site(const SiteUpdate& update, optional<uint64_t> as_user) -> void {
+  auto InstanceController::update_site(WriteTxn txn, const SiteUpdate& update, optional<uint64_t> as_user) -> void {
     update.validate();
-    {
-      auto txn = db->open_write_txn();
-      if (as_user && !can_change_site_settings(LocalUserDetail::get_login(txn, *as_user))) {
-        throw ApiError("User does not have permission to change site settings", 403);
-      }
-      if (const auto v = update.name) txn.set_setting(SettingsKey::name, *v);
-      if (const auto v = update.description) txn.set_setting(SettingsKey::description, *v);
-      if (const auto v = update.icon_url) txn.set_setting(SettingsKey::icon_url, v->value_or(""));
-      if (const auto v = update.banner_url) txn.set_setting(SettingsKey::banner_url, v->value_or(""));
-      if (const auto v = update.application_question) txn.set_setting(SettingsKey::application_question, v->value_or(""));
-      if (const auto v = update.post_max_length) txn.set_setting(SettingsKey::post_max_length, *v);
-      if (const auto v = update.remote_post_max_length) txn.set_setting(SettingsKey::remote_post_max_length, *v);
-      if (const auto v = update.home_page_type) txn.set_setting(SettingsKey::home_page_type, (uint64_t)*v);
-      if (const auto v = update.votes_enabled) txn.set_setting(SettingsKey::votes_enabled, *v);
-      if (const auto v = update.downvotes_enabled) txn.set_setting(SettingsKey::downvotes_enabled, *v);
-      if (const auto v = update.javascript_enabled) txn.set_setting(SettingsKey::javascript_enabled, *v);
-      if (const auto v = update.infinite_scroll_enabled) txn.set_setting(SettingsKey::infinite_scroll_enabled, *v);
-      if (const auto v = update.board_creation_admin_only) txn.set_setting(SettingsKey::board_creation_admin_only, *v);
-      if (const auto v = update.registration_enabled) txn.set_setting(SettingsKey::registration_enabled, *v);
-      if (const auto v = update.registration_application_required) txn.set_setting(SettingsKey::registration_application_required, *v);
-      if (const auto v = update.registration_invite_required) txn.set_setting(SettingsKey::registration_invite_required, *v);
-      if (const auto v = update.invite_admin_only) txn.set_setting(SettingsKey::invite_admin_only, *v);
-      if (const auto v = update.color_accent) txn.set_setting(SettingsKey::color_accent, *v);
-      if (const auto v = update.color_accent_dim) txn.set_setting(SettingsKey::color_accent_dim, *v);
-      if (const auto v = update.color_accent_hover) txn.set_setting(SettingsKey::color_accent_hover, *v);
-      txn.set_setting(SettingsKey::updated_at, now_s());
-      txn.commit();
-      db->debug_print_settings();
+    if (as_user && !can_change_site_settings(LocalUserDetail::get_login(txn, *as_user))) {
+      throw ApiError("User does not have permission to change site settings", 403);
     }
+    if (const auto v = update.name) txn.set_setting(SettingsKey::name, *v);
+    if (const auto v = update.description) txn.set_setting(SettingsKey::description, *v);
+    if (const auto v = update.icon_url) txn.set_setting(SettingsKey::icon_url, v->value_or(""));
+    if (const auto v = update.banner_url) txn.set_setting(SettingsKey::banner_url, v->value_or(""));
+    if (const auto v = update.application_question) txn.set_setting(SettingsKey::application_question, v->value_or(""));
+    if (const auto v = update.post_max_length) txn.set_setting(SettingsKey::post_max_length, *v);
+    if (const auto v = update.remote_post_max_length) txn.set_setting(SettingsKey::remote_post_max_length, *v);
+    if (const auto v = update.home_page_type) txn.set_setting(SettingsKey::home_page_type, (uint64_t)*v);
+    if (const auto v = update.votes_enabled) txn.set_setting(SettingsKey::votes_enabled, *v);
+    if (const auto v = update.downvotes_enabled) txn.set_setting(SettingsKey::downvotes_enabled, *v);
+    if (const auto v = update.javascript_enabled) txn.set_setting(SettingsKey::javascript_enabled, *v);
+    if (const auto v = update.infinite_scroll_enabled) txn.set_setting(SettingsKey::infinite_scroll_enabled, *v);
+    if (const auto v = update.board_creation_admin_only) txn.set_setting(SettingsKey::board_creation_admin_only, *v);
+    if (const auto v = update.registration_enabled) txn.set_setting(SettingsKey::registration_enabled, *v);
+    if (const auto v = update.registration_application_required) txn.set_setting(SettingsKey::registration_application_required, *v);
+    if (const auto v = update.registration_invite_required) txn.set_setting(SettingsKey::registration_invite_required, *v);
+    if (const auto v = update.invite_admin_only) txn.set_setting(SettingsKey::invite_admin_only, *v);
+    if (const auto v = update.color_accent) txn.set_setting(SettingsKey::color_accent, *v);
+    if (const auto v = update.color_accent_dim) txn.set_setting(SettingsKey::color_accent_dim, *v);
+    if (const auto v = update.color_accent_hover) txn.set_setting(SettingsKey::color_accent_hover, *v);
+    txn.set_setting(SettingsKey::updated_at, now_s());
+    txn.commit();
+    db->debug_print_settings();
     {
-      auto txn = db->open_read_txn();
+      auto rtxn = db->open_read_txn();
       auto new_detail = new SiteDetail;
-      *new_detail = SiteDetail::get(txn);
+      *new_detail = SiteDetail::get(rtxn);
       auto old_detail = cached_site_detail.exchange(new_detail);
       if (old_detail) delete old_detail;
     }
@@ -1377,6 +1373,7 @@ namespace Ludwig {
     return user_id;
   }
   auto InstanceController::register_local_user(
+    WriteTxn txn,
     string_view username,
     string_view email,
     SecretString&& password,
@@ -1397,7 +1394,6 @@ namespace Ludwig {
         throw ApiError("An invite code is required to register", 400);
       }
     }
-    auto txn = db->open_write_txn();
     const auto user_id = create_local_user_internal(
       txn, username, email, std::move(password), false, IsApproved::No, IsAdmin::No, invite_id
     );
@@ -1443,6 +1439,7 @@ namespace Ludwig {
     return { user_id, approved };
   }
   auto InstanceController::create_local_user(
+    WriteTxn txn,
     string_view username,
     optional<string_view> email,
     SecretString&& password,
@@ -1451,7 +1448,6 @@ namespace Ludwig {
     IsApproved approved,
     IsAdmin admin
   ) -> uint64_t {
-    auto txn = db->open_write_txn();
     auto user_id = create_local_user_internal(
       txn, username, email, std::move(password), is_bot, approved, admin, invite
     );
@@ -1459,8 +1455,12 @@ namespace Ludwig {
     return user_id;
   }
 
-  auto InstanceController::update_local_user(uint64_t id, optional<uint64_t> as_user, const LocalUserUpdate& update) -> void {
-    auto txn = db->open_write_txn();
+  auto InstanceController::update_local_user(
+    WriteTxn txn,
+    uint64_t id,
+    optional<uint64_t> as_user,
+    const LocalUserUpdate& update
+  ) -> void {
     const auto login = LocalUserDetail::get_login(txn, as_user);
     const auto detail = LocalUserDetail::get(txn, id, login);
     if (login && !detail.can_change_settings(login)) {
@@ -1513,9 +1513,12 @@ namespace Ludwig {
     }
     txn.commit();
   }
-  auto InstanceController::approve_local_user_application(uint64_t user_id, optional<uint64_t> as_user) -> void {
+  auto InstanceController::approve_local_user_application(
+    WriteTxn txn,
+    uint64_t user_id,
+    optional<uint64_t> as_user
+  ) -> void {
     FlatBufferBuilder fbb;
-    auto txn = db->open_write_txn();
     if (as_user && !LocalUserDetail::get_login(txn, *as_user).local_user().admin()) {
       throw ApiError("Only admins can approve user applications", 403);
     }
@@ -1537,8 +1540,11 @@ namespace Ludwig {
     }
     txn.commit();
   }
-  auto InstanceController::reject_local_user_application(uint64_t user_id, std::optional<uint64_t> as_user) -> void {
-    auto txn = db->open_write_txn();
+  auto InstanceController::reject_local_user_application(
+    WriteTxn txn,
+    uint64_t user_id,
+    std::optional<uint64_t> as_user
+  ) -> void {
     if (as_user && !LocalUserDetail::get_login(txn, *as_user).local_user().admin()) {
       throw ApiError("Only admins can reject user applications", 403);
     }
@@ -1550,23 +1556,35 @@ namespace Ludwig {
     txn.delete_user(user_id);
     txn.commit();
   }
-  auto InstanceController::reset_password(uint64_t user_id) -> string {
+  auto InstanceController::reset_password(WriteTxn txn, uint64_t user_id) -> string {
     // TODO: Reset password
     throw ApiError("Reset password is not yet supported", 500);
   }
-  auto InstanceController::change_password(uint64_t user_id, SecretString&& new_password) -> void {
-    auto txn = db->open_write_txn();
+  auto InstanceController::change_password(
+    WriteTxn txn,
+    uint64_t user_id,
+    SecretString&& new_password
+  ) -> void {
     const auto user = LocalUserDetail::get_login(txn, user_id);
     FlatBufferBuilder fbb;
     fbb.Finish(patch_local_user(fbb, user.local_user(), { .password = std::move(new_password) }));
     txn.set_local_user(user_id, fbb.GetBufferSpan());
+    txn.commit();
   }
-  auto InstanceController::change_password(string_view reset_token, SecretString&& new_password) -> string {
+  auto InstanceController::change_password(
+    WriteTxn txn,
+    string_view reset_token,
+    SecretString&& new_password
+  ) -> string {
     // TODO: Reset password
     throw ApiError("Reset password is not yet supported", 500);
   }
-  auto InstanceController::change_password(uint64_t user_id, SecretString&& old_password, SecretString&& new_password) -> void {
-    auto txn = db->open_write_txn();
+  auto InstanceController::change_password(
+    WriteTxn txn,
+    uint64_t user_id,
+    SecretString&& old_password,
+    SecretString&& new_password
+  ) -> void {
     const auto user = LocalUserDetail::get_login(txn, user_id);
     uint8_t hash[32];
     hash_password(std::move(old_password), user.local_user().password_salt()->bytes()->Data(), hash);
@@ -1577,10 +1595,10 @@ namespace Ludwig {
     FlatBufferBuilder fbb;
     fbb.Finish(patch_local_user(fbb, user.local_user(), { .password = std::move(new_password) }));
     txn.set_local_user(user_id, fbb.GetBufferSpan());
+    txn.commit();
   }
-  auto InstanceController::create_site_invite(optional<uint64_t> as_user) -> uint64_t {
+  auto InstanceController::create_site_invite(WriteTxn txn, optional<uint64_t> as_user) -> uint64_t {
     using namespace chrono;
-    auto txn = db->open_write_txn();
     if (const auto user = LocalUserDetail::get_login(txn, as_user)) {
       if (site_detail()->invite_admin_only && !user->local_user().admin()) {
         throw ApiError("Only admins can create invite codes", 403);
@@ -1594,6 +1612,7 @@ namespace Ludwig {
     return id;
   }
   auto InstanceController::create_local_board(
+    WriteTxn txn,
     uint64_t owner,
     string_view name,
     optional<string_view> display_name,
@@ -1608,7 +1627,6 @@ namespace Ludwig {
     if (display_name && display_name->length() > 1024) {
       throw ApiError("Display name cannot be longer than 1024 bytes", 400);
     }
-    auto txn = db->open_write_txn();
     if (txn.get_board_id_by_name(name)) {
       throw ApiError("A board with this name already exists on this instance", 409);
     }
@@ -1648,8 +1666,12 @@ namespace Ludwig {
     txn.commit();
     return board_id;
   }
-  auto InstanceController::update_local_board(uint64_t id, optional<uint64_t> as_user, const LocalBoardUpdate& update) -> void {
-    auto txn = db->open_write_txn();
+  auto InstanceController::update_local_board(
+    WriteTxn txn,
+    uint64_t id,
+    optional<uint64_t> as_user,
+    const LocalBoardUpdate& update
+  ) -> void {
     const auto login = LocalUserDetail::get_login(txn, as_user);
     const auto detail = LocalBoardDetail::get(txn, id, login);
     if (login && !detail.can_change_settings(login)) {
@@ -1750,6 +1772,7 @@ namespace Ludwig {
     return thread_id;
   }
   auto InstanceController::create_thread(
+    WriteTxn txn,
     uint64_t author,
     uint64_t board,
     optional<string_view> remote_post_url,
@@ -1770,20 +1793,17 @@ namespace Ludwig {
         text_content_markdown = {};
       }
     }
-    uint64_t thread_id;
-    {
-      auto txn = db->open_write_txn();
-      thread_id = create_thread_internal(
-        txn, author, board, remote_post_url, remote_activity_url, created_at, updated_at,
-        title, submission_url, text_content_markdown, content_warning
-      );
-      txn.commit();
-    }
+    uint64_t thread_id = create_thread_internal(
+      txn, author, board, remote_post_url, remote_activity_url, created_at, updated_at,
+      title, submission_url, text_content_markdown, content_warning
+    );
+    txn.commit();
     event_bus->dispatch(Event::UserStatsUpdate, author);
     event_bus->dispatch(Event::BoardStatsUpdate, board);
     return thread_id;
   }
   auto InstanceController::create_local_thread(
+    WriteTxn txn,
     uint64_t author,
     uint64_t board,
     string_view title,
@@ -1800,26 +1820,26 @@ namespace Ludwig {
         text_content_markdown = {};
       }
     }
-    uint64_t thread_id;
-    {
-      auto txn = db->open_write_txn();
-      const auto login = LocalUserDetail::get_login(txn, author);
-      if (!BoardDetail::get(txn, board, login).can_create_thread(login)) {
-        throw ApiError("User cannot create threads in this board", 403);
-      }
-      thread_id = create_thread_internal(
-        txn, author, board, {}, {}, now_t(), {},
-        title, submission_url, text_content_markdown, content_warning
-      );
-      txn.set_vote(author, thread_id, Vote::Upvote);
-      txn.commit();
+    const auto login = LocalUserDetail::get_login(txn, author);
+    if (!BoardDetail::get(txn, board, login).can_create_thread(login)) {
+      throw ApiError("User cannot create threads in this board", 403);
     }
+    uint64_t thread_id = create_thread_internal(
+      txn, author, board, {}, {}, now_t(), {},
+      title, submission_url, text_content_markdown, content_warning
+    );
+    txn.set_vote(author, thread_id, Vote::Upvote);
+    txn.commit();
     event_bus->dispatch(Event::UserStatsUpdate, author);
     event_bus->dispatch(Event::BoardStatsUpdate, board);
     return thread_id;
   }
-  auto InstanceController::update_thread(uint64_t id, optional<uint64_t> as_user, const ThreadUpdate& update) -> void {
-    auto txn = db->open_write_txn();
+  auto InstanceController::update_thread(
+    WriteTxn txn,
+    uint64_t id,
+    optional<uint64_t> as_user,
+    const ThreadUpdate& update
+  ) -> void {
     const auto login = LocalUserDetail::get_login(txn, as_user);
     const auto detail = ThreadDetail::get(txn, id, login);
     if (login && detail.thread().instance()) {
@@ -1891,6 +1911,7 @@ namespace Ludwig {
     return comment_id;
   }
   auto InstanceController::create_comment(
+    WriteTxn txn,
     uint64_t author,
     uint64_t parent,
     optional<string_view> remote_post_url,
@@ -1904,7 +1925,6 @@ namespace Ludwig {
     if (text_content_markdown.length() > site->remote_post_max_length) {
       throw ApiError(format("Comment text content cannot be larger than {:d} bytes"_cf, site->remote_post_max_length), 400);
     }
-    auto txn = db->open_write_txn();
     optional<ThreadDetail> parent_thread;
     try {
       parent_thread = ThreadDetail::get(txn, parent, {});
@@ -1925,6 +1945,7 @@ namespace Ludwig {
     return comment_id;
   }
   auto InstanceController::create_local_comment(
+    WriteTxn txn,
     uint64_t author,
     uint64_t parent,
     string_view text_content_markdown,
@@ -1934,7 +1955,6 @@ namespace Ludwig {
     if (text_content_markdown.length() > site->post_max_length) {
       throw ApiError(format("Comment text content cannot be larger than {:d} bytes"_cf, site->post_max_length), 400);
     }
-    auto txn = db->open_write_txn();
     const auto login = LocalUserDetail::get_login(txn, author);
     optional<ThreadDetail> parent_thread;
     optional<CommentDetail> parent_comment;
@@ -1960,8 +1980,12 @@ namespace Ludwig {
     if (parent != parent_thread->id) event_bus->dispatch(Event::PostStatsUpdate, parent);
     return comment_id;
   }
-  auto InstanceController::update_comment(uint64_t id, optional<uint64_t> as_user, const CommentUpdate& update) -> void {
-    auto txn = db->open_write_txn();
+  auto InstanceController::update_comment(
+    WriteTxn txn,
+    uint64_t id,
+    optional<uint64_t> as_user,
+    const CommentUpdate& update
+  ) -> void {
     const auto login = LocalUserDetail::get_login(txn, as_user);
     const auto detail = CommentDetail::get(txn, id, login);
     if (login && detail.comment().instance()) {
@@ -1982,8 +2006,12 @@ namespace Ludwig {
     txn.set_comment(id, fbb.GetBufferSpan());
     txn.commit();
   }
-  auto InstanceController::vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void {
-    auto txn = db->open_write_txn();
+  auto InstanceController::vote(
+    WriteTxn txn,
+    uint64_t user_id,
+    uint64_t post_id,
+    Vote vote
+  ) -> void {
     if (!txn.get_user(user_id)) throw ApiError("User does not exist", 410);
     const auto thread = txn.get_thread(post_id);
     const auto comment = !thread ? txn.get_comment(post_id) : nullopt;
@@ -1995,8 +2023,12 @@ namespace Ludwig {
     event_bus->dispatch(Event::UserStatsUpdate, op);
     event_bus->dispatch(Event::PostStatsUpdate, post_id);
   }
-  auto InstanceController::subscribe(uint64_t user_id, uint64_t board_id, bool subscribed) -> void {
-    auto txn = db->open_write_txn();
+  auto InstanceController::subscribe(
+    WriteTxn txn,
+    uint64_t user_id,
+    uint64_t board_id,
+    bool subscribed
+  ) -> void {
     if (!txn.get_user(user_id)) throw ApiError("User does not exist", 410);
     if (!txn.get_board(board_id)) throw ApiError("Board does not exist", 410);
     txn.set_subscription(user_id, board_id, subscribed);
@@ -2005,30 +2037,46 @@ namespace Ludwig {
     event_bus->dispatch(Event::UserStatsUpdate, user_id);
     event_bus->dispatch(Event::BoardStatsUpdate, board_id);
   }
-  auto InstanceController::save_post(uint64_t user_id, uint64_t post_id, bool saved) -> void {
-    auto txn = db->open_write_txn();
+  auto InstanceController::save_post(
+    WriteTxn txn,
+    uint64_t user_id,
+    uint64_t post_id,
+    bool saved
+  ) -> void {
     if (!txn.get_local_user(user_id)) throw ApiError("User does not exist", 410);
     if (!txn.get_post_stats(post_id)) throw ApiError("Post does not exist", 410);
     txn.set_save(user_id, post_id, saved);
     txn.commit();
   }
-  auto InstanceController::hide_post(uint64_t user_id, uint64_t post_id, bool hidden) -> void {
-    auto txn = db->open_write_txn();
+  auto InstanceController::hide_post(
+    WriteTxn txn,
+    uint64_t user_id,
+    uint64_t post_id,
+    bool hidden
+  ) -> void {
     if (!txn.get_local_user(user_id)) throw ApiError("User does not exist", 410);
     if (!txn.get_post_stats(post_id)) throw ApiError("Post does not exist", 410);
     txn.set_hide_post(user_id, post_id, hidden);
     txn.commit();
   }
-  auto InstanceController::hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden) -> void {
-    auto txn = db->open_write_txn();
+  auto InstanceController::hide_user(
+    WriteTxn txn,
+    uint64_t user_id,
+    uint64_t hidden_user_id,
+    bool hidden
+  ) -> void {
     if (!txn.get_local_user(user_id) || !txn.get_user(hidden_user_id)) {
       throw ApiError("User does not exist", 410);
     }
     txn.set_hide_user(user_id, hidden_user_id, hidden);
     txn.commit();
   }
-  auto InstanceController::hide_board(uint64_t user_id, uint64_t board_id, bool hidden) -> void {
-    auto txn = db->open_write_txn();
+  auto InstanceController::hide_board(
+    WriteTxn txn,
+    uint64_t user_id,
+    uint64_t board_id,
+    bool hidden
+  ) -> void {
     if (!txn.get_local_user(user_id)) throw ApiError("User does not exist", 410);
     if (!txn.get_post_stats(board_id)) throw ApiError("Board does not exist", 410);
     txn.set_hide_post(user_id, board_id, hidden);

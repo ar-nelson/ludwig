@@ -1,5 +1,4 @@
 #include "zstd_db_dump.h++"
-#include <atomic>
 #include <zstd.h>
 
 using std::copy, std::make_unique, std::runtime_error, std::shared_ptr, std::span, std::string_view, std::unique_ptr;
@@ -11,14 +10,14 @@ namespace Ludwig {
     size_t file_size,
     std::optional<std::shared_ptr<SearchEngine>> search,
     size_t map_size_mb
-  ) -> DB {
+  ) -> void {
     unique_ptr<ZSTD_DCtx, void(*)(ZSTD_DCtx*)> dctx(ZSTD_createDCtx(), [](auto* c) { ZSTD_freeDCtx(c); });
     if (dctx == nullptr) throw runtime_error("zstd init failed");
     const size_t in_buf_size = ZSTD_DStreamInSize(), out_buf_size = ZSTD_DStreamOutSize();
     const auto in_buf = make_unique<uint8_t[]>(in_buf_size), out_buf = make_unique<uint8_t[]>(out_buf_size);
     size_t out_pos = 0, out_max = 0, total_read = 0;
     ZSTD_inBuffer input { in_buf.get(), 0, 0 };
-    return DB(db_filename, [&](uint8_t* buf, size_t expected) -> size_t {
+    DB::import(db_filename, [&](uint8_t* buf, size_t expected) -> size_t {
       uint8_t* buf_offset = buf;
       size_t remaining_expected = expected;
       do {

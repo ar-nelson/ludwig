@@ -7,6 +7,7 @@
 #include <atomic>
 #include <__generator.hpp>
 #include <openssl/evp.h>
+#include <queue>
 
 namespace Ludwig {
   static inline auto karma_uint(int64_t karma) -> uint64_t {
@@ -76,9 +77,20 @@ namespace Ludwig {
     }
   };
 
+  enum class WritePriority : uint8_t {
+    Low, Medium, High
+  };
+
   class ReadTxn;
   class ReadTxnImpl;
   class WriteTxn;
+
+  template <typename Fn>
+  concept DbWriteCallback = requires (Fn&& fn, WriteTxn&& txn, bool async) {
+    std::invocable<Fn, WriteTxn, bool>;
+    { fn(std::move(txn), async) } -> std::same_as<void>;
+    //requires noexcept(fn(std::move(txn), async));
+  };
 
   class DBError : public std::runtime_error {
   public:
@@ -88,27 +100,52 @@ namespace Ludwig {
 
   class DB {
   private:
+    using WriteQueueFn = std::shared_ptr<uWS::MoveOnlyFunction<void (WriteTxn, bool)>>;
+    struct WriteQueueEntry;
+    static auto write_queue_cmp(const WriteQueueEntry& a, const WriteQueueEntry& b) -> bool;
+
     size_t map_size;
     MDB_env* env;
     MDB_dbi dbis[128];
     std::atomic<uint8_t> session_counter;
-    auto init_env(const char* filename, MDB_txn** txn) -> int;
+    std::atomic<uint64_t> next_write_queue_id;
+    std::binary_semaphore write_lock;
+    std::mutex write_queue_lock;
+    std::vector<WriteQueueEntry> write_queue_vec;
+    std::priority_queue<WriteQueueEntry, std::vector<WriteQueueEntry>, decltype(write_queue_cmp)*> write_queue;
+    auto init_env(const char* filename, MDB_txn** txn, bool fast) -> int;
+    auto next_write() noexcept -> void;
   public:
-    DB(const char* filename, size_t map_size_mb = 1024);
     DB(
+      const char* filename,
+      size_t map_size_mb = 1024,
+      bool move_fast_and_break_things = false
+    );
+    DB(const DB&) = delete;
+    auto operator=(const DB&) = delete;
+    DB(DB&&) = delete;
+    auto operator=(DB&&) = delete;
+    ~DB();
+
+    static auto import(
       const char* filename,
       std::function<size_t (uint8_t*, size_t)> read,
       std::optional<std::shared_ptr<SearchEngine>> search = {},
       size_t map_size_mb = 1024
-    );
-    DB(const DB&) = delete;
-    auto operator=(const DB&) = delete;
-    DB(DB&&);
-    auto operator=(DB&&) -> DB&;
-    ~DB();
+    ) -> void;
+
+    class WriteCancel : public Cancelable {
+      DB* db;
+      uint64_t id;
+    public:
+      WriteCancel(DB* db, uint64_t id) : db(db), id(id) {}
+      void cancel() noexcept override;
+    };
 
     auto open_read_txn() -> ReadTxnImpl;
-    auto open_write_txn() -> WriteTxn;
+    auto open_write_txn_sync() -> WriteTxn;
+    template <DbWriteCallback Fn>
+    auto open_write_txn_async(Fn callback, WritePriority priority = WritePriority::Medium) -> std::optional<WriteCancel>;
     auto debug_print_settings() -> void;
 
     friend class ReadTxn;
@@ -242,21 +279,25 @@ namespace Ludwig {
 
   class WriteTxn : public ReadTxn {
   protected:
-    bool committed = false;
+    bool committed = false, holding_lock;
     auto delete_child_comment(uint64_t id, uint64_t board_id) -> uint64_t;
 
-    WriteTxn(DB& db): ReadTxn(db) {
+    WriteTxn(DB& db, bool holding_lock): ReadTxn(db), holding_lock(holding_lock) {
       if (auto err = mdb_txn_begin(db.env, nullptr, 0, &txn)) {
         throw DBError("Failed to open write transaction", err);
       }
     };
   public:
-    WriteTxn(WriteTxn&& from) : ReadTxn(std::move(from)), committed(from.committed) {}
+    WriteTxn(WriteTxn&& from) : ReadTxn(std::move(from)), committed(from.committed), holding_lock(from.holding_lock) {
+      from.committed = true;
+      from.holding_lock = false;
+    }
     ~WriteTxn() {
       if (!committed) {
         spdlog::warn("Aborting uncommitted write transaction");
         if (txn != nullptr) mdb_txn_abort(txn);
       }
+      if (holding_lock) db.next_write();
     }
 
     auto next_id() -> uint64_t;
@@ -273,25 +314,25 @@ namespace Ludwig {
     auto delete_session(uint64_t session) -> void;
 
     auto create_user(flatbuffers::span<uint8_t> span) -> uint64_t;
-    auto set_user(uint64_t id, flatbuffers::span<uint8_t> span) -> void;
-    auto set_local_user(uint64_t id, flatbuffers::span<uint8_t> span) -> void;
+    auto set_user(uint64_t id, flatbuffers::span<uint8_t> span, bool sequential = false) -> void;
+    auto set_local_user(uint64_t id, flatbuffers::span<uint8_t> span, bool sequential = false) -> void;
     auto delete_user(uint64_t id) -> bool;
 
     auto create_board(flatbuffers::span<uint8_t> span) -> uint64_t;
-    auto set_board(uint64_t id, flatbuffers::span<uint8_t> span) -> void;
-    auto set_local_board(uint64_t id, flatbuffers::span<uint8_t> span) -> void;
+    auto set_board(uint64_t id, flatbuffers::span<uint8_t> span, bool sequential = false) -> void;
+    auto set_local_board(uint64_t id, flatbuffers::span<uint8_t> span, bool sequential = false) -> void;
     auto delete_board(uint64_t id) -> bool;
     auto set_subscription(uint64_t user_id, uint64_t board_id, bool subscribed) -> void;
 
     auto create_thread(flatbuffers::span<uint8_t> span) -> uint64_t;
-    auto set_thread(uint64_t id, flatbuffers::span<uint8_t> span) -> void;
+    auto set_thread(uint64_t id, flatbuffers::span<uint8_t> span, bool sequential = false) -> void;
     auto delete_thread(uint64_t id) -> bool;
 
     auto create_comment(flatbuffers::span<uint8_t> span) -> uint64_t;
-    auto set_comment(uint64_t id, flatbuffers::span<uint8_t> span) -> void;
+    auto set_comment(uint64_t id, flatbuffers::span<uint8_t> span, bool sequential = false) -> void;
     auto delete_comment(uint64_t id) -> uint64_t;
 
-    auto set_vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;
+    auto set_vote(uint64_t user_id, uint64_t post_id, Vote vote, bool sequential = false) -> void;
     auto set_save(uint64_t user_id, uint64_t post_id, bool saved) -> void;
     auto set_hide_post(uint64_t user_id, uint64_t post_id, bool hidden) -> void;
     auto set_hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden) -> void;
@@ -314,11 +355,29 @@ namespace Ludwig {
     friend class DB;
   };
 
+  struct DB::WriteQueueEntry {
+    WritePriority priority;
+    uint64_t id;
+    WriteQueueFn callback;
+  };
+
   inline auto DB::open_read_txn() -> ReadTxnImpl {
     return ReadTxnImpl(*this);
   }
 
-  inline auto DB::open_write_txn() -> WriteTxn {
-    return WriteTxn(*this);
+  inline auto DB::open_write_txn_sync() -> WriteTxn {
+    return WriteTxn(*this, false);
+  }
+
+  template <DbWriteCallback Fn>
+  inline auto DB::open_write_txn_async(Fn fn, WritePriority priority) -> std::optional<WriteCancel> {
+    if (write_lock.try_acquire()) {
+      fn(WriteTxn(*this, true), false);
+      return {};
+    }
+    std::lock_guard<std::mutex> g(write_queue_lock);
+    auto id = next_write_queue_id.fetch_add(1, std::memory_order_acq_rel);
+    write_queue.emplace(priority, id, std::make_shared<uWS::MoveOnlyFunction<void (WriteTxn, bool)>>(fn));
+    return WriteCancel(this, id);
   }
 }

@@ -9,10 +9,11 @@
 #include <openssl/rand.h>
 #include "lmdb.h"
 #include "simdjson.h"
+#include "uWebSockets/MoveOnlyFunction.h"
 #include "util/base64.h++"
 #include "util/lambda_macros.h++"
 
-using std::function, std::min, std::nullopt, std::runtime_error, std::optional,
+using std::function, std::lock_guard, std::min, std::mutex, std::nullopt, std::runtime_error, std::optional,
     std::pair, std::shared_ptr, std::string, std::string_view, std::unique_ptr,
     std::vector, flatbuffers::FlatBufferBuilder, flatbuffers::span,
     flatbuffers::Verifier, flatbuffers::GetRoot;
@@ -187,13 +188,13 @@ namespace Ludwig {
     }
   };
 
-  auto DB::init_env(const char* filename, MDB_txn** txn) -> int {
+  auto DB::init_env(const char* filename, MDB_txn** txn, bool fast) -> int {
     int err;
     if ((err =
       mdb_env_create(&env) ||
       mdb_env_set_maxdbs(env, 128) ||
       mdb_env_set_mapsize(env, map_size) ||
-      mdb_env_open(env, filename, MDB_NOSUBDIR | MDB_NOSYNC, 0600) ||
+      mdb_env_open(env, filename, MDB_NOSUBDIR | MDB_NOMEMINIT | (fast ? MDB_NOSYNC : MDB_NOMETASYNC), 0600) ||
       mdb_txn_begin(env, nullptr, 0, txn)
     )) return err;
 
@@ -269,10 +270,13 @@ namespace Ludwig {
 
   static constexpr size_t DUMP_ENTRY_MAX_SIZE = 4 * MiB;
 
-  DB::DB(const char* filename, size_t map_size_mb) :
-    map_size(map_size_mb * MiB - (map_size_mb * MiB) % (size_t)sysconf(_SC_PAGESIZE)) {
+  DB::DB(const char* filename, size_t map_size_mb, bool move_fast_and_break_things) :
+    map_size(map_size_mb * MiB - (map_size_mb * MiB) % (size_t)sysconf(_SC_PAGESIZE)),
+    write_lock(1),
+    write_queue(&write_queue_cmp, write_queue_vec)
+  {
     MDB_txn* txn = nullptr;
-    int err = init_env(filename, &txn);
+    int err = init_env(filename, &txn, move_fast_and_break_things);
     if (err) goto die;
 
     MDB_val val;
@@ -287,25 +291,31 @@ namespace Ludwig {
     throw DBError("Failed to open database", err);
   }
 
-  struct DeferDelete {
-    MDB_env* env;
-    const char* filename;
-    bool canceled = false;
+  /*
+  DB::DB(DB&& from) : map_size(from.map_size), env(from.env) {
+    memcpy(dbis, from.dbis, sizeof(dbis));
+    from.env = nullptr;
+  }
 
-    ~DeferDelete() {
-      if (!canceled) {
-        mdb_env_close(env);
-        remove(filename);
-      }
-    }
-  };
+  auto DB::operator=(DB&& from) -> DB& {
+    map_size = from.map_size;
+    env = from.env;
+    from.env = nullptr;
+    memcpy(dbis, from.dbis, sizeof(dbis));
+    return *this;
+  }
+  */
 
-  DB::DB(
+  DB::~DB() {
+    if (env != nullptr) mdb_env_close(env);
+  }
+
+  auto DB::import(
     const char* filename,
     function<size_t (uint8_t*, size_t)> read,
     optional<shared_ptr<SearchEngine>> search,
     size_t map_size_mb
-  ) : map_size(map_size_mb * MiB - (map_size_mb * MiB) % (size_t)sysconf(_SC_PAGESIZE)) {
+  ) -> void {
     {
       struct stat stat_buf;
       if (stat(filename, &stat_buf) == 0) {
@@ -313,18 +323,10 @@ namespace Ludwig {
             string(filename) + " already exists and would be overwritten.");
       }
     }
-    {
-      MDB_txn* txn = nullptr;
-      if (int err = init_env(filename, &txn) || mdb_txn_commit(txn)) {
-        if (txn != nullptr) mdb_txn_abort(txn);
-        mdb_env_close(env);
-        remove(filename);
-        throw DBError("Failed to open database", err);
-      }
-    }
-
-    DeferDelete on_error{ env, filename };
-    auto txn = open_write_txn();
+    bool success = false;
+    Defer deleter([&] { if (!success) remove(filename); });
+    DB db(filename, map_size_mb, true);
+    auto txn = db.open_write_txn_sync();
     auto buf = std::make_unique<uint8_t[]>(DUMP_ENTRY_MAX_SIZE);
     while (read(buf.get(), 4) == 4) {
       const auto len = flatbuffers::GetSizePrefixedBufferLength(buf.get());
@@ -346,25 +348,25 @@ namespace Ludwig {
       const span<uint8_t> span((uint8_t*)entry->data()->data(), entry->data()->size());
       switch (entry->type()) {
         case DumpType::User:
-          txn.set_user(entry->id(), span);
+          txn.set_user(entry->id(), span, true);
           if (search) (*search)->index(entry->id(), *GetRoot<User>(span.data()));
           break;
         case DumpType::LocalUser:
-          txn.set_local_user(entry->id(), span);
+          txn.set_local_user(entry->id(), span, true);
           break;
         case DumpType::Board:
-          txn.set_board(entry->id(), span);
+          txn.set_board(entry->id(), span, true);
           if (search) (*search)->index(entry->id(), *GetRoot<Board>(span.data()));
           break;
         case DumpType::LocalBoard:
-          txn.set_local_board(entry->id(), span);
+          txn.set_local_board(entry->id(), span, true);
           break;
         case DumpType::Thread:
-          txn.set_thread(entry->id(), span);
+          txn.set_thread(entry->id(), span, true);
           if (search) (*search)->index(entry->id(), *GetRoot<Thread>(span.data()));
           break;
         case DumpType::Comment:
-          txn.set_comment(entry->id(), span);
+          txn.set_comment(entry->id(), span, true);
           if (search) (*search)->index(entry->id(), *GetRoot<Comment>(span.data()));
           break;
         case DumpType::SettingRecord: {
@@ -379,14 +381,14 @@ namespace Ludwig {
         case DumpType::UpvoteBatch: {
           const auto batch = GetRoot<VoteBatch>(span.data());
           for (const auto post : *batch->posts()) {
-            txn.set_vote(entry->id(), post, Vote::Upvote);
+            txn.set_vote(entry->id(), post, Vote::Upvote, true);
           }
           break;
         }
         case DumpType::DownvoteBatch: {
           const auto batch = GetRoot<VoteBatch>(span.data());
           for (const auto post : *batch->posts()) {
-            txn.set_vote(entry->id(), post, Vote::Downvote);
+            txn.set_vote(entry->id(), post, Vote::Downvote, true);
           }
           break;
         }
@@ -402,24 +404,7 @@ namespace Ludwig {
       }
     }
     txn.commit();
-    on_error.canceled = true;
-  }
-
-  DB::DB(DB&& from) : map_size(from.map_size), env(from.env) {
-    memcpy(dbis, from.dbis, sizeof(dbis));
-    from.env = nullptr;
-  }
-
-  auto DB::operator=(DB&& from) -> DB& {
-    map_size = from.map_size;
-    env = from.env;
-    from.env = nullptr;
-    memcpy(dbis, from.dbis, sizeof(dbis));
-    return *this;
-  }
-
-  DB::~DB() {
-    if (env != nullptr) mdb_env_close(env);
+    success = true;
   }
 
   template <typename T> static inline auto get_fb(const span<uint8_t>& span) -> const T& {
@@ -474,6 +459,32 @@ namespace Ludwig {
     }
     spdlog::debug("=== END SETTINGS ===");
     mdb_cursor_close(cur);
+  }
+
+  auto DB::write_queue_cmp(const WriteQueueEntry& a, const WriteQueueEntry& b) -> bool {
+    if (a.priority != b.priority) return a.priority < b.priority;
+    return a.id > b.id;
+  }
+
+  auto DB::next_write() noexcept -> void {
+    WriteQueueFn callback = nullptr;
+    {
+      lock_guard<mutex> g(write_queue_lock);
+      if (!write_queue.empty()) {
+        callback = write_queue.top().callback;
+        write_queue.pop();
+      }
+    }
+    if (callback) {
+      (*callback)(WriteTxn(*this, true), true);
+    } else {
+      write_lock.release();
+    }
+  }
+
+  auto DB::WriteCancel::cancel() noexcept -> void {
+    lock_guard<mutex> g(db->write_queue_lock);
+    std::erase_if(db->write_queue_vec, [id = id](const auto& e) { return e.id == id; });
   }
 
   auto ReadTxn::get_setting_str(string_view key) -> string_view {
@@ -1152,14 +1163,14 @@ namespace Ludwig {
   }
   auto WriteTxn::create_user(span<uint8_t> span) -> uint64_t {
     const uint64_t id = next_id();
-    set_user(id, span);
+    set_user(id, span, true);
     return id;
   }
-  auto WriteTxn::set_user(uint64_t id, span<uint8_t> span) -> void {
+  auto WriteTxn::set_user(uint64_t id, span<uint8_t> span, bool sequential) -> void {
     const auto& user = get_fb<User>(span);
     const auto name = user.name()->str();
     const auto created_at = user.created_at();
-    if (const auto old_user_opt = get_user(id)) {
+    if (const auto old_user_opt = sequential ? nullopt : get_user(id)) {
       spdlog::debug("Updating user {:x} (name {})", id, name);
       const auto& old_user = old_user_opt->get();
       if (name != old_user.name()->string_view()) {
@@ -1170,34 +1181,37 @@ namespace Ludwig {
       FlatBufferBuilder fbb;
       fbb.ForceDefaults(true);
       fbb.Finish(CreateUserStats(fbb));
-      db_put(txn, db.dbis[UserStats_User], id, fbb.GetBufferSpan());
+      db_put(txn, db.dbis[UserStats_User], id, fbb.GetBufferSpan(), sequential ? MDB_APPEND : 0);
     }
     db_put(txn, db.dbis[User_Name], name, id);
-    db_put(txn, db.dbis[User_User], id, span);
+    db_put(txn, db.dbis[User_User], id, span, sequential ? MDB_APPEND : 0);
     db_put(txn, db.dbis[UsersNew_Time], created_at, id);
     db_put(txn, db.dbis[UsersNewPosts_Time], Cursor(0), id);
     db_put(txn, db.dbis[UsersMostPosts_Posts], Cursor(0), id);
   }
-  auto WriteTxn::set_local_user(uint64_t id, span<uint8_t> span) -> void {
+  auto WriteTxn::set_local_user(uint64_t id, span<uint8_t> span, bool sequential) -> void {
     const auto& user = get_fb<LocalUser>(span);
     const auto email = opt_str(user.email());
-    const auto is_admin = user.admin();
-    bool admin_changed = true, user_added = false;
-    if (auto old_user_opt = get_local_user(id)) {
-      const auto& old_user = old_user_opt->get();
-      admin_changed = old_user.admin() != is_admin;
-      user_added = true;
-      if (old_user.email() && email != opt_str(old_user.email())) {
-        db_del(txn, db.dbis[User_Email], old_user.email()->string_view());
+    bool user_added = sequential;
+    if (!sequential) {
+      const auto is_admin = user.admin();
+      bool admin_changed = true;
+      if (auto old_user_opt = get_local_user(id)) {
+        const auto& old_user = old_user_opt->get();
+        admin_changed = old_user.admin() != is_admin;
+        user_added = true;
+        if (old_user.email() && email != opt_str(old_user.email())) {
+          db_del(txn, db.dbis[User_Email], old_user.email()->string_view());
+        }
       }
-    }
-    if (admin_changed) {
-      const auto old_admins = get_admin_list();
-      vector admins(old_admins.begin(), old_admins.end());
-      auto existing = std::find(admins.begin(), admins.end(), id);
-      if (user.admin()) { if (existing == admins.end()) admins.push_back(id); }
-      else if (existing != admins.end()) admins.erase(existing);
-      db_put(txn, db.dbis[Settings], SettingsKey::admins, string_view{(const char*)admins.data(), admins.size() * sizeof(uint64_t)});
+      if (admin_changed) {
+        const auto old_admins = get_admin_list();
+        vector admins(old_admins.begin(), old_admins.end());
+        auto existing = std::find(admins.begin(), admins.end(), id);
+        if (user.admin()) { if (existing == admins.end()) admins.push_back(id); }
+        else if (existing != admins.end()) admins.erase(existing);
+        db_put(txn, db.dbis[Settings], SettingsKey::admins, string_view{(const char*)admins.data(), admins.size() * sizeof(uint64_t)});
+      }
     }
     if (user_added) {
       const auto& s = get_site_stats();
@@ -1211,7 +1225,7 @@ namespace Ludwig {
       db_put(txn, db.dbis[Settings], SettingsKey::site_stats, fbb.GetBufferSpan());
     }
     if (email) db_put(txn, db.dbis[User_Email], *email, id);
-    db_put(txn, db.dbis[LocalUser_User], id, span);
+    db_put(txn, db.dbis[LocalUser_User], id, span, sequential ? MDB_APPEND : 0);
   }
   auto WriteTxn::delete_user(uint64_t id) -> bool {
     const auto user_opt = get_user(id);
@@ -1282,14 +1296,14 @@ namespace Ludwig {
 
   auto WriteTxn::create_board(span<uint8_t> span) -> uint64_t {
     const uint64_t id = next_id();
-    set_board(id, span);
+    set_board(id, span, true);
     return id;
   }
-  auto WriteTxn::set_board(uint64_t id, span<uint8_t> span) -> void {
+  auto WriteTxn::set_board(uint64_t id, span<uint8_t> span, bool sequential) -> void {
     const auto& board = get_fb<Board>(span);
     const auto name = board.name()->str();
     const auto created_at = board.created_at();
-    if (const auto old_board_opt = get_board(id)) {
+    if (const auto old_board_opt = sequential ? nullopt : get_board(id)) {
       spdlog::debug("Updating board {:x} (name {})", id, name);
       const auto& old_board = old_board_opt->get();
       if (name != old_board.name()->str()) {
@@ -1300,7 +1314,7 @@ namespace Ludwig {
       FlatBufferBuilder fbb;
       fbb.ForceDefaults(true);
       fbb.Finish(CreateBoardStats(fbb));
-      db_put(txn, db.dbis[BoardStats_Board], id, fbb.GetBufferSpan());
+      db_put(txn, db.dbis[BoardStats_Board], id, fbb.GetBufferSpan(), sequential ? MDB_APPEND : 0);
     }
     db_put(txn, db.dbis[Board_Board], id, span);
     db_put(txn, db.dbis[Board_Name], name, id);
@@ -1309,10 +1323,10 @@ namespace Ludwig {
     db_put(txn, db.dbis[BoardsMostPosts_Posts], Cursor(0), id);
     db_put(txn, db.dbis[BoardsMostSubscribers_Subscribers], Cursor(0), id);
   }
-  auto WriteTxn::set_local_board(uint64_t id, span<uint8_t> span) -> void {
+  auto WriteTxn::set_local_board(uint64_t id, span<uint8_t> span, bool sequential) -> void {
     const auto owner = get_fb<LocalBoard>(span).owner();
     assert_fmt(!!get_user(owner), "set_local_board: board {:x} owner user {:x} does not exist", id, owner);
-    if (const auto old_board_opt = get_local_board(id)) {
+    if (const auto old_board_opt = sequential ? nullopt : get_local_board(id)) {
       spdlog::debug("Updating local board {:x}", id);
       const auto& old_board = old_board_opt->get();
       if (owner != old_board.owner()) {
@@ -1332,7 +1346,7 @@ namespace Ludwig {
       db_put(txn, db.dbis[Settings], SettingsKey::site_stats, fbb.GetBufferSpan());
     }
     db_put(txn, db.dbis[BoardsOwned_User], owner, id);
-    db_put(txn, db.dbis[LocalBoard_Board], id, span);
+    db_put(txn, db.dbis[LocalBoard_Board], id, span, sequential ? MDB_APPEND : 0);
   }
   auto WriteTxn::delete_board(uint64_t id) -> bool {
     const auto board_opt = get_board(id);
@@ -1441,15 +1455,15 @@ namespace Ludwig {
 
   auto WriteTxn::create_thread(span<uint8_t> span) -> uint64_t {
     uint64_t id = next_id();
-    set_thread(id, span);
+    set_thread(id, span, true);
     return id;
   }
-  auto WriteTxn::set_thread(uint64_t id, span<uint8_t> span) -> void {
+  auto WriteTxn::set_thread(uint64_t id, span<uint8_t> span, bool sequential) -> void {
     const auto& thread = get_fb<Thread>(span);
     FlatBufferBuilder fbb;
     const auto author_id = thread.author(), board_id = thread.board(), created_at = thread.created_at(), instance = thread.instance();
     const auto url = opt_str(thread.content_url()).and_then(Url::parse);
-    if (const auto old_thread_opt = get_thread(id)) {
+    if (const auto old_thread_opt = sequential ? nullopt : get_thread(id)) {
       spdlog::debug("Updating top-level post {:x} (board {:x}, author {:x})", id, board_id, author_id);
       const auto stats_opt = get_post_stats(id);
       assert_fmt(!!stats_opt, "set_thread: post_stats not in database for existing thread {:x}", id);
@@ -1497,7 +1511,7 @@ namespace Ludwig {
       if (url && url->is_http_s()) db_put(txn, db.dbis[ThreadsByDomain_Domain], to_ascii_lowercase(url->host), id);
       fbb.ForceDefaults(true);
       fbb.Finish(CreatePostStats(fbb, created_at));
-      db_put(txn, db.dbis[PostStats_Post], id, fbb.GetBufferSpan());
+      db_put(txn, db.dbis[PostStats_Post], id, fbb.GetBufferSpan(), sequential ? MDB_APPEND : 0);
       if (!instance) {
         fbb.Clear();
         const auto& s = get_site_stats();
@@ -1547,7 +1561,7 @@ namespace Ludwig {
         db_put(txn, db.dbis[BoardsMostPosts_Posts], last_post_count + 1, board_id);
       }
     }
-    db_put(txn, db.dbis[Thread_Thread], id, span);
+    db_put(txn, db.dbis[Thread_Thread], id, span, sequential ? MDB_APPEND : 0);
   }
   auto WriteTxn::delete_child_comment(uint64_t id, uint64_t board_id) -> uint64_t {
     const auto comment_opt = get_comment(id);
@@ -1706,10 +1720,10 @@ namespace Ludwig {
 
   auto WriteTxn::create_comment(span<uint8_t> span) -> uint64_t {
     uint64_t id = next_id();
-    set_comment(id, span);
+    set_comment(id, span, true);
     return id;
   }
-  auto WriteTxn::set_comment(uint64_t id, span<uint8_t> span) -> void {
+  auto WriteTxn::set_comment(uint64_t id, span<uint8_t> span, bool sequential) -> void {
     using namespace std::chrono;
     const auto& comment = get_fb<Comment>(span);
     const auto stats_opt = get_post_stats(id);
@@ -1719,7 +1733,7 @@ namespace Ludwig {
     const auto author_id = comment.author(), board_id = thread.board(), parent_id = comment.parent(),
       created_at = comment.created_at(), instance = comment.instance();
     const auto created_at_t = uint_to_timestamp(created_at);
-    if (const auto old_comment_opt = get_comment(id)) {
+    if (const auto old_comment_opt = sequential ? nullopt : get_comment(id)) {
       spdlog::debug("Updating comment {:x} (parent {:x}, author {:x})", id, parent_id, author_id);
       assert(!!stats_opt);
       const auto& old_comment = old_comment_opt->get();
@@ -1832,7 +1846,7 @@ namespace Ludwig {
         db_put(txn, db.dbis[BoardsMostPosts_Posts], last_post_count + 1, board_id);
       }
     }
-    db_put(txn, db.dbis[Comment_Comment], id, span);
+    db_put(txn, db.dbis[Comment_Comment], id, span, sequential ? MDB_APPEND : 0);
   }
   auto WriteTxn::delete_comment(uint64_t id) -> uint64_t {
     const auto comment_opt = get_comment(id);
@@ -1915,7 +1929,7 @@ namespace Ludwig {
     return delete_child_comment(id, board_id);
   }
 
-  auto WriteTxn::set_vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void {
+  auto WriteTxn::set_vote(uint64_t user_id, uint64_t post_id, Vote vote, bool sequential) -> void {
     const auto existing = static_cast<int64_t>(get_vote_of_user_for_post(user_id, post_id));
     const int64_t diff = static_cast<int64_t>(vote) - existing;
     if (!diff) return;
@@ -1928,16 +1942,18 @@ namespace Ludwig {
     spdlog::debug("Setting vote from user {:x} on post {:x} to {}", user_id, post_id, (int8_t)vote);
     switch (vote) {
       case Vote::Upvote:
-        db_put(txn, db.dbis[UpvotePost_User], user_id, post_id);
-        db_del(txn, db.dbis[DownvotePost_User], user_id, post_id);
+        db_put(txn, db.dbis[UpvotePost_User], user_id, post_id, sequential ? MDB_APPENDDUP : 0);
+        if (!sequential) db_del(txn, db.dbis[DownvotePost_User], user_id, post_id);
         break;
       case Vote::NoVote:
-        db_del(txn, db.dbis[UpvotePost_User], user_id, post_id);
-        db_del(txn, db.dbis[DownvotePost_User], user_id, post_id);
+        if (!sequential) {
+          db_del(txn, db.dbis[UpvotePost_User], user_id, post_id);
+          db_del(txn, db.dbis[DownvotePost_User], user_id, post_id);
+        }
         break;
       case Vote::Downvote:
-        db_del(txn, db.dbis[UpvotePost_User], user_id, post_id);
-        db_put(txn, db.dbis[DownvotePost_User], user_id, post_id);
+        if (!sequential) db_del(txn, db.dbis[UpvotePost_User], user_id, post_id);
+        db_put(txn, db.dbis[DownvotePost_User], user_id, post_id, sequential ? MDB_APPENDDUP : 0);
         break;
     }
     int64_t old_karma, new_karma;

@@ -3,6 +3,7 @@
 #include "controllers/instance.h++"
 #include "models/lemmy_api.h++"
 #include "models/enums.h++"
+#include "util/router.h++"
 
 namespace Ludwig::Lemmy {
   struct GetPost {
@@ -77,14 +78,20 @@ namespace Ludwig::Lemmy {
       auto txn = instance->open_read_txn();
       return validate_jwt(txn, std::move(jwt));
     }
-    template <typename T> auto optional_auth(T& form, std::optional<SecretString>&& auth) -> std::optional<uint64_t> {
+    template <typename T>
+    auto optional_auth(T& form, std::optional<SecretString>&& auth) -> std::optional<uint64_t> {
       if (auth) return validate_jwt(std::move(*auth));
       if (form.auth) return validate_jwt(std::move(*form.auth));
       return {};
     }
-    template <typename T> auto require_auth(T& form, std::optional<SecretString>&& auth, bool must_be_admin = false) -> uint64_t {
+    template <typename T>
+    auto require_auth(
+      T& form,
+      std::optional<SecretString>&& auth,
+      ReadTxn& txn,
+      bool must_be_admin = false
+    ) -> uint64_t {
       uint64_t id;
-      auto txn = instance->open_read_txn();
       if (auth) id = validate_jwt(txn, std::move(*auth));
       else if (form.auth) id = validate_jwt(txn, std::move(*form.auth));
       else throw ApiError("Auth required", 401);
@@ -93,18 +100,24 @@ namespace Ludwig::Lemmy {
       }
       return id;
     }
-    template <typename T> auto require_auth_and_keep_jwt(T& form, std::optional<SecretString>&& auth) -> std::pair<uint64_t, SecretString> {
+    template <typename T>
+    auto require_auth_and_keep_jwt(
+      T& form,
+      std::optional<SecretString>&& auth,
+      ReadTxn& txn
+    ) -> std::pair<uint64_t, SecretString> {
       if (auth) {
         auto tmp = auth->data;
-        return { validate_jwt(std::move(*auth)), SecretString(tmp) };
+        return { validate_jwt(txn, std::move(*auth)), SecretString(tmp) };
       }
       if (form.auth) {
         auto tmp = form.auth->data;
-        return { validate_jwt(std::move(*form.auth)), SecretString(tmp) };
+        return { validate_jwt(txn, std::move(*form.auth)), SecretString(tmp) };
       }
       throw ApiError("Auth required", 401);
     }
     auto login_and_get_jwt(
+      WriteTxn&& txn,
       std::string_view username_or_email,
       SecretString&& password,
       std::string_view ip,
@@ -152,6 +165,11 @@ namespace Ludwig::Lemmy {
   public:
     ApiController(std::shared_ptr<InstanceController> instance) : instance(instance) {}
 
+    template <IsRequestContext Ctx>
+    auto open_write_txn() {
+      return instance->template open_write_txn<Ctx>();
+    }
+
     /* addAdmin */
     /* addModToCommunity */
     /* approveRegistrationApplication */
@@ -160,52 +178,52 @@ namespace Ludwig::Lemmy {
     /* blockCommunity */
     /* blockPerson */
 
-    auto change_password(ChangePassword& form, std::optional<SecretString>&& auth) -> LoginResponse;
+    auto change_password(WriteTxn txn, ChangePassword& form, std::optional<SecretString>&& auth) -> LoginResponse;
 
-    auto create_comment(CreateComment& form, std::optional<SecretString>&& auth) -> CommentResponse;
+    auto create_comment(WriteTxn txn, CreateComment& form, std::optional<SecretString>&& auth) -> CommentResponse;
 
     /* createCommentReport */
 
-    auto create_community(CreateCommunity& form, std::optional<SecretString>&& auth) -> CommunityResponse;
+    auto create_community(WriteTxn txn, CreateCommunity& form, std::optional<SecretString>&& auth) -> CommunityResponse;
 
     /* createCustomEmoji */
 
-    auto create_post(CreatePost& form, std::optional<SecretString>&& auth) -> PostResponse;
+    auto create_post(WriteTxn txn, CreatePost& form, std::optional<SecretString>&& auth) -> PostResponse;
 
     /* createPostReport */
     /* createPrivateMessage */
     /* createPrivateMessageReport */
 
-    auto create_site(CreateSite& form, std::optional<SecretString>&& auth) -> SiteResponse;
+    auto create_site(WriteTxn txn, CreateSite& form, std::optional<SecretString>&& auth) -> SiteResponse;
 
-    auto delete_account(DeleteAccount& form, std::optional<SecretString>&& auth) -> void;
+    auto delete_account(WriteTxn txn, DeleteAccount& form, std::optional<SecretString>&& auth) -> void;
 
-    auto delete_comment(DeleteComment& form, std::optional<SecretString>&& auth) -> CommentResponse;
+    auto delete_comment(WriteTxn txn, DeleteComment& form, std::optional<SecretString>&& auth) -> CommentResponse;
 
-    auto delete_community(DeleteCommunity& form, std::optional<SecretString>&& auth) -> CommunityResponse;
+    auto delete_community(WriteTxn txn, DeleteCommunity& form, std::optional<SecretString>&& auth) -> CommunityResponse;
 
     /* deleteCustomEmoji */
 
-    auto delete_post(DeletePost& form, std::optional<SecretString>&& auth) -> PostResponse;
+    auto delete_post(WriteTxn txn, DeletePost& form, std::optional<SecretString>&& auth) -> PostResponse;
 
     /* deletePrivateMessage */
     /* distinguishComment */
 
-    auto edit_comment(EditComment& form, std::optional<SecretString>&& auth) -> CommentResponse;
+    auto edit_comment(WriteTxn txn, EditComment& form, std::optional<SecretString>&& auth) -> CommentResponse;
 
-    auto edit_community(EditCommunity& form, std::optional<SecretString>&& auth) -> CommunityResponse;
+    auto edit_community(WriteTxn txn, EditCommunity& form, std::optional<SecretString>&& auth) -> CommunityResponse;
 
     /* editCustomEmoji */
 
-    auto edit_post(EditPost& form, std::optional<SecretString>&& auth) -> PostResponse;
+    auto edit_post(WriteTxn txn, EditPost& form, std::optional<SecretString>&& auth) -> PostResponse;
 
     /* editPrivateMessage */
 
-    auto edit_site(EditSite& form, std::optional<SecretString>&& auth) -> SiteResponse;
+    auto edit_site(WriteTxn txn, EditSite& form, std::optional<SecretString>&& auth) -> SiteResponse;
 
     /* featurePost */
 
-    auto follow_community(FollowCommunity& form, std::optional<SecretString>&& auth) -> CommunityResponse;
+    auto follow_community(WriteTxn txn, FollowCommunity& form, std::optional<SecretString>&& auth) -> CommunityResponse;
 
     /* getBannedPersons */
     /* getCaptcha */
@@ -240,9 +258,9 @@ namespace Ludwig::Lemmy {
     /* getUnreadRegistrationApplicationCount */
     /* leaveAdmin */
 
-    auto like_comment(CreateCommentLike& form, std::optional<SecretString>&& auth) -> CommentResponse;
+    auto like_comment(WriteTxn txn, CreateCommentLike& form, std::optional<SecretString>&& auth) -> CommentResponse;
 
-    auto like_post(CreatePostLike& form, std::optional<SecretString>&& auth) -> PostResponse;
+    auto like_post(WriteTxn txn, CreatePostLike& form, std::optional<SecretString>&& auth) -> PostResponse;
 
     /* listCommentReports */
 
@@ -254,30 +272,30 @@ namespace Ludwig::Lemmy {
 
     /* lockPost */
 
-    auto login(Login& form, std::string_view ip, std::string_view user_agent) -> LoginResponse;
+    auto login(WriteTxn&& txn, Login& form, std::string_view ip, std::string_view user_agent) -> LoginResponse;
 
-    auto logout(SecretString&& auth) -> void;
+    auto logout(WriteTxn txn, SecretString&& auth) -> void;
 
-    auto mark_all_as_read(MarkAllAsRead& form, std::optional<SecretString>&& auth) -> GetRepliesResponse;
+    auto mark_all_as_read(WriteTxn txn, MarkAllAsRead& form, std::optional<SecretString>&& auth) -> GetRepliesResponse;
 
-    auto mark_comment_reply_as_read(MarkCommentReplyAsRead& form, std::optional<SecretString>&& auth) -> CommentReplyResponse;
+    auto mark_comment_reply_as_read(WriteTxn txn, MarkCommentReplyAsRead& form, std::optional<SecretString>&& auth) -> CommentReplyResponse;
 
-    auto mark_person_mentions_as_read(MarkPersonMentionAsRead& form, std::optional<SecretString>&& auth) -> PersonMentionResponse;
+    auto mark_person_mentions_as_read(WriteTxn txn, MarkPersonMentionAsRead& form, std::optional<SecretString>&& auth) -> PersonMentionResponse;
 
-    auto mark_post_as_read(MarkPostAsRead& form, std::optional<SecretString>&& auth) -> PostResponse;
+    auto mark_post_as_read(WriteTxn txn, MarkPostAsRead& form, std::optional<SecretString>&& auth) -> PostResponse;
 
     /* markPrivateMessageAsRead */
 
-    auto password_change_after_reset(PasswordChangeAfterReset& form) -> void;
+    auto password_change_after_reset(WriteTxn&& txn, PasswordChangeAfterReset& form) -> void;
 
-    auto password_reset(PasswordReset& form) -> void;
+    auto password_reset(WriteTxn txn, PasswordReset& form) -> void;
 
     /* purgeComment */
     /* purgeCommunity */
     /* purgePerson */
     /* purgePost */
 
-    auto register_account(Register& form, std::string_view ip, std::string_view user_agent) -> LoginResponse;
+    auto register_account(WriteTxn&& txn, Register& form, std::string_view ip, std::string_view user_agent) -> std::pair<uint64_t, bool>;
 
     /* removeComment */
     /* removeCommunity */
@@ -287,20 +305,20 @@ namespace Ludwig::Lemmy {
     /* resolvePostReport */
     /* resolvePrivateMessageReport */
 
-    auto save_comment(SaveComment& form, std::optional<SecretString>&& auth) -> CommentResponse;
+    auto save_comment(WriteTxn txn, SaveComment& form, std::optional<SecretString>&& auth) -> CommentResponse;
 
-    auto save_post(SavePost& form, std::optional<SecretString>&& auth) -> PostResponse;
+    auto save_post(WriteTxn txn, SavePost& form, std::optional<SecretString>&& auth) -> PostResponse;
 
-    auto save_user_settings(SaveUserSettings& form, std::optional<SecretString>&& auth) -> LoginResponse;
+    auto save_user_settings(WriteTxn txn, SaveUserSettings& form, std::optional<SecretString>&& auth) -> LoginResponse;
 
     auto search(Search& form, std::optional<SecretString>&& auth, uWS::MoveOnlyFunction<void (SearchResponse)> cb) -> void;
 
     /* transferCommunity */
 
-    //auto upload_image(const UploadImage& named_parameters) -> UploadImageResponse;
+    //auto upload_image(WriteTxn&& txn, const UploadImage& named_parameters) -> UploadImageResponse;
 
     auto validate_auth(std::optional<SecretString>&& auth) -> void;
 
-    auto verify_email(VerifyEmail& form) -> void;
+    auto verify_email(WriteTxn txn, VerifyEmail& form) -> void;
   };
 }

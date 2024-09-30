@@ -26,6 +26,7 @@ public:
   string base_url;
   AsioHttpClient http;
   shared_ptr<MockHttpClient> outer_http;
+  shared_ptr<DB> db;
   shared_ptr<InstanceController> instance;
   IntegrationTest() :
     pool(1),
@@ -40,13 +41,13 @@ public:
       first_run_hash.second.bytes()->Data(),
       const_cast<uint8_t*>(first_run_hash.first.bytes()->Data())
     );
-    auto db = make_shared<DB>(dbfile.name, 100);
+    db = make_shared<DB>(dbfile.name, 100, true);
     auto rate_limiter = make_shared<KeyedRateLimiter>(10, 3000);
     auto event_bus = make_shared<AsioEventBus>(pool.io);
     instance = make_shared<InstanceController>(db, outer_http, event_bus, nullopt, first_run_hash);
     auto api_c = make_shared<Lemmy::ApiController>(instance);
     auto remote_media_c = make_shared<RemoteMediaController>(
-      db, outer_http, xml, event_bus,
+      pool.io, db, outer_http, xml, event_bus,
       [&](auto f) { pool.post(std::move(f)); }
     );
     promise<uint16_t> port_promise;

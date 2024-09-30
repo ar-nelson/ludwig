@@ -63,7 +63,7 @@ struct TempDB {
     if (err) throw runtime_error(mdb_strerror(err));
     err = mdb_env_set_mapsize(env, 10 * MiB);
     if (err) throw runtime_error(mdb_strerror(err));
-    err = mdb_env_open(env, file.name, MDB_NOSUBDIR, 0600);
+    err = mdb_env_open(env, file.name, MDB_NOSUBDIR | MDB_NOSYNC | MDB_NOMEMINIT, 0600);
     if (err) throw runtime_error(mdb_strerror(err));
     MDB_txn* txn;
     err = mdb_txn_begin(env, nullptr, 0, &txn);
@@ -85,9 +85,9 @@ private:
   class Response : public HttpClientResponse {
   private:
     uint16_t _status;
-    string_view _mimetype, _body;
+    string _mimetype, _body;
   public:
-    Response(uint16_t status, string_view mimetype, string_view body) : _status(status), _mimetype(mimetype), _body(body) {}
+    Response(uint16_t status, string mimetype, string body) : _status(status), _mimetype(mimetype), _body(body) {}
     Response(uint16_t status) : _status(status), _mimetype("text/plain"), _body(http_status(status)) {}
 
     auto status() const -> uint16_t { return _status; };

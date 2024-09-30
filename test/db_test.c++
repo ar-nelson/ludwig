@@ -37,15 +37,15 @@ static inline auto create_board(WriteTxn& txn, string_view name, string_view dis
 
 TEST_CASE("create DB", "[db]") {
   TempFile file;
-  DB db(file.name);
+  DB db(file.name, 100, true);
 }
 
 TEST_CASE("create and get user", "[db]") {
   TempFile file;
-  DB db(file.name);
+  DB db(file.name, 100, true);
   uint64_t id;
   {
-    auto txn = db.open_write_txn();
+    auto txn = db.open_write_txn_sync();
     id = create_user(txn, "testuser", "Test User");
     txn.commit();
   }
@@ -58,8 +58,47 @@ TEST_CASE("create and get user", "[db]") {
   }
 }
 
+TEST_CASE("priority ordering of async write transactions", "[db][write_txn_async]") {
+  TempFile file;
+  DB db(file.name, 100, true);
+  uint64_t id1;
+  db.open_write_txn_async([&](auto txn, bool async) {
+    CHECK(async == false);
+    db.open_write_txn_async([&](auto txn, bool async) {
+      CHECK(async == true);
+      CHECK(create_user(txn, "user3", "User 3") == id1 + 2);
+      txn.commit();
+    }, WritePriority::Low);
+    db.open_write_txn_async([&](auto txn, bool async) {
+      CHECK(async == true);
+      CHECK(create_user(txn, "user4", "User 4") == id1 + 3);
+      txn.commit();
+    }, WritePriority::Low);
+    db.open_write_txn_async([&](auto txn, bool async) {
+      CHECK(async == true);
+      CHECK(create_user(txn, "user5", "User 5") == id1 + 4);
+      txn.commit();
+    }, WritePriority::Low);
+    db.open_write_txn_async([&](auto txn, bool async) {
+      CHECK(async == true);
+      CHECK(create_user(txn, "user2", "User 2") == id1 + 1);
+      txn.commit();
+    }, WritePriority::High);
+
+    id1 = create_user(txn, "user1", "User 1");
+    txn.commit();
+  });
+
+  auto txn = db.open_read_txn();
+  for (uint8_t i = 0; i < 5; i++) {
+    auto user = txn.get_user(id1 + i);
+    REQUIRE(!!user);
+    CHECK(user->get().name()->str() == fmt::format("user{:d}", i + 1));
+  }
+}
+
 static inline auto create_users(DB& db, uint64_t ids[3]) {
-  auto txn = db.open_write_txn();
+  auto txn = db.open_write_txn_sync();
   FlatBufferBuilder fbb;
   ids[0] = create_user(txn, "user1", "User 1");
   ids[1] = create_user(txn, "user2", "User 2");
@@ -68,7 +107,7 @@ static inline auto create_users(DB& db, uint64_t ids[3]) {
 }
 
 static inline auto create_boards(DB& db, uint64_t ids[3]) {
-  auto txn = db.open_write_txn();
+  auto txn = db.open_write_txn_sync();
   ids[0] = create_board(txn, "lions", "Lions");
   ids[1] = create_board(txn, "tigers", "Tigers");
   ids[2] = create_board(txn, "bears", "Bears");
@@ -77,7 +116,7 @@ static inline auto create_boards(DB& db, uint64_t ids[3]) {
 
 TEST_CASE("create and list users", "[db]") {
   TempFile file;
-  DB db(file.name);
+  DB db(file.name, 100, true);
   uint64_t user_ids[3];
   create_users(db, user_ids);
   {
@@ -107,12 +146,12 @@ TEST_CASE("create and list users", "[db]") {
 
 TEST_CASE("create users and boards, subscribe and unsubscribe", "[db]") {
   TempFile file;
-  DB db(file.name);
+  DB db(file.name, 100, true);
   uint64_t user_ids[3], board_ids[3];
   create_users(db, user_ids);
   create_boards(db, board_ids);
   {
-    auto txn = db.open_write_txn();
+    auto txn = db.open_write_txn_sync();
     txn.set_subscription(user_ids[0], board_ids[0], true);
     txn.set_subscription(user_ids[1], board_ids[0], true);
     txn.set_subscription(user_ids[2], board_ids[0], true);
@@ -140,7 +179,7 @@ TEST_CASE("create users and boards, subscribe and unsubscribe", "[db]") {
     REQUIRE(!txn.is_user_subscribed_to_board(user_ids[2], board_ids[2]));
   }
   {
-    auto txn = db.open_write_txn();
+    auto txn = db.open_write_txn_sync();
     txn.set_subscription(user_ids[0], board_ids[0], false);
     txn.set_subscription(user_ids[0], board_ids[1], false);
     txn.set_subscription(user_ids[0], board_ids[2], false);
@@ -190,12 +229,12 @@ static inline auto create_thread(WriteTxn& txn, uint64_t user, uint64_t board, c
 
 TEST_CASE("create and list posts", "[db]") {
   TempFile file;
-  DB db(file.name);
+  DB db(file.name, 100, true);
   uint64_t user_ids[3], board_ids[3], thread_ids[12];
   create_users(db, user_ids);
   create_boards(db, board_ids);
   {
-    auto txn = db.open_write_txn();
+    auto txn = db.open_write_txn_sync();
     thread_ids[0] = create_thread(txn, user_ids[0], board_ids[0], "post 1", "http://example.com");
     thread_ids[1] = create_thread(txn, user_ids[0], board_ids[0], "post 2", "http://example.com");
     thread_ids[2] = create_thread(txn, user_ids[0], board_ids[0], "post 3", "http://example.com");
@@ -264,7 +303,7 @@ static inline auto random_int(std::mt19937& gen, uint64_t n) -> uint64_t {
 TEST_CASE("generate and delete random posts and check stats", "[db]") {
   spdlog::set_level(spdlog::level::info);
   TempFile file;
-  DB db(file.name);
+  DB db(file.name, 100, true);
   std::random_device rd;
   std::mt19937 gen(rd());
 # define RND_SIZE 1000
@@ -274,7 +313,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
   std::array<uint64_t, RND_SIZE> threads, comments;
   auto now = now_s();
   {
-    auto txn = db.open_write_txn();
+    auto txn = db.open_write_txn_sync();
     for (size_t i = 0; i < RND_SIZE / 10; i++) {
       users[i] = create_user(txn, fmt::format("testuser{}", i), "Test User", now - random_int(gen, 86400 * 30));
     }
@@ -282,7 +321,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
   }
   FlatBufferBuilder fbb;
   {
-    auto txn = db.open_write_txn();
+    auto txn = db.open_write_txn_sync();
     for (size_t i = 0; i < RND_SIZE; i++) {
       const auto author = users[random_int(gen, RND_SIZE / 10)];
       const auto board = boards[random_int(gen, 3)];
@@ -309,7 +348,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
     txn.commit();
   }
   {
-    auto txn = db.open_write_txn();
+    auto txn = db.open_write_txn_sync();
     for (size_t i = 0; i < RND_SIZE; i++) {
       fbb.Clear();
       const auto author = users[random_int(gen, RND_SIZE / 10)],
@@ -338,14 +377,14 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       for (size_t ii = 0; ii < RND_SIZE; ii++) {
         switch (random_int(gen, 5)) {
           case 0: {
-            auto txn = db.open_write_txn();
+            auto txn = db.open_write_txn_sync();
             txn.set_vote(user, threads[ii], Vote::Downvote);
             txn.commit();
             break;
           }
           case 3:
           case 4: {
-            auto txn = db.open_write_txn();
+            auto txn = db.open_write_txn_sync();
             txn.set_vote(user, threads[ii], Vote::Upvote);
             txn.commit();
             break;
@@ -357,14 +396,14 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
       for (size_t ii = 0; ii < RND_SIZE; ii++) {
         switch (random_int(gen, 5)) {
           case 0: {
-            auto txn = db.open_write_txn();
+            auto txn = db.open_write_txn_sync();
             txn.set_vote(user, comments[ii], Vote::Downvote);
             txn.commit();
             break;
           }
           case 3:
           case 4: {
-            auto txn = db.open_write_txn();
+            auto txn = db.open_write_txn_sync();
             txn.set_vote(user, comments[ii], Vote::Upvote);
             txn.commit();
             break;
@@ -426,7 +465,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
   std::sample(threads.begin(), threads.end(), std::inserter(del_threads, del_threads.begin()), RND_SIZE / 20, gen);
   std::sample(comments.begin(), comments.end(), std::inserter(del_comments, del_comments.begin()), RND_SIZE / 20, gen);
   {
-    auto txn = db.open_write_txn();
+    auto txn = db.open_write_txn_sync();
     for (auto thread : del_threads) { REQUIRE(txn.delete_thread(thread) == true); }
     for (auto comment : del_comments) txn.delete_comment(comment);
     txn.commit();
@@ -492,4 +531,3 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
   }
   spdlog::set_level(spdlog::level::debug);
 }
-

@@ -1,6 +1,10 @@
 // A Deno script to generate a Ludwig database dump with a huge amount of
 // realistic mock data.
 
+import { writeAllSync } from "https://deno.land/std@0.208.0/streams/mod.ts";
+import { pbkdf2Sync } from "node:crypto";
+import { faker } from "npm:@faker-js/faker";
+import * as flatbuffers from "npm:flatbuffers";
 import {
   Board,
   Comment,
@@ -20,10 +24,6 @@ import {
   User,
   VoteBatch,
 } from "./flatbuffers/ludwig.ts";
-import { writeAllSync } from "https://deno.land/std@0.208.0/streams/mod.ts";
-import { faker } from "npm:@faker-js/faker";
-import { pbkdf2Sync } from "node:crypto";
-import * as flatbuffers from "npm:flatbuffers";
 
 const ludwigDomain = "http://localhost:2023";
 const PASSWORD_SALT = new TextEncoder().encode("0123456789abcdef");
@@ -528,8 +528,8 @@ function genAll(scale = SCALE) {
         x[0]
       ),
       splitAt = Math.floor(votedPosts.length * 0.8),
-      upvoted = votedPosts.slice(0, splitAt),
-      downvoted = votedPosts.slice(splitAt);
+      upvoted = votedPosts.slice(0, splitAt).sort((a, b) => Number(a - b)),
+      downvoted = votedPosts.slice(splitAt).sort((a, b) => Number(a - b));
     for (let i = 0; i < upvoted.length; i += BATCH_SIZE) {
       fbb.clear();
       fbb.finish(

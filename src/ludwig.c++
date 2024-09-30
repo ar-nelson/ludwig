@@ -186,7 +186,7 @@ int main(int argc, char** argv) {
     }
     auto setup = interactive_setup(admin_exists, default_board_exists);
     auto instance = make_shared<InstanceController>(db, nullptr, make_shared<DummyEventBus>(), search_engine);
-    instance->first_run_setup(std::move(setup));
+    instance->first_run_setup(db->open_write_txn_sync(), std::move(setup));
     puts("\nFirst-run setup complete. You can now start Ludwig without --setup.");
     return EXIT_SUCCESS;
   }
@@ -236,7 +236,7 @@ int main(int argc, char** argv) {
   auto instance_c = make_shared<InstanceController>(db, http_client, event_bus, search_engine, first_run_admin_password);
   auto api_c = make_shared<Lemmy::ApiController>(instance_c);
   auto remote_media_c = make_shared<RemoteMediaController>(
-    db, http_client, xml_ctx, event_bus,
+    pool.io, db, http_client, xml_ctx, event_bus,
     [&pool](auto f) { pool.post(std::move(f)); },
     search_engine
   );

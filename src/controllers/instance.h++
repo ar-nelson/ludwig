@@ -1,4 +1,5 @@
 #pragma once
+#include "util/router.h++"
 #include "util/web.h++"
 #include "models/db.h++"
 #include "models/detail.h++"
@@ -259,6 +260,10 @@ namespace Ludwig {
     auto open_read_txn() -> ReadTxnImpl {
       return db->open_read_txn();
     }
+    template <IsRequestContext Ctx>
+    auto open_write_txn() -> WriteTxnAwaiter<Ctx> {
+      return WriteTxnAwaiter<Ctx>(*db);
+    }
 
     static auto hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void;
 
@@ -273,11 +278,12 @@ namespace Ludwig {
       std::string_view ip,
       std::string_view user_agent
     ) -> std::optional<LoginResponse>;
-    auto delete_session(uint64_t session_id) -> void {
-      auto txn = db->open_write_txn();
+    auto delete_session(WriteTxn txn, uint64_t session_id) -> void {
       txn.delete_session(session_id);
+      txn.commit();
     }
     auto login(
+      WriteTxn txn,
       std::string_view username,
       SecretString&& password,
       std::string_view ip,
@@ -403,9 +409,14 @@ namespace Ludwig {
     ) -> std::vector<SearchResultDetail>;
     auto first_run_setup_options(ReadTxn& txn) -> FirstRunSetupOptions;
 
-    auto first_run_setup(FirstRunSetup&& update) -> void;
-    auto update_site(const SiteUpdate& update, std::optional<uint64_t> as_user) -> void;
+    auto first_run_setup(WriteTxn txn, FirstRunSetup&& update) -> void;
+    auto update_site(
+      WriteTxn txn,
+      const SiteUpdate& update,
+      std::optional<uint64_t> as_user
+    ) -> void;
     auto register_local_user(
+      WriteTxn txn,
       std::string_view username,
       std::string_view email,
       SecretString&& password,
@@ -415,6 +426,7 @@ namespace Ludwig {
       std::optional<std::string_view> application_text = {}
     ) -> std::pair<uint64_t, bool>;
     auto create_local_user(
+      WriteTxn txn,
       std::string_view username,
       std::optional<std::string_view> email,
       SecretString&& password,
@@ -423,15 +435,38 @@ namespace Ludwig {
       IsApproved is_approved = IsApproved::No,
       IsAdmin is_admin = IsAdmin::No
     ) -> uint64_t;
-    auto update_local_user(uint64_t id, std::optional<uint64_t> as_user, const LocalUserUpdate& update) -> void;
-    auto reset_password(uint64_t user_id) -> std::string;
-    auto change_password(uint64_t user_id, SecretString&& new_password) -> void;
-    auto change_password(std::string_view reset_token, SecretString&& new_password) -> std::string; // returns username
-    auto change_password(uint64_t user_id, SecretString&& old_password, SecretString&& new_password) -> void;
-    auto approve_local_user_application(uint64_t user_id, std::optional<uint64_t> as_user) -> void;
-    auto reject_local_user_application(uint64_t user_id, std::optional<uint64_t> as_user) -> void;
-    auto create_site_invite(std::optional<uint64_t> as_user) -> uint64_t;
+    auto update_local_user(
+      WriteTxn txn,
+      uint64_t id,
+      std::optional<uint64_t> as_user,
+      const LocalUserUpdate& update
+    ) -> void;
+    auto reset_password(WriteTxn txn, uint64_t user_id) -> std::string;
+    auto change_password(WriteTxn txn, uint64_t user_id, SecretString&& new_password) -> void;
+    auto change_password(
+      WriteTxn txn,
+      std::string_view reset_token,
+      SecretString&& new_password
+    ) -> std::string; // returns username
+    auto change_password(
+      WriteTxn txn,
+      uint64_t user_id,
+      SecretString&& old_password,
+      SecretString&& new_password
+    ) -> void;
+    auto approve_local_user_application(
+      WriteTxn txn,
+      uint64_t user_id,
+      std::optional<uint64_t> as_user
+    ) -> void;
+    auto reject_local_user_application(
+      WriteTxn txn,
+      uint64_t user_id,
+      std::optional<uint64_t> as_user
+    ) -> void;
+    auto create_site_invite(WriteTxn txn, std::optional<uint64_t> as_user) -> uint64_t;
     auto create_local_board(
+      WriteTxn txn,
       uint64_t owner,
       std::string_view name,
       std::optional<std::string_view> display_name,
@@ -440,8 +475,14 @@ namespace Ludwig {
       bool is_restricted_posting = false,
       bool is_local_only = false
     ) -> uint64_t;
-    auto update_local_board(uint64_t id, std::optional<uint64_t> as_user, const LocalBoardUpdate& update) -> void;
+    auto update_local_board(
+      WriteTxn txn,
+      uint64_t id,
+      std::optional<uint64_t> as_user,
+      const LocalBoardUpdate& update
+    ) -> void;
     auto create_thread(
+      WriteTxn txn,
       uint64_t author,
       uint64_t board,
       std::optional<std::string_view> remote_post_url,
@@ -454,6 +495,7 @@ namespace Ludwig {
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
     auto create_local_thread(
+      WriteTxn txn,
       uint64_t author,
       uint64_t board,
       std::string_view title,
@@ -461,8 +503,14 @@ namespace Ludwig {
       std::optional<std::string_view> text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
-    auto update_thread(uint64_t id, std::optional<uint64_t> as_user, const ThreadUpdate& update) -> void;
+    auto update_thread(
+      WriteTxn txn,
+      uint64_t id,
+      std::optional<uint64_t> as_user,
+      const ThreadUpdate& update
+    ) -> void;
     auto create_comment(
+      WriteTxn txn,
       uint64_t author,
       uint64_t parent,
       std::optional<std::string_view> remote_post_url,
@@ -473,17 +521,53 @@ namespace Ludwig {
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
     auto create_local_comment(
+      WriteTxn txn,
       uint64_t author,
       uint64_t parent,
       std::string_view text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
-    auto update_comment(uint64_t id, std::optional<uint64_t> as_user, const CommentUpdate& update) -> void;
-    auto vote(uint64_t user_id, uint64_t post_id, Vote vote) -> void;
-    auto subscribe(uint64_t user_id, uint64_t board_id, bool subscribed = true) -> void;
-    auto save_post(uint64_t user_id, uint64_t post_id, bool saved = true) -> void;
-    auto hide_post(uint64_t user_id, uint64_t post_id, bool hidden = true) -> void;
-    auto hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden = true) -> void;
-    auto hide_board(uint64_t user_id, uint64_t board_id, bool hidden = true) -> void;
+    auto update_comment(
+      WriteTxn txn,
+      uint64_t id,
+      std::optional<uint64_t> as_user,
+      const CommentUpdate& update
+    ) -> void;
+    auto vote(
+      WriteTxn txn,
+      uint64_t user_id,
+      uint64_t post_id,
+      Vote vote
+    ) -> void;
+    auto subscribe(
+      WriteTxn txn,
+      uint64_t user_id,
+      uint64_t board_id,
+      bool subscribed = true
+    ) -> void;
+    auto save_post(
+      WriteTxn txn,
+      uint64_t user_id,
+      uint64_t post_id,
+      bool saved = true
+    ) -> void;
+    auto hide_post(
+      WriteTxn txn,
+      uint64_t user_id,
+      uint64_t post_id,
+      bool hidden = true
+    ) -> void;
+    auto hide_user(
+      WriteTxn txn,
+      uint64_t user_id,
+      uint64_t hidden_user_id,
+      bool hidden = true
+    ) -> void;
+    auto hide_board(
+      WriteTxn txn,
+      uint64_t user_id,
+      uint64_t board_id,
+      bool hidden = true
+    ) -> void;
   };
 }

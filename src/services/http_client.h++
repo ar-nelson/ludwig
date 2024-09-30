@@ -1,5 +1,5 @@
 #pragma once
-#include "util/common.h++"
+#include "util/asio_common.h++"
 #include <future>
 
 namespace Ludwig {
@@ -91,7 +91,9 @@ namespace Ludwig {
 
     auto dispatch(HttpResponseCallback&& callback) && -> void;
 
-    auto dispatch() && {
+    auto dispatch() && -> Async<std::unique_ptr<const HttpClientResponse>>;
+
+    auto dispatch_future() && {
       std::promise<std::unique_ptr<const HttpClientResponse>> promise;
       auto future = promise.get_future();
       std::move(*this).dispatch([promise = std::move(promise)](auto&& rsp) mutable -> void {
@@ -102,7 +104,7 @@ namespace Ludwig {
 
     auto dispatch_and_wait(std::chrono::duration<uint64_t> timeout = std::chrono::seconds(15)) && {
       auto url = req.url.to_string();
-      auto future = std::move(*this).dispatch();
+      auto future = std::move(*this).dispatch_future();
       if (future.wait_for(timeout) != std::future_status::ready) {
         throw std::runtime_error(
           fmt::format("Request to {} timed out after {:d} seconds",
@@ -115,6 +117,11 @@ namespace Ludwig {
   class HttpClient {
   protected:
     virtual auto fetch(HttpClientRequest&& req, HttpResponseCallback&& callback) -> void = 0;
+    virtual auto fetch(HttpClientRequest&& req) -> Async<std::unique_ptr<const HttpClientResponse>> {
+      return asio_callback_awaiter<std::unique_ptr<const HttpClientResponse>>([&](auto&& cb) {
+        fetch(std::move(req), std::move(cb));
+      });
+    }
   public:
     virtual ~HttpClient() {};
     auto get(std::string url) -> HttpClientRequestBuilder {
@@ -136,5 +143,10 @@ namespace Ludwig {
   inline auto HttpClientRequestBuilder::dispatch(HttpResponseCallback&& callback) && -> void {
     if (!req.has_body) req.request += "\r\n\r\n";
     client.fetch(std::move(req), std::move(callback));
+  }
+
+  inline auto HttpClientRequestBuilder::dispatch() && -> Async<std::unique_ptr<const HttpClientResponse>> {
+    if (!req.has_body) req.request += "\r\n\r\n";
+    return client.fetch(std::move(req));
   }
 }

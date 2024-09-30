@@ -6,8 +6,7 @@
 #include "util/rich_text.h++"
 #include "util/lambda_macros.h++"
 
-using std::nullopt, std::optional, std::string, std::string_view, std::vector;
-namespace chrono = std::chrono;
+using std::nullopt, std::optional, std::pair, std::string, std::string_view, std::vector;
 
 namespace Ludwig::Lemmy {
   static inline auto listing_type_to_feed(ListingType lt) -> uint64_t {
@@ -45,12 +44,13 @@ namespace Ludwig::Lemmy {
   }
 
   auto ApiController::login_and_get_jwt(
+    WriteTxn&& wtxn,
     string_view username_or_email,
     SecretString&& password,
     string_view ip,
     string_view user_agent
   ) -> SecretString {
-    const auto session = instance->login(username_or_email, std::move(password), ip, user_agent, true);
+    const auto session = instance->login(std::move(wtxn), username_or_email, std::move(password), ip, user_agent, true);
     auto txn = instance->open_read_txn();
     return make_jwt(session.session_id, session.expiration, txn.get_jwt_secret());
   }
@@ -385,10 +385,10 @@ namespace Ludwig::Lemmy {
   /* blockCommunity */
   /* blockPerson */
 
-  auto ApiController::change_password(ChangePassword& form, optional<SecretString>&& auth) -> LoginResponse {
-    const auto [user_id, jwt] = require_auth_and_keep_jwt(form, std::move(auth));
+  auto ApiController::change_password(WriteTxn wtxn, ChangePassword& form, optional<SecretString>&& auth) -> LoginResponse {
+    const auto [user_id, jwt] = require_auth_and_keep_jwt(form, std::move(auth), wtxn);
     if (form.new_password.data != form.new_password_verify.data) throw ApiError("Passwords do not match", 400);
-    instance->change_password(user_id, std::move(form.old_password), std::move(form.new_password));
+    instance->change_password(std::move(wtxn), user_id, std::move(form.old_password), std::move(form.new_password));
     string username;
     {
       auto txn = instance->open_read_txn();
@@ -398,9 +398,10 @@ namespace Ludwig::Lemmy {
     return { .jwt = SecretString(jwt.data), .registration_created = false, .verify_email_sent = false };
   }
 
-  auto ApiController::create_comment(CreateComment& form, optional<SecretString>&& auth) -> CommentResponse {
-    const auto user_id = require_auth(form, std::move(auth));
+  auto ApiController::create_comment(WriteTxn wtxn, CreateComment& form, optional<SecretString>&& auth) -> CommentResponse {
+    const auto user_id = require_auth(form, std::move(auth), wtxn);
     const auto id = instance->create_local_comment(
+      std::move(wtxn),
       user_id,
       form.parent_id.value_or(form.post_id),
       form.content
@@ -414,10 +415,11 @@ namespace Ludwig::Lemmy {
 
   /* createCommentReport */
 
-  auto ApiController::create_community(CreateCommunity& form, optional<SecretString>&& auth) -> CommunityResponse {
-    const auto user_id = require_auth(form, std::move(auth));
+  auto ApiController::create_community(WriteTxn wtxn, CreateCommunity& form, optional<SecretString>&& auth) -> CommunityResponse {
+    const auto user_id = require_auth(form, std::move(auth), wtxn);
     // TODO: use discussion_languages
     const auto id = instance->create_local_board(
+      std::move(wtxn),
       user_id,
       form.name,
       form.title,
@@ -427,7 +429,7 @@ namespace Ludwig::Lemmy {
       false
     );
     if (form.icon || form.banner || form.description) {
-      instance->update_local_board(id, user_id, {
+      instance->update_local_board(std::move(wtxn), id, user_id, {
         .description = form.description.transform(λx(x.c_str())),
         .icon_url = form.icon.transform(λx(x.c_str())),
         .banner_url = form.banner.transform(λx(x.c_str()))
@@ -442,11 +444,12 @@ namespace Ludwig::Lemmy {
 
   /* createCustomEmoji */
 
-  auto ApiController::create_post(CreatePost& form, optional<SecretString>&& auth) -> PostResponse {
+  auto ApiController::create_post(WriteTxn wtxn, CreatePost& form, optional<SecretString>&& auth) -> PostResponse {
     if (form.honeypot && !form.honeypot->empty()) throw ApiError("bots begone", 418);
-    const auto user_id = require_auth(form, std::move(auth));
+    const auto user_id = require_auth(form, std::move(auth), wtxn);
     // TODO: Use language_id
     const auto id = instance->create_local_thread(
+      std::move(wtxn),
       user_id,
       form.community_id,
       form.name,
@@ -462,8 +465,8 @@ namespace Ludwig::Lemmy {
   /* createPrivateMessage */
   /* createPrivateMessageReport */
 
-  auto ApiController::create_site(CreateSite& form, optional<SecretString>&& auth) -> SiteResponse {
-    require_auth(form, std::move(auth), true);
+  auto ApiController::create_site(WriteTxn wtxn, CreateSite& form, optional<SecretString>&& auth) -> SiteResponse {
+    require_auth(form, std::move(auth), wtxn, true);
     const auto home_page_type = form.default_post_listing_type
       .transform(parse_listing_type)
       .transform(listing_type_to_home_page_type);
@@ -475,7 +478,7 @@ namespace Ludwig::Lemmy {
     // TODO: captcha
     // TODO: federation
     // TODO: taglines
-    instance->first_run_setup({{
+    instance->first_run_setup(std::move(wtxn), {{
       .name = form.name,
       .description = form.sidebar,
       .icon_url = form.icon,
@@ -494,31 +497,31 @@ namespace Ludwig::Lemmy {
     return { .site_view = get_site_view(txn), .taglines = {} };
   }
 
-  auto ApiController::delete_account(DeleteAccount&, optional<SecretString>&&) -> void {
+  auto ApiController::delete_account(WriteTxn wtxn, DeleteAccount&, optional<SecretString>&&) -> void {
     throw ApiError("Not yet implemented", 500);
   }
 
-  auto ApiController::delete_comment(DeleteComment&, optional<SecretString>&&) -> CommentResponse {
+  auto ApiController::delete_comment(WriteTxn wtxn, DeleteComment&, optional<SecretString>&&) -> CommentResponse {
     throw ApiError("Not yet implemented", 500);
   }
 
-  auto ApiController::delete_community(DeleteCommunity&, optional<SecretString>&&) -> CommunityResponse {
+  auto ApiController::delete_community(WriteTxn wtxn, DeleteCommunity&, optional<SecretString>&&) -> CommunityResponse {
     throw ApiError("Not yet implemented", 500);
   }
 
   /* deleteCustomEmoji */
 
-  auto ApiController::delete_post(DeletePost&, optional<SecretString>&&) -> PostResponse {
+  auto ApiController::delete_post(WriteTxn wtxn, DeletePost&, optional<SecretString>&&) -> PostResponse {
     throw ApiError("Not yet implemented", 500);
   }
 
   /* deletePrivateMessage */
   /* distinguishComment */
 
-  auto ApiController::edit_comment(EditComment& form, optional<SecretString>&& auth) -> CommentResponse {
-    const auto user_id = require_auth(form, std::move(auth));
+  auto ApiController::edit_comment(WriteTxn wtxn, EditComment& form, optional<SecretString>&& auth) -> CommentResponse {
+    const auto user_id = require_auth(form, std::move(auth), wtxn);
     // TODO: Use language_id
-    instance->update_comment(form.comment_id, user_id, {
+    instance->update_comment(std::move(wtxn), form.comment_id, user_id, {
       .text_content = form.content.transform(λx(x.c_str()))
     });
     auto txn = instance->open_read_txn();
@@ -528,10 +531,10 @@ namespace Ludwig::Lemmy {
     };
   }
 
-  auto ApiController::edit_community(EditCommunity& form, optional<SecretString>&& auth) -> CommunityResponse {
-    const auto user_id = require_auth(form, std::move(auth));
+  auto ApiController::edit_community(WriteTxn wtxn, EditCommunity& form, optional<SecretString>&& auth) -> CommunityResponse {
+    const auto user_id = require_auth(form, std::move(auth), wtxn);
     // TODO: Use discussion_languages
-    instance->update_local_board(form.community_id, user_id, {
+    instance->update_local_board(std::move(wtxn), form.community_id, user_id, {
       .display_name = form.title.transform(λx(x.c_str())),
       .description = form.description.transform(λx(x.c_str())),
       .icon_url = form.icon.transform(λx(x.c_str())),
@@ -548,12 +551,12 @@ namespace Ludwig::Lemmy {
 
   /* editCustomEmoji */
 
-  auto ApiController::edit_post(EditPost& form, optional<SecretString>&& auth) -> PostResponse {
-    const auto user_id = require_auth(form, std::move(auth));
+  auto ApiController::edit_post(WriteTxn wtxn, EditPost& form, optional<SecretString>&& auth) -> PostResponse {
+    const auto user_id = require_auth(form, std::move(auth), wtxn);
     if (form.url) throw ApiError("Updating thread URLs is not yet implemented", 500);
     // TODO: Use language_id
     // TODO: Update url
-    instance->update_thread(form.post_id, user_id, {
+    instance->update_thread(std::move(wtxn), form.post_id, user_id, {
       .title = form.name.transform(λx(x.c_str())),
       .text_content = form.body.transform(λx(x.c_str())),
       .content_warning = form.nsfw ? optional("NSFW") : nullopt
@@ -564,8 +567,8 @@ namespace Ludwig::Lemmy {
 
   /* editPrivateMessage */
 
-  auto ApiController::edit_site(EditSite& form, optional<SecretString>&& auth) -> SiteResponse {
-    const auto user_id = require_auth(form, std::move(auth), true);
+  auto ApiController::edit_site(WriteTxn wtxn, EditSite& form, optional<SecretString>&& auth) -> SiteResponse {
+    const auto user_id = require_auth(form, std::move(auth), wtxn, true);
     const auto home_page_type = form.default_post_listing_type
       .transform(parse_listing_type)
       .transform(listing_type_to_home_page_type);
@@ -577,7 +580,7 @@ namespace Ludwig::Lemmy {
     // TODO: captcha
     // TODO: federation
     // TODO: taglines
-    instance->update_site({
+    instance->update_site(std::move(wtxn), {
       .name = form.name,
       .description = form.sidebar,
       .icon_url = form.icon,
@@ -597,9 +600,9 @@ namespace Ludwig::Lemmy {
 
   /* featurePost */
 
-  auto ApiController::follow_community(FollowCommunity& form, optional<SecretString>&& auth) -> CommunityResponse {
-    const auto user_id = require_auth(form, std::move(auth));
-    instance->subscribe(user_id, form.community_id, form.follow.value_or(true));
+  auto ApiController::follow_community(WriteTxn wtxn, FollowCommunity& form, optional<SecretString>&& auth) -> CommunityResponse {
+    const auto user_id = require_auth(form, std::move(auth), wtxn);
+    instance->subscribe(std::move(wtxn), user_id, form.community_id, form.follow.value_or(true));
     auto txn = instance->open_read_txn();
     return {
       .community_view = get_community_view(txn, form.community_id, user_id),
@@ -637,7 +640,7 @@ namespace Ludwig::Lemmy {
         instance->thread_detail(txn, parent_id, sort, login, {}, (uint16_t)final_total).second :
         instance->comment_detail(txn, parent_id, sort, login, {}, (uint16_t)final_total).second;
       using Iter = std::multimap<uint64_t, CommentDetail>::iterator;
-      stlpb::static_vector<std::pair<Iter, Iter>, 256> stack_vec;
+      stlpb::static_vector<pair<Iter, Iter>, 256> stack_vec;
       std::stack stack(stack_vec);
       stack.push(tree.comments.equal_range(parent_id));
       for (uint16_t i = 0; i < final_total && !stack.empty(); i++) {
@@ -860,18 +863,18 @@ namespace Ludwig::Lemmy {
   /* getUnreadRegistrationApplicationCount */
   /* leaveAdmin */
 
-  auto ApiController::like_comment(CreateCommentLike& form, optional<SecretString>&& auth) -> CommentResponse {
-    const auto user_id = require_auth(form, std::move(auth));
+  auto ApiController::like_comment(WriteTxn wtxn, CreateCommentLike& form, optional<SecretString>&& auth) -> CommentResponse {
+    const auto user_id = require_auth(form, std::move(auth), wtxn);
     if (form.score > 1 || form.score < -1) throw ApiError("Invalid vote score (must be -1, 0, or 1)", 400);
-    instance->vote(user_id, form.comment_id, (Vote)form.score);
+    instance->vote(std::move(wtxn), user_id, form.comment_id, (Vote)form.score);
     auto txn = instance->open_read_txn();
     return { get_comment_view(txn, form.comment_id, user_id), {}, {} };
   }
 
-  auto ApiController::like_post(CreatePostLike& form, optional<SecretString>&& auth) -> PostResponse {
-    const auto user_id = require_auth(form, std::move(auth));
+  auto ApiController::like_post(WriteTxn wtxn, CreatePostLike& form, optional<SecretString>&& auth) -> PostResponse {
+    const auto user_id = require_auth(form, std::move(auth), wtxn);
     if (form.score > 1 || form.score < -1) throw ApiError("Invalid vote score (must be -1, 0, or 1)", 400);
-    instance->vote(user_id, form.post_id, (Vote)form.score);
+    instance->vote(std::move(wtxn), user_id, form.post_id, (Vote)form.score);
     auto txn = instance->open_read_txn();
     return { get_post_view(txn, form.post_id, user_id) };
   }
@@ -907,61 +910,58 @@ namespace Ludwig::Lemmy {
   /* listRegistrationApplications */
   /* lockPost */
 
-  auto ApiController::login(Login& form, string_view ip, string_view user_agent) -> LoginResponse {
+  auto ApiController::login(WriteTxn&& wtxn, Login& form, string_view ip, string_view user_agent) -> LoginResponse {
     // TODO: Specific error messages from API
     if (!form.totp_2fa_token.value_or("").empty()) {
       throw ApiError("TOTP 2FA is not supported", 400);
     }
     return {
-      login_and_get_jwt(form.username_or_email, std::move(form.password), ip, user_agent),
+      login_and_get_jwt(std::move(wtxn), form.username_or_email, std::move(form.password), ip, user_agent),
       false, false
     };
   }
 
-  auto ApiController::logout(SecretString&& auth) -> void {
+  auto ApiController::logout(WriteTxn txn, SecretString&& auth) -> void {
     uint64_t session_id = 0;
-    {
-      auto txn = instance->open_read_txn();
-      if (const auto jwt = parse_jwt(auth.data, txn.get_jwt_secret())) {
-        session_id = jwt->sub;
-      }
+    if (const auto jwt = parse_jwt(auth.data, txn.get_jwt_secret())) {
+      session_id = jwt->sub;
     }
-    if (session_id) instance->delete_session(session_id);
+    if (session_id) instance->delete_session(std::move(txn), session_id);
   }
 
-  auto ApiController::mark_all_as_read(MarkAllAsRead& form, optional<SecretString>&& auth) -> GetRepliesResponse {
-    require_auth(form, std::move(auth));
+  auto ApiController::mark_all_as_read(WriteTxn wtxn, MarkAllAsRead& form, optional<SecretString>&& auth) -> GetRepliesResponse {
+    require_auth(form, std::move(auth), wtxn);
     // TODO: Support mark as read (this does nothing)
     return {};
   }
 
-  auto ApiController::mark_comment_reply_as_read(MarkCommentReplyAsRead& form, optional<SecretString>&& auth) -> CommentReplyResponse {
-    require_auth(form, std::move(auth));
+  auto ApiController::mark_comment_reply_as_read(WriteTxn wtxn, MarkCommentReplyAsRead& form, optional<SecretString>&& auth) -> CommentReplyResponse {
+    require_auth(form, std::move(auth), wtxn);
     // TODO: Support mark as read (this does nothing)
     return {};
   }
 
-  auto ApiController::mark_person_mentions_as_read(MarkPersonMentionAsRead& form, optional<SecretString>&& auth) -> PersonMentionResponse {
-    require_auth(form, std::move(auth));
+  auto ApiController::mark_person_mentions_as_read(WriteTxn wtxn, MarkPersonMentionAsRead& form, optional<SecretString>&& auth) -> PersonMentionResponse {
+    require_auth(form, std::move(auth), wtxn);
     // TODO: Support mark as read (this does nothing)
     return {};
   }
 
-  auto ApiController::mark_post_as_read(MarkPostAsRead& form, optional<SecretString>&& auth) -> PostResponse {
-    const auto user_id = require_auth(form, std::move(auth));
+  auto ApiController::mark_post_as_read(WriteTxn wtxn, MarkPostAsRead& form, optional<SecretString>&& auth) -> PostResponse {
+    const auto user_id = require_auth(form, std::move(auth), wtxn);
     // TODO: Support mark as read (this does nothing)
-    auto txn = instance->open_read_txn();
-    return { get_post_view(txn, form.post_id, user_id) };
+    //auto txn = instance->open_read_txn();
+    return { get_post_view(wtxn, form.post_id, user_id) };
   }
 
   /* markPrivateMessageAsRead */
 
-  auto ApiController::password_change_after_reset(PasswordChangeAfterReset& form) -> void {
+  auto ApiController::password_change_after_reset(WriteTxn&& wtxn, PasswordChangeAfterReset& form) -> void {
     if (form.password.data != form.password_verify.data) throw ApiError("Passwords do not match", 400);
-    instance->change_password(form.token, std::move(form.password));
+    instance->change_password(std::move(wtxn), form.token, std::move(form.password));
   }
 
-  auto ApiController::password_reset(PasswordReset&) -> void {
+  auto ApiController::password_reset(WriteTxn, PasswordReset&) -> void {
     throw ApiError("Not yet supported (no email support)", 500);
   }
 
@@ -970,12 +970,13 @@ namespace Ludwig::Lemmy {
   /* purgePerson */
   /* purgePost */
 
-  auto ApiController::register_account(Register& form, string_view ip, string_view user_agent) -> LoginResponse {
+  auto ApiController::register_account(WriteTxn&& wtxn, Register& form, string_view ip, string_view user_agent) -> pair<uint64_t, bool> {
     if (form.honeypot && !form.honeypot->empty()) throw ApiError("bots begone", 418);
     if (form.password.data != form.password_verify.data) throw ApiError("Passwords do not match", 400);
     // TODO: Use captcha
     // TODO: Use show_nsfw
-    auto [id, approved] = instance->register_local_user(
+    return instance->register_local_user(
+      std::move(wtxn),
       form.username,
       form.email,
       std::move(form.password),
@@ -984,11 +985,6 @@ namespace Ludwig::Lemmy {
       {},
       form.answer
     );
-    return {
-      login_and_get_jwt(form.username, std::move(form.password_verify), ip, user_agent),
-      approved,
-      false // TODO: Email verification
-    };
   }
 
   /* removeComment */
@@ -999,22 +995,22 @@ namespace Ludwig::Lemmy {
   /* resolvePostReport */
   /* resolvePrivateMessageReport */
 
-  auto ApiController::save_comment(SaveComment& form, optional<SecretString>&& auth) -> CommentResponse {
-    const auto user_id = require_auth(form, std::move(auth));
-    instance->save_post(user_id, form.comment_id, form.save.value_or(true));
+  auto ApiController::save_comment(WriteTxn wtxn, SaveComment& form, optional<SecretString>&& auth) -> CommentResponse {
+    const auto user_id = require_auth(form, std::move(auth), wtxn);
+    instance->save_post(std::move(wtxn), user_id, form.comment_id, form.save.value_or(true));
     auto txn = instance->open_read_txn();
     return { get_comment_view(txn, form.comment_id, user_id), {}, {} };
   }
 
-  auto ApiController::save_post(SavePost& form, optional<SecretString>&& auth) -> PostResponse {
-    const auto user_id = require_auth(form, std::move(auth));
-    instance->save_post(user_id, form.post_id, form.save.value_or(true));
+  auto ApiController::save_post(WriteTxn wtxn, SavePost& form, optional<SecretString>&& auth) -> PostResponse {
+    const auto user_id = require_auth(form, std::move(auth), wtxn);
+    instance->save_post(std::move(wtxn), user_id, form.post_id, form.save.value_or(true));
     auto txn = instance->open_read_txn();
     return { get_post_view(txn, form.post_id, user_id) };
   }
 
-  auto ApiController::save_user_settings(SaveUserSettings& form, optional<SecretString>&& auth) -> LoginResponse {
-    const auto [user_id, jwt] = require_auth_and_keep_jwt(form, std::move(auth));
+  auto ApiController::save_user_settings(WriteTxn wtxn, SaveUserSettings& form, optional<SecretString>&& auth) -> LoginResponse {
+    const auto [user_id, jwt] = require_auth_and_keep_jwt(form, std::move(auth), wtxn);
     // TODO: show_new_post_notifs
     // TODO: show_read_posts
     // TODO: discussion_languages
@@ -1024,7 +1020,7 @@ namespace Ludwig::Lemmy {
     // TODO: generate_totp_2fa
     // TODO: send_notifications_to_email
     // TODO: theme
-    instance->update_local_user(user_id, user_id, {
+    instance->update_local_user(std::move(wtxn), user_id, user_id, {
       .email = form.email,
       .display_name = form.display_name,
       .bio = form.bio,
@@ -1073,7 +1069,7 @@ namespace Ludwig::Lemmy {
     if (auth) validate_jwt(std::move(*auth));
   }
 
-  auto ApiController::verify_email(VerifyEmail&) -> void {
+  auto ApiController::verify_email(WriteTxn txn, VerifyEmail&) -> void {
     throw ApiError("Not yet supported (no email support)", 500);
   }
 }

@@ -10,12 +10,13 @@ using flatbuffers::FlatBufferBuilder, flatbuffers::Offset;
 
 struct Instance {
   TempFile file;
+  shared_ptr<DB> db;
   shared_ptr<InstanceController> controller;
 
   Instance() {
     auto epoch = now_s() - DAY * 7;
-    auto db = make_shared<DB>(file.name);
-    auto txn = db->open_write_txn();
+    db = make_shared<DB>(file.name, 100, true);
+    auto txn = db->open_write_txn_sync();
     txn.set_setting(SettingsKey::created_at, epoch);
     txn.set_setting(SettingsKey::base_url, "http://ludwig.test");
     txn.commit();
@@ -27,13 +28,14 @@ struct Instance {
 
 struct PopulatedInstance {
   TempFile file;
+  shared_ptr<DB> db;
   shared_ptr<InstanceController> controller;
   uint64_t users[6], boards[3], threads[NUM_THREADS];
 
   PopulatedInstance() {
     auto epoch = now_s() - DAY * 7;
-    auto db = make_shared<DB>(file.name);
-    auto txn = db->open_write_txn();
+    db = make_shared<DB>(file.name, 100, true);
+    auto txn = db->open_write_txn_sync();
     txn.set_setting(SettingsKey::created_at, epoch);
     txn.set_setting(SettingsKey::base_url, "http://ludwig.test");
     FlatBufferBuilder fbb;
@@ -77,6 +79,7 @@ struct PopulatedInstance {
       u.add_display_name(dn);
       u.add_bio_type(bio_t);
       u.add_bio(bio);
+      u.add_bio_raw(bio_raw);
       u.add_created_at(epoch + HOUR);
       u.add_updated_at(epoch + DAY * 2);
       fbb.Finish(u.Finish());
@@ -104,6 +107,7 @@ struct PopulatedInstance {
       u.add_display_name(dn);
       u.add_bio_type(bio_t);
       u.add_bio(bio);
+      u.add_bio_raw(bio_raw);
       u.add_created_at(epoch + DAY);
       u.add_mod_state(ModState::Removed);
       u.add_mod_reason(mod_reason);
@@ -131,6 +135,7 @@ struct PopulatedInstance {
       u.add_display_name(dn);
       u.add_bio_type(bio_t);
       u.add_bio(bio);
+      u.add_bio_raw(bio_raw);
       u.add_created_at(epoch + DAY + HOUR * 2);
       u.add_bot(true);
       fbb.Finish(u.Finish());
@@ -387,6 +392,7 @@ TEST_CASE_METHOD(Instance, "register and login", "[instance]") {
   // Try registration (forbidden by default)
   REQUIRE_THROWS_AS(
     controller->register_local_user(
+      db->open_write_txn_sync(),
       "somebody",
       "somebody@example.test",
       {"foobarbaz"},
@@ -397,7 +403,7 @@ TEST_CASE_METHOD(Instance, "register and login", "[instance]") {
   );
 
   // Enable registration, then it should work
-  controller->update_site({
+  controller->update_site(db->open_write_txn_sync(), {
     .registration_enabled = true,
     .registration_application_required = false,
     .registration_invite_required = false
@@ -405,6 +411,7 @@ TEST_CASE_METHOD(Instance, "register and login", "[instance]") {
   pair<uint64_t, bool> result;
   REQUIRE_NOTHROW(
     result = controller->register_local_user(
+      db->open_write_txn_sync(),
       "somebody",
       "somebody@example.test",
       {"foobarbaz"},
@@ -431,29 +438,37 @@ TEST_CASE_METHOD(Instance, "register and login", "[instance]") {
 
   // login with wrong password
   CHECK_THROWS_AS(
-    controller->login("somebody", {"foobarbazqux"}, "0.0.0.0", "internet exploder -1"),
+    controller->login(db->open_write_txn_sync(), "somebody", {"foobarbazqux"}, "0.0.0.0", "internet exploder -1"),
     ApiError
   );
 
   // login with wrong username
   CHECK_THROWS_AS(
-    controller->login("somebodyy", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"),
+    controller->login(db->open_write_txn_sync(), "somebodyy", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"),
     ApiError
   );
 
   SECTION("login attempts") {
     LoginResponse login;
     SECTION("login with correct password (by username)") {
-      REQUIRE_NOTHROW(login = controller->login("somebody", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"));
+      REQUIRE_NOTHROW(login = controller->login(
+        db->open_write_txn_sync(), "somebody", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"
+      ));
     }
     SECTION("login with correct password (by email)") {
-      REQUIRE_NOTHROW(login = controller->login("somebody@example.test", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"));
+      REQUIRE_NOTHROW(login = controller->login(
+        db->open_write_txn_sync(), "somebody@example.test", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"
+      ));
     }
     SECTION("login with correct password (by username, case-insensitive)") {
-      REQUIRE_NOTHROW(login = controller->login("sOmEbOdY", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"));
+      REQUIRE_NOTHROW(login = controller->login(
+        db->open_write_txn_sync(), "sOmEbOdY", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"
+      ));
     }
     SECTION("login with correct password (by email, case-insensitive)") {
-      REQUIRE_NOTHROW(login = controller->login("SOMEBODY@EXAMPLE.TEST", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"));
+      REQUIRE_NOTHROW(login = controller->login(
+        db->open_write_txn_sync(), "SOMEBODY@EXAMPLE.TEST", {"foobarbaz"}, "0.0.0.0", "internet exploder -1"
+      ));
     }
 
     CHECK(login.user_id == id);
@@ -465,7 +480,7 @@ TEST_CASE_METHOD(Instance, "register and login", "[instance]") {
 }
 
 TEST_CASE_METHOD(Instance, "register with application", "[instance]") {
-  controller->update_site({
+  controller->update_site(db->open_write_txn_sync(), {
     .registration_enabled = true,
     .registration_application_required = true,
     .registration_invite_required = false
@@ -474,6 +489,7 @@ TEST_CASE_METHOD(Instance, "register with application", "[instance]") {
   // Try registration with no application
   REQUIRE_THROWS_AS(
     controller->register_local_user(
+      db->open_write_txn_sync(),
       "somebody",
       "somebody@example.test",
       {"foobarbaz"},
@@ -487,6 +503,7 @@ TEST_CASE_METHOD(Instance, "register with application", "[instance]") {
   pair<uint64_t, bool> result;
   REQUIRE_NOTHROW(
     result = controller->register_local_user(
+      db->open_write_txn_sync(),
       "somebody",
       "somebody@example.test",
       {"foobarbaz"},
@@ -519,7 +536,9 @@ TEST_CASE_METHOD(Instance, "register with application", "[instance]") {
     CHECK(a.text()->string_view() == "please let me into the forum\n\ni am normal and can be trusted with post");
   }
 
-  REQUIRE_NOTHROW(controller->approve_local_user_application(id, {}));
+  REQUIRE_NOTHROW(controller->approve_local_user_application(
+    db->open_write_txn_sync(), id, {}
+  ));
 
   {
     auto txn = controller->open_read_txn();
@@ -532,7 +551,7 @@ TEST_CASE_METHOD(Instance, "register with application", "[instance]") {
 }
 
 TEST_CASE_METHOD(PopulatedInstance, "register with invite", "[instance]") {
-  controller->update_site({
+  controller->update_site(db->open_write_txn_sync(), {
     .registration_enabled = true,
     .registration_application_required = false,
     .registration_invite_required = true
@@ -541,6 +560,7 @@ TEST_CASE_METHOD(PopulatedInstance, "register with invite", "[instance]") {
   // Try registration with no invite
   REQUIRE_THROWS_AS(
     controller->register_local_user(
+      db->open_write_txn_sync(),
       "somebody",
       "somebody@example.test",
       {"foobarbaz"},
@@ -551,12 +571,13 @@ TEST_CASE_METHOD(PopulatedInstance, "register with invite", "[instance]") {
   );
 
   // Create invite from admin
-  const auto invite = controller->create_site_invite(users[0]);
+  const auto invite = controller->create_site_invite(db->open_write_txn_sync(), users[0]);
 
   // Now try with invite
   pair<uint64_t, bool> result;
   REQUIRE_NOTHROW(
     result = controller->register_local_user(
+      db->open_write_txn_sync(),
       "somebody",
       "somebody@example.test",
       {"foobarbaz"},

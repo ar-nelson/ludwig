@@ -216,5 +216,6 @@ namespace Ludwig {
 
   struct Cancelable {
     virtual void cancel() noexcept {};
+    virtual ~Cancelable() {}
   };
 }
