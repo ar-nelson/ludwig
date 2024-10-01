@@ -164,6 +164,7 @@ Because, unlike Lemmy, my project is named after the _best_ Koopaling.
 - [ ] Create a board from an RSS feed
 
 [lemmy]: https://join-lemmy.org/
+[sentencepiece]: https://github.com/google/sentencepiece
 [uws]: https://github.com/uNetworking/uWebSockets
 [spam]: https://github.com/disposable-email-domains/disposable-email-domains/
 [sonic]: https://github.com/valeriansaliou/sonic
