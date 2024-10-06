@@ -1,4 +1,5 @@
 #include "integration_common.h++"
+#include "models/detail.h++"
 
 SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") {
   FirstRunSetup setup {
@@ -236,7 +237,11 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
             uint64_t id = 0;
             {
               auto txn = instance->open_read_txn();
-              instance->list_applications([&](auto p) { id = p.second.id; }, txn, {}, {}, 1);
+              optional<uint64_t> cur;
+              optional<LocalUserDetail> login;
+              for (auto p : instance->list_applications(txn, cur, login, 1)) {
+                id = p.second.id; 
+              }
             }
             REQUIRE(id != 0);
             auto rsp = http.post(fmt::format("{}/site_admin/applications/approve/{:x}", base_url, id))

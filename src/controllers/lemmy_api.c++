@@ -5,6 +5,7 @@
 #include "util/jwt.h++"
 #include "util/rich_text.h++"
 #include "util/lambda_macros.h++"
+#include "util/router.h++"
 
 using std::nullopt, std::optional, std::pair, std::string, std::string_view, std::vector;
 
@@ -613,6 +614,25 @@ namespace Ludwig::Lemmy {
   /* getBannedPersons */
   /* getCaptcha */
 
+  template <class T>
+  static inline auto paginate(const T& form, string_view endpoint) -> pair<uint16_t, uint16_t> {
+    const uint16_t limit = form.limit ? form.limit : ITEMS_PER_PAGE, page = form.page ? form.page - 1 : 0;
+    if (limit < 1 || limit > 256) throw ApiError(fmt::format("{} requires 0 < limit <= 256", endpoint), 400);
+    const uint64_t offset = limit * page, final_total = offset + limit;
+    if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
+    return {(uint16_t)offset, (uint16_t)final_total};
+  }
+
+  template <class In, class Fn>
+  static inline auto page_to_vector(uint16_t offset, Fn fn, std::generator<const In&> gen) -> vector<decltype(fn(std::declval<const In&>()))> {
+    vector<decltype(fn(std::declval<const In&>()))> out;
+    uint16_t i = 0;
+    for (const In& e : gen) {
+      if (i++ >= offset) out.push_back(fn(e));
+    }
+    return out;
+  }
+
   auto ApiController::get_comment(const GetComment& form, optional<SecretString>&& auth) -> CommentResponse {
     auto txn = instance->open_read_txn();
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
@@ -621,10 +641,7 @@ namespace Ludwig::Lemmy {
 
   auto ApiController::get_comments(const GetComments& form, optional<SecretString>&& auth) -> GetCommentsResponse {
     auto txn = instance->open_read_txn();
-    const uint16_t limit = form.limit ? form.limit : ITEMS_PER_PAGE, page = form.page ? form.page - 1 : 0;
-    if (limit < 1 || limit > 256) throw ApiError("get_comments requires 0 < limit <= 256", 400);
-    const uint64_t offset = limit * page, final_total = offset + limit;
-    if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
+    const auto [offset, limit] = paginate(form, "get_comments");
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
     const auto login = LocalUserDetail::get_login(txn, login_id);
     if ((int)!form.parent_id + (int)!form.post_id + (int)form.community_name.empty() < 2) {
@@ -637,13 +654,13 @@ namespace Ludwig::Lemmy {
       const bool is_thread = !!txn.get_thread(parent_id);
       const auto sort = parse_comment_sort_type(form.sort, login);
       auto tree = is_thread ?
-        instance->thread_detail(txn, parent_id, sort, login, {}, (uint16_t)final_total).second :
-        instance->comment_detail(txn, parent_id, sort, login, {}, (uint16_t)final_total).second;
+        instance->thread_detail(txn, parent_id, sort, login, next, limit).second :
+        instance->comment_detail(txn, parent_id, sort, login, next, limit).second;
       using Iter = std::multimap<uint64_t, CommentDetail>::iterator;
       stlpb::static_vector<pair<Iter, Iter>, 256> stack_vec;
       std::stack stack(stack_vec);
       stack.push(tree.comments.equal_range(parent_id));
-      for (uint16_t i = 0; i < final_total && !stack.empty(); i++) {
+      for (uint16_t i = 0; i < limit && !stack.empty(); i++) {
         auto& iters = stack.top();
         if (iters.first == iters.second) {
           stack.pop();
@@ -655,20 +672,18 @@ namespace Ludwig::Lemmy {
         iters.first++;
       }
     } else {
-      uint16_t i = 0;
-      const auto add_entry = [&](auto& e) {
-        if (i++ >= offset) entries.push_back(to_comment_view(txn, e));
-      };
       const auto sort = parse_sort_type(form.sort, login);
       if (!form.community_name.empty()) {
         if (auto board_id = txn.get_board_id_by_name(form.community_name)) {
-          instance->list_board_comments(add_entry, txn, *board_id, sort, login, {}, (uint16_t)final_total);
+          entries = page_to_vector(offset, [&](auto& e) { return to_comment_view(txn, e); },
+           instance->list_board_comments(txn, next, *board_id, sort, login, limit));
         } else {
           throw ApiError(fmt::format("No community named \"{}\" exists", form.community_name), 410);
         }
       } else {
         const auto feed = form.type ? listing_type_to_feed(*form.type) : InstanceController::FEED_ALL;
-        instance->list_feed_comments(add_entry, txn, feed, sort, login, {}, (uint16_t)final_total);
+        entries = page_to_vector(offset, [&](auto& e) { return to_comment_view(txn, e); },
+          instance->list_feed_comments(txn, next, feed, sort, login, limit));
       }
     }
     return { entries };
@@ -701,10 +716,7 @@ namespace Ludwig::Lemmy {
 
   auto ApiController::get_person_details(const GetPersonDetails& form, optional<SecretString>&& auth) -> GetPersonDetailsResponse {
     auto txn = instance->open_read_txn();
-    const uint16_t limit = form.limit ? form.limit : ITEMS_PER_PAGE, page = form.page ? form.page - 1 : 0;
-    if (limit < 1 || limit > 256) throw ApiError("get_person_details requires 0 < limit <= 256", 400);
-    const uint64_t offset = limit * page, final_total = offset + limit;
-    if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
+    const auto [offset, limit] = paginate(form, "get_person_details");
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
     const auto login = LocalUserDetail::get_login(txn, login_id);
     if ((form.person_id == 0) == form.username.empty()) {
@@ -718,21 +730,15 @@ namespace Ludwig::Lemmy {
     } else {
       throw ApiError(fmt::format("No user named \"{}\" exists", form.username), 410);
     }
-    vector<PostView> posts;
-    vector<CommentView> comments;
-    uint16_t i = 0;
-    instance->list_user_threads([&](auto& e) {
-      if (i++ >= offset) posts.push_back(to_post_view(txn, e));
-    }, txn, id, form.sort, login, {}, (uint16_t)final_total);
-    i = 0;
-    instance->list_user_comments([&](auto& e) {
-      if (i++ >= offset) comments.push_back(to_comment_view(txn, e));
-    }, txn, id, form.sort, login, {}, (uint16_t)final_total);
+    PageCursor c1, c2;
     return {
       .person_view = get_person_view(txn, id, login_id),
-      .comments = comments,
-      .posts = posts
+      .comments = page_to_vector(offset, [&](auto& e) { return to_comment_view(txn, e); },
+        instance->list_user_comments(txn, c1, id, form.sort, login, limit)),
+      .posts = page_to_vector(offset, [&](auto& e) { return to_post_view(txn, e); },
+        instance->list_user_threads(txn, c2, id, form.sort, login, limit))
       // TODO: moderators
+      // TODO: iterate posts and comments separately?
     };
   }
 
@@ -766,21 +772,13 @@ namespace Ludwig::Lemmy {
 
   auto ApiController::get_posts(const GetPosts& form, optional<SecretString>&& auth) -> GetPostsResponse {
     auto txn = instance->open_read_txn();
-    const uint16_t limit = form.limit ? form.limit : ITEMS_PER_PAGE, page = form.page ? form.page - 1 : 0;
-    if (limit < 1 || limit > 256) throw ApiError("get_posts requires 0 < limit <= 256", 400);
-    const uint64_t offset = limit * page, final_total = offset + limit;
-    if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
+    const auto [offset, limit] = paginate(form, "get_posts");
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
     const auto login = LocalUserDetail::get_login(txn, login_id);
     if (form.community_id && !form.community_name.empty()) {
       throw ApiError(R"(get_posts requires at most one of "community_id", or "community_name")", 400);
     }
     const auto sort = parse_sort_type(form.sort, login);
-    vector<PostView> entries;
-    uint16_t i = 0;
-    const auto add_entry = [&](auto& e) {
-      if (i++ >= offset) entries.push_back(to_post_view(txn, e));
-    };
     uint64_t board_id = 0;
     if (form.community_id) {
       board_id = form.community_id;
@@ -791,13 +789,14 @@ namespace Ludwig::Lemmy {
         throw ApiError(fmt::format("No community named \"{}\" exists", form.community_name), 410);
       }
     }
+    PageCursor cur;
     if (board_id) {
-      instance->list_board_threads(add_entry, txn, board_id, sort, login, {}, (uint16_t)final_total);
-    } else {
-      auto feed = form.type ? listing_type_to_feed(*form.type) : InstanceController::FEED_ALL;
-      instance->list_feed_threads(add_entry, txn, feed, sort, login, {}, (uint16_t)final_total);
+      return { page_to_vector(offset, [&](auto& e) { return to_post_view(txn, e); },
+        instance->list_board_threads(txn, cur, board_id, sort, login, limit)) };
     }
-    return { entries };
+    auto feed = form.type ? listing_type_to_feed(*form.type) : InstanceController::FEED_ALL;
+    return { page_to_vector(offset, [&](auto& e) { return to_post_view(txn, e); },
+      instance->list_feed_threads(txn, cur, feed, sort, login, limit)) };
   }
 
   /* getPrivateMessages */
@@ -883,26 +882,18 @@ namespace Ludwig::Lemmy {
 
   auto ApiController::list_communities(const ListCommunities& form, optional<SecretString>&& auth) -> ListCommunitiesResponse {
     auto txn = instance->open_read_txn();
-    const uint16_t limit = form.limit ? form.limit : ITEMS_PER_PAGE, page = form.page ? form.page - 1 : 0;
-    if (limit < 1 || limit > 256) throw ApiError("list_communities requires 0 < limit <= 256", 400);
-    const uint64_t offset = limit * page, final_total = offset + limit;
-    if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
+    auto [offset, limit] = paginate(form, "list_communities");
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
     const auto login = LocalUserDetail::get_login(txn, login_id);
-    vector<CommunityView> entries;
-    uint16_t i = 0;
+    PageCursor cur;
     // TODO: hide nsfw
-    instance->list_boards(
-      [&](auto& e) {
-        if (i++ >= offset) entries.push_back(to_community_view(e));
-      },
-      txn, form.sort,
+    return { page_to_vector(offset, [&](auto& e) { return to_community_view(e); }, instance->list_boards(
+      txn, cur, form.sort,
       form.type == optional(ListingType::Local),
       form.type == optional(ListingType::Subscribed),
-      login, {},
-      (uint16_t)final_total
-    );
-    return { entries };
+      login,
+      limit
+    )) };
   }
 
   /* listPostReports */
@@ -1035,30 +1026,36 @@ namespace Ludwig::Lemmy {
     return { SecretString(jwt.data), false, false };
   }
 
-  auto ApiController::search(Search& form, optional<SecretString>&& auth, uWS::MoveOnlyFunction<void (SearchResponse)> cb) -> void {
+  template <IsRequestContext Ctx>
+  auto ApiController::search(const Ctx& ctx, Search& form, optional<SecretString>&& auth) -> RouterAwaiter<std::vector<SearchResultDetail>, Ctx> {
     // TODO: Most fields (this uses very few fields)
-    const auto user_id = optional_auth(form, std::move(auth));
     uint16_t limit = form.limit.value_or(ITEMS_PER_PAGE);
     if (limit > 256) throw ApiError("search requires 0 < limit <= 256", 400);
-    instance->search_step_1({
+    const auto login = ({
+      auto txn = instance->open_read_txn();
+      const auto user_id = optional_auth(form, std::move(auth));
+      LocalUserDetail::get_login(txn, user_id);
+    });
+    return instance->search(ctx, {
       .query = form.q,
       .board_id = form.community_id.value_or(0),
       .offset = (size_t)((form.page.value_or(1) - 1) * limit),
       .limit = limit
-    }, [&, limit, user_id](auto&& results){
-      auto txn = instance->open_read_txn();
-      const auto login = LocalUserDetail::get_login(txn, user_id);
-      SearchResponse response;
-      for (const auto detail : instance->search_step_2(txn, results, limit, login)) {
-        std::visit(overload{
-          [&](const CommentDetail& comment) { response.comments.push_back(to_comment_view(txn, comment)); },
-          [&](const BoardDetail& board) { response.communities.push_back(to_community_view(board)); },
-          [&](const ThreadDetail& thread) { response.posts.push_back(to_post_view(txn, thread)); },
-          [&](const UserDetail& user) { response.users.push_back(to_person_view(user)); }
-        }, detail);
-      }
-      cb(response);
-    });
+    }, login);
+  }
+
+  auto ApiController::search_results(const vector<SearchResultDetail>& results) -> SearchResponse {
+    auto txn = instance->open_read_txn();
+    SearchResponse response;
+    for (const auto& detail : results) {
+      std::visit(overload{
+        [&](const CommentDetail& comment) { response.comments.push_back(to_comment_view(txn, comment)); },
+        [&](const BoardDetail& board) { response.communities.push_back(to_community_view(board)); },
+        [&](const ThreadDetail& thread) { response.posts.push_back(to_post_view(txn, thread)); },
+        [&](const UserDetail& user) { response.users.push_back(to_person_view(user)); }
+      }, detail);
+    }
+    return response;
   }
 
   /* transferCommunity */

@@ -4,8 +4,7 @@
 #include <static_block.hpp>
 
 using flatbuffers::FlatBufferBuilder, flatbuffers::Offset,
-    std::nullopt, std::optional, std::string,
-    std::string_view, std::vector;
+    std::nullopt, std::optional, std::string, std::string_view, std::vector;
 namespace chrono = std::chrono;
 using namespace std::literals;
 
@@ -418,63 +417,97 @@ namespace Ludwig {
   }
 
   auto ThreadDetail::mod_state(PostContext context) const noexcept -> ModStateDetail {
+    using enum ModState;
+    using enum ModStateSubject;
     // TODO: Board-specific user mod state
     ModStateDetail d;
-    if (context != PostContext::Board && board().mod_state() > ModState::Normal && board().mod_state() >= d.state) {
-      d = { ModStateSubject::Board, board().mod_state(), opt_sv(board().mod_reason()) };
+    if (context != PostContext::Board && board().mod_state() > Normal && board().mod_state() >= d.state) {
+      d = { Board, board().mod_state(), opt_sv(board().mod_reason()) };
     }
-    if (context != PostContext::User && author().mod_state() > ModState::Normal && author().mod_state() >= d.state) {
-      d = { ModStateSubject::User, author().mod_state(), opt_sv(author().mod_reason()) };
+    if (context != PostContext::User && author().mod_state() > Normal && author().mod_state() >= d.state) {
+      d = { User, author().mod_state(), opt_sv(author().mod_reason()) };
     }
-    if (thread().board_mod_state() > ModState::Normal && thread().board_mod_state() >= d.state) {
-      d = { ModStateSubject::ThreadInBoard, thread().board_mod_state(), opt_sv(thread().board_mod_reason()) };
+    if (thread().board_mod_state() > Normal && thread().board_mod_state() >= d.state) {
+      d = { ThreadInBoard, thread().board_mod_state(), opt_sv(thread().board_mod_reason()) };
     }
-    if (thread().mod_state() > ModState::Normal && thread().mod_state() >= d.state) {
-      d = { ModStateSubject::Thread, thread().mod_state(), opt_sv(thread().mod_reason()) };
+    if (thread().mod_state() > Normal && thread().mod_state() >= d.state) {
+      d = { Thread, thread().mod_state(), opt_sv(thread().mod_reason()) };
     }
     return d;
   }
 
   auto CommentDetail::mod_state(PostContext context) const noexcept -> ModStateDetail {
+    using enum ModState;
+    using enum ModStateSubject;
     // TODO: Board-specific user mod state
     ModStateDetail d;
-    if (context != PostContext::Board && context != PostContext::Reply && board().mod_state() > ModState::Normal && board().mod_state() >= d.state) {
-      d = { ModStateSubject::Board, board().mod_state(), opt_sv(board().mod_reason()) };
+    if (context != PostContext::Board && context != PostContext::Reply && board().mod_state() > Normal && board().mod_state() >= d.state) {
+      d = { Board, board().mod_state(), opt_sv(board().mod_reason()) };
     }
-    if (context != PostContext::User && author().mod_state() > ModState::Normal && author().mod_state() >= d.state) {
-      d = { ModStateSubject::User, author().mod_state(), opt_sv(author().mod_reason()) };
+    if (context != PostContext::User && author().mod_state() > Normal && author().mod_state() >= d.state) {
+      d = { User, author().mod_state(), opt_sv(author().mod_reason()) };
     }
-    if (context != PostContext::Reply && thread().board_mod_state() > ModState::Normal && thread().board_mod_state() >= d.state) {
-      d = { ModStateSubject::ThreadInBoard, thread().board_mod_state(), opt_sv(thread().board_mod_reason()) };
+    if (context != PostContext::Reply && thread().board_mod_state() > Normal && thread().board_mod_state() >= d.state) {
+      d = { ThreadInBoard, thread().board_mod_state(), opt_sv(thread().board_mod_reason()) };
     }
-    if (context != PostContext::Reply && thread().mod_state() > ModState::Normal && thread().mod_state() >= d.state) {
-      d = { ModStateSubject::Thread, thread().mod_state(), opt_sv(thread().mod_reason()) };
+    if (context != PostContext::Reply && thread().mod_state() > Normal && thread().mod_state() >= d.state) {
+      d = { Thread, thread().mod_state(), opt_sv(thread().mod_reason()) };
     }
-    if (comment().board_mod_state() > ModState::Normal && comment().board_mod_state() >= d.state) {
-      d = { ModStateSubject::CommentInBoard, comment().board_mod_state(), opt_sv(comment().board_mod_reason()) };
+    if (comment().board_mod_state() > Normal && comment().board_mod_state() >= d.state) {
+      d = { CommentInBoard, comment().board_mod_state(), opt_sv(comment().board_mod_reason()) };
     }
-    if (comment().mod_state() > ModState::Normal && comment().mod_state() >= d.state) {
-      d = { ModStateSubject::Comment, comment().mod_state(), opt_sv(comment().mod_reason()) };
+    if (comment().mod_state() > Normal && comment().mod_state() >= d.state) {
+      d = { Comment, comment().mod_state(), opt_sv(comment().mod_reason()) };
     }
     return d;
   }
 
   auto ThreadDetail::content_warning(PostContext context) const noexcept -> optional<ContentWarningDetail> {
+    using enum ContentWarningSubject;
     if (thread().content_warning()) {
-      return {{ ContentWarningSubject::Thread, thread().content_warning()->string_view() }};
+      return {{ Thread, thread().content_warning()->string_view() }};
     } else if (context != PostContext::Board && context != PostContext::View && board().content_warning()) {
-      return {{ ContentWarningSubject::Board, board().content_warning()->string_view() }};
+      return {{ Board, board().content_warning()->string_view() }};
     }
     return {};
   }
 
   auto CommentDetail::content_warning(PostContext context) const noexcept -> optional<ContentWarningDetail> {
+    using enum ContentWarningSubject;
     if (comment().content_warning()) {
-      return {{ ContentWarningSubject::Comment, comment().content_warning()->string_view() }};
+      return {{ Comment, comment().content_warning()->string_view() }};
     } else if (context != PostContext::Reply && thread().content_warning()) {
-      return {{ ContentWarningSubject::Thread, thread().content_warning()->string_view() }};
+      return {{ Thread, thread().content_warning()->string_view() }};
     } else if (context != PostContext::Board && context != PostContext::View && context != PostContext::Reply && board().content_warning()) {
-      return {{ ContentWarningSubject::Board, board().content_warning()->string_view() }};
+      return {{ Board, board().content_warning()->string_view() }};
+    }
+    return {};
+  }
+
+  auto search_result_detail(ReadTxn& txn, const SearchResult& result, Login login) -> optional<SearchResultDetail> {
+    using enum SearchResultType;
+    const auto id = result.id;
+    switch (result.type) {
+      case User: {
+        const auto entry = UserDetail::get(txn, id, login);
+        if (entry.should_show(login)) return entry;
+        break;
+      }
+      case Board: {
+        const auto entry = BoardDetail::get(txn, id, login);
+        if (entry.should_show(login)) return entry;
+        break;
+      }
+      case Thread: {
+        const auto entry = ThreadDetail::get(txn, id, login);
+        if (entry.should_show(login)) return entry;
+        break;
+      }
+      case Comment: {
+        const auto entry = CommentDetail::get(txn, id, login);
+        if (entry.should_show(login)) return entry;
+        break;
+      }
     }
     return {};
   }

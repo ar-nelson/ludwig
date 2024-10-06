@@ -324,10 +324,14 @@ TEST_CASE("hash password", "[instance]") {
 TEST_CASE_METHOD(PopulatedInstance, "list users", "[instance]") {
   auto txn = controller->open_read_txn();
   vector<string> vec;
-  const auto add_name = [&](auto& i){vec.emplace_back(i.user().name()->str());};
+  auto populate_vec = [&](std::generator<const UserDetail&> users) {
+    vec.clear();
+    for (auto& i : users) vec.emplace_back(i.user().name()->str());
+  };
 
   // New, not logged in, local and federated
-  auto next = controller->list_users(add_name, txn, UserSortType::New, false);
+  PageCursor next;
+  populate_vec(controller->list_users(txn, next, UserSortType::New, false));
   {
     vector<string> tmp;
     for (int i = 0; i < ITEMS_PER_PAGE; i++) {
@@ -336,54 +340,52 @@ TEST_CASE_METHOD(PopulatedInstance, "list users", "[instance]") {
     CHECK(vec == tmp);
   }
   CHECK(next);
-  vec.clear();
-  next = controller->list_users(add_name, txn, UserSortType::New, false, {}, next);
+  populate_vec(controller->list_users(txn, next, UserSortType::New, false));
   CHECK(vec == vector<string>{
     "robot", "visitor@federated.test", "rando", "admin"
   });
   CHECK_FALSE(next);
 
   // New, not logged in, local only
-  vec.clear();
-  next = controller->list_users(add_name, txn, UserSortType::New, true);
+  next = {};
+  populate_vec(controller->list_users(txn, next, UserSortType::New, true));
   CHECK(vec == vector<string>{"robot", "rando", "admin"});
   CHECK_FALSE(next);
 
   // Old, not logged in, local and federated
-  vec.clear();
-  next = controller->list_users(add_name, txn, UserSortType::Old, false);
+  next = {};
+  populate_vec(controller->list_users(txn, next, UserSortType::Old, false));
   CHECK(vec.size() == ITEMS_PER_PAGE);
   vec.resize(5);
   CHECK(vec == vector<string>{
     "admin", "rando", "visitor@federated.test", "robot", "filler_u0@federated.test"
   });
   REQUIRE(next);
-  vec.clear();
-  next = controller->list_users(add_name, txn, UserSortType::Old, false, {}, next);
+  populate_vec(controller->list_users(txn, next, UserSortType::Old, false));
   CHECK(vec.size() == 4);
   CHECK_FALSE(next);
 
   // Old, not logged in, local only
-  vec.clear();
-  next = controller->list_users(add_name, txn, UserSortType::Old, true);
+  next = {};
+  populate_vec(controller->list_users(txn, next, UserSortType::Old, true));
   CHECK(vec == vector<string>{"admin", "rando", "robot"});
   CHECK_FALSE(next);
 
   // New, logged in as admin, local only
-  vec.clear();
-  next = controller->list_users(add_name, txn, UserSortType::New, true, LocalUserDetail::get_login(txn, users[0]));
+  next = {};
+  populate_vec(controller->list_users(txn, next, UserSortType::New, true, LocalUserDetail::get_login(txn, users[0])));
   CHECK(vec == vector<string>{"unapproved", "robot", "troll", "rando", "admin"});
   CHECK_FALSE(next);
 
   // New, logged in as rando (excludes bots), local only
-  vec.clear();
-  next = controller->list_users(add_name, txn, UserSortType::New, true, LocalUserDetail::get_login(txn, users[1]));
+  next = {};
+  populate_vec(controller->list_users(txn, next, UserSortType::New, true, LocalUserDetail::get_login(txn, users[1])));
   CHECK(vec == vector<string>{"rando", "admin"});
   CHECK_FALSE(next);
 
   // New, logged in as troll (includes self, hides admin), local only
-  vec.clear();
-  next = controller->list_users(add_name, txn, UserSortType::New, true, LocalUserDetail::get_login(txn, users[2]));
+  next = {};
+  populate_vec(controller->list_users(txn, next, UserSortType::New, true, LocalUserDetail::get_login(txn, users[2])));
   CHECK(vec == vector<string>{"robot", "troll", "rando"});
   CHECK_FALSE(next);
 }

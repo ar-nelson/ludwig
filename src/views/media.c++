@@ -1,22 +1,17 @@
-#include "media.h++"
+#include "controllers/remote_media.h++"
 #include "util/router.h++"
+#include "util/thumbnailer.h++"
 
 using std::pair, std::shared_ptr, std::string;
 using namespace uWS;
 
 namespace Ludwig {
-  template <bool SSL>
-  class ThumbnailAwaiter : public RouterAwaiter<ImageRef, RequestContext<SSL>> {
-    shared_ptr<Cancelable> cancelable;
-  public:
-    template <typename Fn>
-    ThumbnailAwaiter(Fn&& fn) : cancelable(fn([this] (ImageRef img) { this->set_value(std::move(img)); })) {}
-
-    void cancel() noexcept override {
-      if (cancelable) cancelable->cancel();
-      RouterAwaiter<ImageRef, RequestContext<SSL>>::cancel();
-    }
-  };
+  template <bool SSL, typename Fn>
+  static inline auto thumbnail(Fn&& fn) -> RouterAwaiter<ImageRef, RequestContext<SSL>> {
+    return RouterAwaiter<ImageRef, RequestContext<SSL>>(
+      [fn = std::move(fn)](auto* self) { return fn([self] (ImageRef img) { self->set_value(std::move(img)); }); }
+    );
+  }
 
   template <bool SSL>
   static inline auto write_thumbnail(
@@ -47,29 +42,29 @@ namespace Ludwig {
     Router(app, {})
       .get_async("/media/user/:name/avatar.webp", [controller](auto* rsp, auto ctx) -> Coro {
         auto [name, if_none_match] = co_await ctx.with_request(name_and_if_none_match);
-        auto img = co_await ThumbnailAwaiter<SSL>([&](auto cb) { return controller->user_avatar(name, std::move(cb)); });
+        auto img = co_await thumbnail<SSL>([&](auto cb) { return controller->user_avatar(name, std::move(cb)); });
         write_thumbnail(rsp, if_none_match, img);
       })
       .get_async("/media/user/:name/banner.webp", [controller](auto* rsp, auto ctx) -> Coro {
         auto [name, if_none_match] = co_await ctx.with_request(name_and_if_none_match);
-        auto img = co_await ThumbnailAwaiter<SSL>([&](auto cb) { return controller->user_banner(name, std::move(cb)); });
+        auto img = co_await thumbnail<SSL>([&](auto cb) { return controller->user_banner(name, std::move(cb)); });
         write_thumbnail(rsp, if_none_match, img);
       })
       .get_async("/media/board/:name/icon.webp", [controller](auto* rsp, auto ctx) -> Coro {
         auto [name, if_none_match] = co_await ctx.with_request(name_and_if_none_match);
-        auto img = co_await ThumbnailAwaiter<SSL>([&](auto cb) { return controller->board_icon(name, std::move(cb)); });
+        auto img = co_await thumbnail<SSL>([&](auto cb) { return controller->board_icon(name, std::move(cb)); });
         write_thumbnail(rsp, if_none_match, img);
       })
       .get_async("/media/board/:name/banner.webp", [controller](auto* rsp, auto ctx) -> Coro {
         auto [name, if_none_match] = co_await ctx.with_request(name_and_if_none_match);
-        auto img = co_await ThumbnailAwaiter<SSL>([&](auto cb) { return controller->board_banner(name, std::move(cb)); });
+        auto img = co_await thumbnail<SSL>([&](auto cb) { return controller->board_banner(name, std::move(cb)); });
         write_thumbnail(rsp, if_none_match, img);
       })
       .get_async("/media/thread/:id/thumbnail.webp", [controller](auto* rsp, auto ctx) -> Coro {
         auto [id, if_none_match] = co_await ctx.with_request([](auto* req){
           return pair(hex_id_param(req, 0), string(req->getHeader("if-none-match")));
         });
-        auto img = co_await ThumbnailAwaiter<SSL>([&](auto cb) { return controller->thread_link_card_image(id, std::move(cb)); });
+        auto img = co_await thumbnail<SSL>([&](auto cb) { return controller->thread_link_card_image(id, std::move(cb)); });
         write_thumbnail(rsp, if_none_match, img);
       });
 

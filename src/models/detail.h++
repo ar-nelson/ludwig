@@ -287,4 +287,8 @@ namespace Ludwig {
 
     static auto get(ReadTxn& txn, uint64_t id, Login login) -> LocalBoardDetail;
   };
+
+  using SearchResultDetail = std::variant<UserDetail, BoardDetail, ThreadDetail, CommentDetail>;
+
+  auto search_result_detail(ReadTxn& txn, const SearchResult& result, Login login = {}) -> std::optional<SearchResultDetail>;
 }

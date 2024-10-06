@@ -68,6 +68,9 @@ namespace Ludwig {
       cws_enabled {"cws_enabled"},
       require_login_to_view {"require_login_to_view"},
       default_board_id {"default_board_id"},
+      collapse_posts_below_score {"collapse_posts_below_score"},
+      banned_word_regex {"banned_word_regex"},
+      federated_banned_word_regex {"federated_banned_word_regex"},
       color_accent {"color_accent"},
       color_accent_dim {"color_accent_dim"},
       color_accent_hover {"color_accent_hover"};
@@ -145,7 +148,7 @@ namespace Ludwig {
     auto open_read_txn() -> ReadTxnImpl;
     auto open_write_txn_sync() -> WriteTxn;
     template <DbWriteCallback Fn>
-    auto open_write_txn_async(Fn callback, WritePriority priority = WritePriority::Medium) -> std::optional<WriteCancel>;
+    auto open_write_txn_async(Fn callback, WritePriority priority = WritePriority::Medium) -> std::shared_ptr<WriteCancel>;
     auto debug_print_settings() -> void;
 
     friend class ReadTxn;
@@ -370,7 +373,7 @@ namespace Ludwig {
   }
 
   template <DbWriteCallback Fn>
-  inline auto DB::open_write_txn_async(Fn fn, WritePriority priority) -> std::optional<WriteCancel> {
+  inline auto DB::open_write_txn_async(Fn fn, WritePriority priority) -> std::shared_ptr<WriteCancel> {
     if (write_lock.try_acquire()) {
       fn(WriteTxn(*this, true), false);
       return {};
@@ -378,6 +381,6 @@ namespace Ludwig {
     std::lock_guard<std::mutex> g(write_queue_lock);
     auto id = next_write_queue_id.fetch_add(1, std::memory_order_acq_rel);
     write_queue.emplace(priority, id, std::make_shared<uWS::MoveOnlyFunction<void (WriteTxn, bool)>>(fn));
-    return WriteCancel(this, id);
+    return std::make_shared<WriteCancel>(this, id);
   }
 }

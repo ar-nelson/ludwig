@@ -10,7 +10,8 @@
 using std::back_inserter, std::min, std::regex, std::regex_iterator,
     std::runtime_error, std::shared_ptr, std::string, std::string_view,
     std::vector, flatbuffers::FlatBufferBuilder, flatbuffers::Offset,
-    flatbuffers::Vector, fmt::format, fmt::format_to, fmt::operator""_cf;
+    flatbuffers::Vector, fmt::format, fmt::format_to,
+    fmt::operator""_cf; // NOLINT
 
 namespace Ludwig {
   static const regex

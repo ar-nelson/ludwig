@@ -27,30 +27,31 @@ namespace Ludwig {
     Cursor(uint64_t a, uint64_t b) : data{swap_bytes(a), swap_bytes(b)}, size(2) {}
     Cursor(uint64_t a, uint64_t b, uint64_t c) : data{swap_bytes(a), swap_bytes(b), swap_bytes(c)}, size(3) {}
 
-    inline auto int_field_0() const -> uint64_t {
+    auto int_field_0() const -> uint64_t {
       if (size == 1) return data[0];
       return swap_bytes(data[0]);
     }
-    inline auto int_field_1() const -> uint64_t {
+    auto int_field_1() const -> uint64_t {
       assert(size >= 2);
       return swap_bytes(data[1]);
     }
-    inline auto int_field_2() const -> uint64_t {
+    auto int_field_2() const -> uint64_t {
       assert(size >= 3);
       return swap_bytes(data[2]);
     }
-    inline auto val() -> MDB_val {
+    auto val() -> MDB_val {
       return { size * sizeof(uint64_t), data };
     }
 
-    inline auto to_string() -> std::string {
+    auto to_string() -> std::string {
+      using namespace fmt;
       switch (size) {
         case 1:
-          return fmt::format("Cursor({:x})", int_field_0());
+          return format("Cursor({:x})"_cf, int_field_0());
         case 2:
-          return fmt::format("Cursor({:x},{:x})", int_field_0(), int_field_1());
+          return format("Cursor({:x},{:x})"_cf, int_field_0(), int_field_1());
         case 3:
-          return fmt::format("Cursor({:x},{:x},{:x})", int_field_0(), int_field_1(), int_field_2());
+          return format("Cursor({:x},{:x},{:x})"_cf, int_field_0(), int_field_1(), int_field_2());
         default:
           assert(false);
       }
@@ -60,7 +61,7 @@ namespace Ludwig {
 # undef swap_bytes
 
   template <class T, typename std::enable_if<std::is_arithmetic<T>::value, T>::type* = nullptr>
-  inline auto val_as(const MDB_val& v) noexcept -> T {
+  auto val_as(const MDB_val& v) noexcept -> T {
     T ret;
     assert(v.mv_size == sizeof(T));
     memcpy(&ret, v.mv_data, sizeof(T));
@@ -68,7 +69,7 @@ namespace Ludwig {
   }
 
   template <class T, typename std::enable_if<std::is_pointer<T>::value,T>::type* = nullptr>
-  inline auto val_as(const MDB_val& v) noexcept -> T {
+  auto val_as(const MDB_val& v) noexcept -> T {
     return static_cast<T>(v.mv_data);
   }
 
@@ -84,7 +85,7 @@ namespace Ludwig {
     bool done = false, failed = false;
     std::optional<Cursor> to_key;
 
-    inline auto reached_to_key() noexcept -> bool {
+    auto reached_to_key() noexcept -> bool {
       if (!to_key) return false;
       auto val = to_key->val();
       const auto cmp = mdb_cmp(txn, dbi, &key, &val);
@@ -95,17 +96,17 @@ namespace Ludwig {
     struct End final { uint64_t n; };
     struct Iterator final {
       DBIter* db_iter;
-      inline auto operator*() noexcept -> uint64_t {
+      auto operator*() noexcept -> uint64_t {
         return **db_iter;
       }
-      inline auto operator++() noexcept -> Iterator& {
+      auto operator++() noexcept -> Iterator& {
         ++(*db_iter);
         return *this;
       }
-      inline friend auto operator==(const Iterator& lhs, const End& rhs) noexcept -> bool {
+      friend auto operator==(const Iterator& lhs, const End& rhs) noexcept -> bool {
         return lhs.db_iter->done || lhs.db_iter->n >= rhs.n;
       }
-      inline friend auto operator!=(const Iterator& lhs, const End& rhs) noexcept -> bool {
+      friend auto operator!=(const Iterator& lhs, const End& rhs) noexcept -> bool {
         return !lhs.db_iter->done && lhs.db_iter->n < rhs.n;
       }
     };
@@ -141,7 +142,7 @@ namespace Ludwig {
       from.cur = nullptr;
       from.done = true;
     };
-    inline auto operator=(DBIter&& from) noexcept -> DBIter& {
+    auto operator=(DBIter&& from) noexcept -> DBIter& {
       dbi = from.dbi;
       txn = from.txn;
       cur = from.cur;
@@ -160,26 +161,26 @@ namespace Ludwig {
       if (cur != nullptr) mdb_cursor_close(cur);
     }
 
-    inline auto get_cursor() const noexcept -> std::optional<Cursor> {
+    auto get_cursor() const noexcept -> std::optional<Cursor> {
       if (done) return {};
       return { Cursor(key) };
     }
-    inline auto is_done() const noexcept -> bool {
+    auto is_done() const noexcept -> bool {
       return done;
     }
-    virtual inline auto operator*() const noexcept -> uint64_t {
+    virtual auto operator*() const noexcept -> uint64_t {
       assert(!done);
       return val_as<uint64_t>(value);
     }
     auto operator++() noexcept -> DBIter&;
-    inline auto begin() noexcept -> Iterator { return { this }; }
-    inline auto end() noexcept -> End { return { ID_MAX }; }
-    inline auto end_at(uint64_t n) noexcept -> End { return { n }; }
+    auto begin() noexcept -> Iterator { return { this }; }
+    auto end() noexcept -> End { return { ID_MAX }; }
+    auto end_at(uint64_t n) noexcept -> End { return { n }; }
 
-    inline friend auto operator==(const DBIter& lhs, const End& rhs) noexcept -> bool {
+    friend auto operator==(const DBIter& lhs, const End& rhs) noexcept -> bool {
       return lhs.done || lhs.n >= rhs.n;
     }
-    inline friend auto operator!=(const DBIter& lhs, const End& rhs) noexcept -> bool {
+    friend auto operator!=(const DBIter& lhs, const End& rhs) noexcept -> bool {
       return !lhs.done && lhs.n < rhs.n;
     }
   };
@@ -187,7 +188,7 @@ namespace Ludwig {
   class DBKeyIter : public DBIter {
   public:
     using DBIter::DBIter;
-    virtual inline auto operator*() const noexcept -> uint64_t {
+    virtual auto operator*() const noexcept -> uint64_t {
       assert(!done);
       return val_as<uint64_t>(key);
     }

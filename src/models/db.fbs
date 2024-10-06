@@ -121,6 +121,7 @@ table LocalUser {
   show_karma: bool = true;
   javascript_enabled: bool = true;
   infinite_scroll_enabled: bool = true;
+  collapse_posts_below_score: int64 = null;
   theme: uint64 = 0;
   lemmy_theme: string;
   default_sort_type: SortType = Active;

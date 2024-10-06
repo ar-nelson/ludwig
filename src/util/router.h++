@@ -194,26 +194,14 @@ namespace Ludwig {
     std::optional<T> value;
   protected:
     std::mutex mutex;
+    std::shared_ptr<Cancelable> canceler;
     bool canceled;
-    void set_value(T&& v) noexcept {
-      {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (handle.address() == nullptr) {
-          value.emplace(std::move(v));
-          return;
-        } else if (canceled || handle.done() || handle.promise().ctx.done.load(std::memory_order_acquire)) {
-          spdlog::warn("HTTP request canceled");
-          return;
-        } else {
-          value.emplace(std::move(v));
-        }
-      }
-      handle.promise().ctx.current_awaiter = nullptr;
-      handle.promise().ctx.loop->defer([h = handle]{ if (h) h.resume(); });
-    }
   public:
     using result_type = T;
-    virtual void cancel() noexcept override {
+    template <typename Fn>
+    RouterAwaiter(Fn fn) : canceler(fn(this)) {}
+    void cancel() noexcept override {
+      if (canceler) canceler->cancel();
       {
         std::lock_guard<std::mutex> lock(mutex);
         canceled = true;
@@ -237,6 +225,25 @@ namespace Ludwig {
       h.promise().ctx.current_awaiter = this;
       return true;
     }
+    void set_value(T&& v) noexcept {
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (handle.address() == nullptr) {
+          value.emplace(std::move(v));
+          return;
+        } else if (canceled || handle.done() || handle.promise().ctx.done.load(std::memory_order_acquire)) {
+          spdlog::warn("HTTP request canceled");
+          return;
+        } else {
+          value.emplace(std::move(v));
+        }
+      }
+      handle.promise().ctx.current_awaiter = nullptr;
+      handle.promise().ctx.loop->defer([h = handle]{ if (h) h.resume(); });
+    }
+    void replace_canceler(std::shared_ptr<Cancelable> new_canceler) noexcept {
+      canceler = new_canceler;
+    }
   };
 
   template <IsRequestContext Ctx>
@@ -244,9 +251,6 @@ namespace Ludwig {
     std::optional<DB::WriteCancel> canceler;
   public:
     WriteTxnAwaiter(DB& db, WritePriority priority = WritePriority::Medium) : canceler(
-      db.open_write_txn_async([this](auto txn, bool) noexcept {
-        this->set_value(std::move(txn));
-      }, priority)
     ) {}
 
     void cancel() noexcept override {

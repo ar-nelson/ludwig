@@ -13,14 +13,16 @@
 #include "util/router.h++"
 #include "util/web.h++"
 #include "util/zstd_db_dump.h++"
+#include <atomic>
 #include <iterator>
 #include <regex>
 #include <semaphore>
 #include <xxhash.h>
 
-using std::match_results, std::monostate, std::nullopt, std::optional, std::regex,
-    std::regex_search, std::shared_ptr, std::stoull, std::string, std::string_view, std::variant,
-    std::visit, fmt::format, fmt::format_to, fmt::operator""_cf;
+using std::make_shared, std::match_results, std::monostate, std::nullopt, std::optional,
+    std::regex, std::regex_search, std::shared_ptr, std::stoull, std::string,
+    std::string_view, std::thread, std::variant, std::visit, fmt::format, fmt::format_to,
+    fmt::operator""_cf; // NOLINT
 
 using namespace std::placeholders;
 namespace chrono = std::chrono;
@@ -710,109 +712,34 @@ namespace Ludwig {
 
       template <class T> auto write_sort_select(string_view, T) noexcept -> ResponseWriter&;
 
-      template <> auto write_sort_select<SortType>(string_view name, SortType value) noexcept -> ResponseWriter& {
-        return write_fmt(
-          R"(<select name="{}" id="{}" autocomplete="off">)"
-          R"(<option value="Active"{}>Active)"
-          R"(<option value="Hot"{}>Hot)"
-          R"(<option value="New"{}>New)"
-          R"(<option value="Old"{}>Old)"
-          R"(<option value="MostComments"{}>Most Comments)"
-          R"(<option value="NewComments"{}>New Comments)"
-          R"(<option value="TopAll"{}>Top All)"
-          R"(<option value="TopYear"{}>Top Year)"
-          R"(<option value="TopSixMonths"{}>Top Six Months)"
-          R"(<option value="TopThreeMonths"{}>Top Three Months)"
-          R"(<option value="TopMonth"{}>Top Month)"
-          R"(<option value="TopWeek"{}>Top Week)"
-          R"(<option value="TopDay"{}>Top Day)"
-          R"(<option value="TopTwelveHour"{}>Top Twelve Hour)"
-          R"(<option value="TopSixHour"{}>Top Six Hour)"
-          R"(<option value="TopHour"{}>Top Hour)"
-          "</select>"_cf,
-          name, name,
-          select(value, SortType::Active),
-          select(value, SortType::Hot),
-          select(value, SortType::New),
-          select(value, SortType::Old),
-          select(value, SortType::MostComments),
-          select(value, SortType::NewComments),
-          select(value, SortType::TopAll),
-          select(value, SortType::TopYear),
-          select(value, SortType::TopSixMonths),
-          select(value, SortType::TopThreeMonths),
-          select(value, SortType::TopMonth),
-          select(value, SortType::TopWeek),
-          select(value, SortType::TopDay ),
-          select(value, SortType::TopTwelveHour),
-          select(value, SortType::TopSixHour),
-          select(value, SortType::TopHour)
-        );
-      }
+#     define DEF_SORT_SELECT(T, APPLY_TO_ENUM) \
+        template <> auto write_sort_select<T>(string_view name, T value) noexcept -> ResponseWriter& { \
+          using enum T; \
+          return write_fmt( \
+            R"(<select name="{}" id="{}" autocomplete="off">)" APPLY_TO_ENUM(OPTION_HTML) "</select>"_cf, \
+            name, name, APPLY_TO_ENUM(OPTION_SELECTED) "" \
+          ); \
+        }
+#     define OPTION_HTML(ENUM, NAME) R"(<option value=")" #ENUM R"("{}>)" NAME
+#     define OPTION_SELECTED(ENUM, NAME) select(value, ENUM),
 
-      template <> auto write_sort_select<CommentSortType>(string_view name, CommentSortType value) noexcept -> ResponseWriter& {
-        return write_fmt(
-          R"(<select name="{}" id="{}" autocomplete="off">)"
-          R"(<option value="Hot"{}>Hot)"
-          R"(<option value="New"{}>New)"
-          R"(<option value="Old"{}>Old)"
-          R"(<option value="Top"{}>Top)"
-          "</select>"_cf,
-          name, name,
-          select(value, CommentSortType::Hot),
-          select(value, CommentSortType::New),
-          select(value, CommentSortType::Old),
-          select(value, CommentSortType::Top)
-        );
-      }
+#     define X_SORT_TYPE(X) \
+        X(Active, "Active") X(Hot, "Hot") X(New, "New") X(Old, "Old") \
+        X(MostComments, "Most Comments") X(NewComments, "New Comments") \
+        X(TopAll, "Top All") X(TopYear, "Top Year") X(TopSixMonths, "Top Six Months") X(TopThreeMonths, "Top Three Months") \
+        X(TopMonth, "Top Month") X(TopWeek, "Top Week") X(TopDay, "Top Day") \
+        X(TopTwelveHour, "Top Twelve Hour") X(TopSixHour, "Top Six Hour") X(TopHour, "Top Hour")
 
-      template <> auto write_sort_select<UserPostSortType>(string_view name, UserPostSortType value) noexcept -> ResponseWriter& {
-        return write_fmt(
-          R"(<select name="{}" id="{}" autocomplete="off">)"
-          R"(<option value="New"{}>New)"
-          R"(<option value="Old"{}>Old)"
-          R"(<option value="Top"{}>Top)"
-          "</select>"_cf,
-          name, name,
-          select(value, UserPostSortType::New),
-          select(value, UserPostSortType::Old),
-          select(value, UserPostSortType::Top)
-        );
-      }
+#     define X_COMMENT_SORT_TYPE(X) X(Hot, "Hot") X(New, "New") X(Old, "Old") X(Top, "Top")
+#     define X_USER_POST_SORT_TYPE(X) X(New, "New") X(Old, "Old") X(Top, "Top")
+#     define X_USER_SORT_TYPE(X) X(New, "New") X(Old, "Old") X(MostPosts, "Most Posts") X(NewPosts, "New Posts")
+#     define X_BOARD_SORT_TYPE(X) X(New, "New") X(Old, "Old") X(MostPosts, "Most Posts") X(NewPosts, "New Posts") X(MostSubscribers, "Most Subscribers")
 
-      template <> auto write_sort_select<UserSortType>(string_view name, UserSortType value) noexcept -> ResponseWriter& {
-        return write_fmt(
-          R"(<select name="{}" id="{}" autocomplete="off">)"
-          R"(<option value="New"{}>New)"
-          R"(<option value="Old"{}>Old)"
-          R"(<option value="MostPosts"{}>Most Posts)"
-          R"(<option value="NewPosts"{}>New Posts)"
-          "</select>"_cf,
-          name, name,
-          select(value, UserSortType::New),
-          select(value, UserSortType::Old),
-          select(value, UserSortType::MostPosts),
-          select(value, UserSortType::NewPosts)
-        );
-      }
-
-      template <> auto write_sort_select<BoardSortType>(string_view name, BoardSortType value) noexcept -> ResponseWriter& {
-        return write_fmt(
-          R"(<select name="{}" id="{}" autocomplete="off">)"
-          R"(<option value="New"{}>New)"
-          R"(<option value="Old"{}>Old)"
-          R"(<option value="MostPosts"{}>Most Posts)"
-          R"(<option value="NewPosts"{}>New Posts)"
-          R"(<option value="MostSubscribers"{}>Most Subscribers)"
-          "</select>"_cf,
-          name, name,
-          select(value, BoardSortType::New),
-          select(value, BoardSortType::Old),
-          select(value, BoardSortType::MostPosts),
-          select(value, BoardSortType::NewPosts),
-          select(value, BoardSortType::MostSubscribers)
-        );
-      }
+      DEF_SORT_SELECT(SortType, X_SORT_TYPE)
+      DEF_SORT_SELECT(CommentSortType, X_COMMENT_SORT_TYPE)
+      DEF_SORT_SELECT(UserPostSortType, X_USER_POST_SORT_TYPE)
+      DEF_SORT_SELECT(UserSortType, X_USER_SORT_TYPE)
+      DEF_SORT_SELECT(BoardSortType, X_BOARD_SORT_TYPE)
 
       auto write_show_threads_toggle(bool show_threads) noexcept -> ResponseWriter& {
         return write_fmt(
@@ -936,11 +863,22 @@ namespace Ludwig {
         return write(R"(<div class="spinner">Loading…</div></div>)");
       }
 
-      template <class T> auto write_controls_submenu(
-        const T& post,
-        Login login,
-        PostContext context
-      ) noexcept -> ResponseWriter& {
+      static inline auto admin_submenu(ModState state) ->
+        std::tuple<SubmenuAction, string_view, SubmenuAction, string_view, SubmenuAction, string_view> {
+        using enum ModState;
+        using enum SubmenuAction;
+        switch (state) {
+          case Normal: return {AdminFlag, "🚩 Flag", AdminLock, "🔒 Lock", AdminRemove, "✂️ Remove"};
+          case Flagged: return {AdminRestore, "🏳️ Unflag", AdminLock, "🔒 Lock", AdminRemove, "✂️ Remove"};
+          case Locked: return {AdminRestore, "🔓 Unlock", AdminFlag, "🚩 Unlock and Flag", AdminRemove, "✂️ Remove"};
+          case Unapproved: return {AdminApprove, "✔️ Approve", AdminFlag, "🚩 Approve and Flag", AdminRemove, "❌ Reject"};
+          default: return {AdminRestore, "♻️ Restore", AdminFlag, "🚩 Restore and Flag", AdminLock, "🔒 Restore and Lock"};
+        }
+      }
+
+      template <class T>
+      auto write_controls_submenu(const T& post, Login login, PostContext context) noexcept -> ResponseWriter& {
+        using enum SubmenuAction;
         if (!login) return *this;
         write_fmt(
           R"(<form class="controls-submenu" id="controls-submenu-{0:x}" method="post" action="/{1}/{0:x}/action">)"
@@ -948,82 +886,39 @@ namespace Ludwig {
           R"(<label for="action"><span class="a11y">Action</span>)" ICON("chevron-down")
           R"(<select name="action" autocomplete="off" hx-post="/{1}/{0:x}/action" hx-trigger="change" hx-target="#controls-submenu-{0:x}">)"
           R"(<option selected hidden value="{3:d}">Actions)"_cf,
-          post.id, T::noun, static_cast<unsigned>(context), SubmenuAction::None
+          post.id, T::noun, static_cast<unsigned>(context), None
         );
         if (context != PostContext::View && post.can_reply_to(login)) {
-          write_fmt(R"(<option value="{:d}">💬 Reply)"_cf, SubmenuAction::Reply);
+          write_fmt(R"(<option value="{:d}">💬 Reply)"_cf, Reply);
         }
         if (post.can_edit(login)) {
-          write_fmt(R"(<option value="{:d}">✏️ Edit)"_cf, SubmenuAction::Edit);
+          write_fmt(R"(<option value="{:d}">✏️ Edit)"_cf, Edit);
         }
         if (post.can_delete(login)) {
-          write_fmt(R"(<option value="{:d}">🗑️ Delete)"_cf, SubmenuAction::Delete);
+          write_fmt(R"(<option value="{:d}">🗑️ Delete)"_cf, Delete);
         }
         write_fmt(
           R"(<option value="{:d}">{})"
           R"(<option value="{:d}">{})"_cf,
-          post.saved ? SubmenuAction::Unsave : SubmenuAction::Save, post.saved ? "🚫 Unsave" : "🔖 Save",
-          post.hidden ? SubmenuAction::Unhide : SubmenuAction::Hide, post.hidden ? "🔈 Unhide" : "🔇 Hide"
+          post.saved ? Unsave : Save, post.saved ? "🚫 Unsave" : "🔖 Save",
+          post.hidden ? Unhide : Hide, post.hidden ? "🔈 Unhide" : "🔇 Hide"
         );
         if (context != PostContext::User) {
           write_fmt(R"(<option value="{:d}">{})"_cf,
-            post.user_hidden ? SubmenuAction::UnmuteUser : SubmenuAction::MuteUser,
+            post.user_hidden ? UnmuteUser : MuteUser,
             post.user_hidden ? "🔈 Unmute user" : "🔇 Mute user"
           );
         }
         if (context != PostContext::Board) {
           write_fmt(R"(<option value="{:d}">{})"_cf,
-            post.board_hidden ? SubmenuAction::UnmuteBoard : SubmenuAction::MuteBoard,
+            post.board_hidden ? UnmuteBoard : MuteBoard,
             post.board_hidden ? "🔈 Unhide board" : "🔇 Hide board"
           );
         }
         if (login->local_user().admin()) {
-          SubmenuAction a1, a2, a3;
-          string_view b1, b2, b3;
           // FIXME: This is not the right mod_state, will do weird things if
           // user or board has a mod_state > Normal
-          switch (post.mod_state().state) {
-            case ModState::Normal:
-              a1 = SubmenuAction::AdminFlag;
-              a2 = SubmenuAction::AdminLock;
-              a3 = SubmenuAction::AdminRemove;
-              b1 = "🚩 Flag";
-              b2 = "🔒 Lock";
-              b3 = "✂️ Remove";
-              break;
-            case ModState::Flagged:
-              a1 = SubmenuAction::AdminRestore;
-              a2 = SubmenuAction::AdminLock;
-              a3 = SubmenuAction::AdminRemove;
-              b1 = "🏳️ Unflag";
-              b2 = "🔒 Lock";
-              b3 = "✂️ Remove";
-              break;
-            case ModState::Locked:
-              a1 = SubmenuAction::AdminRestore;
-              a2 = SubmenuAction::AdminFlag;
-              a3 = SubmenuAction::AdminRemove;
-              b1 = "🔓 Unlock";
-              b2 = "🚩 Unlock and Flag";
-              b3 = "✂️ Remove";
-              break;
-            case ModState::Unapproved:
-              a1 = SubmenuAction::AdminApprove;
-              a2 = SubmenuAction::AdminFlag;
-              a3 = SubmenuAction::AdminRemove;
-              b1 = "✔️ Approve";
-              b2 = "🚩 Approve and Flag";
-              b3 = "❌ Reject";
-              break;
-            default:
-              a1 = SubmenuAction::AdminRestore;
-              a2 = SubmenuAction::AdminFlag;
-              a3 = SubmenuAction::AdminLock;
-              b1 = "♻️ Restore";
-              b2 = "🚩 Restore and Flag";
-              b3 = "🔒 Restore and Lock";
-              break;
-          }
+          const auto [a1, b1, a2, b2, a3, b3] = admin_submenu(post.mod_state().state);
           write_fmt(
             R"(<optgroup label="Admin">)"
             R"(<option value="{:d}">{})"
@@ -1034,9 +929,9 @@ namespace Ludwig {
             R"(<option value="{:d}">☣️ Purge user)"
             "</optgroup>"_cf,
             a1, b1, a2, b2, a3, b3,
-            SubmenuAction::AdminRemoveUser,
-            SubmenuAction::AdminPurge, T::noun,
-            SubmenuAction::AdminPurgeUser
+            AdminRemoveUser,
+            AdminPurge, T::noun,
+            AdminPurgeUser
           );
         }
         return write(R"(</select></label><button class="no-js" type="submit">Apply</button></form>)");
@@ -1278,7 +1173,7 @@ namespace Ludwig {
       }
 
       auto write_search_result_list(
-        std::vector<InstanceController::SearchResultDetail> list,
+        std::vector<SearchResultDetail> list,
         const SiteDetail* site,
         Login login,
         bool include_ol
@@ -1709,9 +1604,8 @@ namespace Ludwig {
           error_banner(error)
         );
         bool any_entries = false;
-        instance.list_applications([&](auto p){
+        for (auto [application, detail] : instance.list_applications(txn, cursor, login)) {
           any_entries = true;
-          auto& [application, detail] = p;
           write_fmt(
             R"(<tr><td>{}<td>{}<td>{:%D}<td>{}<td>{}<td class="table-reason"><div class="reason">{}</div><td class="table-approve">)"_cf,
             Escape{detail.user().name()},
@@ -1732,7 +1626,7 @@ namespace Ludwig {
               detail.id
             );
           }
-        }, txn, login, cursor);
+        }
         if (!any_entries) write(R"(<tr><td colspan="7">There's nothing here.</tr>)");
         // TODO: Pagination
         return write("</tbody></table></div>");
@@ -1742,7 +1636,7 @@ namespace Ludwig {
         InstanceController& instance,
         ReadTxn& txn,
         const LocalUserDetail& login,
-        string_view cursor = "",
+        string_view cursor_str = "",
         optional<string_view> error = {}
       ) noexcept -> ResponseWriter& {
         write_fmt(
@@ -1752,10 +1646,10 @@ namespace Ludwig {
           R"(<tbody id="invite-table">)"_cf,
           error_banner(error)
         );
+        PageCursor cursor(cursor_str);
         bool any_entries = false;
-        instance.list_invites_from_user([&](auto p){
+        for (auto [id, invite] : instance.list_invites_from_user(txn, cursor, login.id)) {
           any_entries = true;
-          auto& [id, invite] = p;
           write_fmt(
             R"(<tr><td>{}<td>{:%D}<td>)"_cf,
             invite_id_to_code(id),
@@ -1779,7 +1673,7 @@ namespace Ludwig {
               uint_to_timestamp(invite.expires_at())
             );
           }
-        }, txn, login.id, cursor);
+        }
         if (!any_entries) write(R"(<tr><td colspan="5">There's nothing here.</tr>)");
         // TODO: Pagination
         return write("</tbody></table></div>");
@@ -2151,18 +2045,21 @@ namespace Ludwig {
         c.site->votes_enabled ? "" : " no-votes"
       );
       const auto from = req->getQuery("from");
+      PageCursor cursor(from);
       bool any_entries = false;
-      const auto next = show_threads ?
-        controller->list_feed_threads(
-          [&](auto& e){r.write_thread_entry(e, c.site, c.login, PostContext::Feed, show_images); any_entries = true;},
-          txn, feed_id, sort, c.login, from
-        ) :
-        controller->list_feed_comments(
-          [&](auto& e){r.write_comment_entry(e, c.site, c.login, PostContext::Feed, show_images); any_entries = true;},
-          txn, feed_id, sort, c.login, from
-        );
+      if (show_threads) {
+        for (auto& e : controller->list_feed_threads(txn, cursor, feed_id, sort, c.login)) {
+          r.write_thread_entry(e, c.site, c.login, PostContext::Feed, show_images);
+          any_entries = true;
+        }
+      } else {
+        for (auto& e : controller->list_feed_comments(txn, cursor, feed_id, sort, c.login)) {
+          r.write_comment_entry(e, c.site, c.login, PostContext::Feed, show_images);
+          any_entries = true;
+        }
+      }
       if (!c.is_htmx && !any_entries) r.write(R"(<li class="no-entries">There's nothing here.)");
-      r.write("</ol>").write_pagination(base_url, from.empty(), next);
+      r.write("</ol>").write_pagination(base_url, from.empty(), cursor);
       if (!c.is_htmx) r.write("</main></div>").write_html_footer(c);
       r.finish();
     }
@@ -2279,13 +2176,15 @@ namespace Ludwig {
             .write(R"(</section><main>)");
         }
         r.write(R"(<ol class="board-list" id="top-level-list">)");
+        const auto from = req->getQuery("from");
+        PageCursor cursor(from);
         bool any_entries = false;
-        const auto next = self->controller->list_boards(
-          [&](auto& b) { r.write_board_list_entry(b); any_entries = true; },
-          txn, sort, local, sub, c.login, req->getQuery("from")
-        );
+        for (const auto& b : self->controller->list_boards(txn, cursor, sort, local, sub, c.login)) {
+          r.write_board_list_entry(b);
+          any_entries = true;
+        }
         if (!c.is_htmx && !any_entries) r.write(R"(<li class="no-entries">There's nothing here.)");
-        r.write("</ol>").write_pagination(base_url, req->getQuery("from").empty(), next);
+        r.write("</ol>").write_pagination(base_url, from.empty(), cursor);
         if (!c.is_htmx) r.write("</main></div>").write_html_footer(c);
         r.finish();
       });
@@ -2312,13 +2211,15 @@ namespace Ludwig {
             .write(R"(</section><main>)");
         }
         r.write(R"(<ol class="user-list" id="top-level-list">)");
+        const auto from = req->getQuery("from");
+        PageCursor cursor(from);
         bool any_entries = false;
-        const auto next = self->controller->list_users(
-          [&](auto& e){r.write_user_list_entry(e, c.login); any_entries = true; },
-          txn, sort, local, c.login, req->getQuery("from")
-        );
+        for (const auto& u : self->controller->list_users(txn, cursor, sort, local, c.login)) {
+          r.write_user_list_entry(u);
+          any_entries = true;
+        }
         if (!c.is_htmx && !any_entries) r.write(R"(<li class="no-entries">There's nothing here.)");
-        r.write("</ol>").write_pagination(base_url, req->getQuery("from").empty(), next);
+        r.write("</ol>").write_pagination(base_url, from.empty(), cursor);
         if (!c.is_htmx) r.write("</main></div>").write_html_footer(c);
         r.finish();
       });
@@ -2357,19 +2258,22 @@ namespace Ludwig {
           show_threads ? "thread" : "comment",
           board.should_show_votes(c.login, c.site) ? "" : " no-votes"
         );
-        bool any_entries = false;
         const auto from = req->getQuery("from");
-        const auto next = show_threads ?
-          self->controller->list_board_threads(
-            [&](auto& e){r.write_thread_entry(e, c.site, c.login, PostContext::Board, show_images); any_entries = true;},
-            txn, board_id, sort, c.login, from
-          ) :
-          self->controller->list_board_comments(
-            [&](auto& e){r.write_comment_entry(e, c.site, c.login, PostContext::Board, show_images); any_entries = true;},
-            txn, board_id, sort, c.login, from
-          );
+        PageCursor cursor(from);
+        bool any_entries = false;
+        if (show_threads) {
+          for (auto& e : self->controller->list_board_threads(txn, cursor, board_id, sort, c.login)) {
+            r.write_thread_entry(e, c.site, c.login, PostContext::Board, show_images);
+            any_entries = true;
+          }
+        } else {
+          for (auto& e : self->controller->list_board_comments(txn, cursor, board_id, sort, c.login)) {
+            r.write_comment_entry(e, c.site, c.login, PostContext::Board, show_images);
+            any_entries = true;
+          }
+        }
         if (!c.is_htmx && !any_entries) r.write(R"(<li class="no-entries">There's nothing here.)");
-        r.write("</ol>").write_pagination(base_url, from.empty(), next);
+        r.write("</ol>").write_pagination(base_url, from.empty(), cursor);
         if (!c.is_htmx) r.write("</main></div>").write_html_footer(c);
         r.finish();
       });
@@ -2421,19 +2325,22 @@ namespace Ludwig {
           show_threads ? "thread" : "comment",
           c.site->votes_enabled ? "" : " no-votes"
         );
-        bool any_entries = false;
         const auto from = req->getQuery("from");
-        const auto next = show_threads ?
-          self->controller->list_user_threads(
-            [&](auto& e){r.write_thread_entry(e, c.site, c.login, PostContext::User, show_images); any_entries = true;},
-            txn, user_id, sort, c.login, from
-          ) :
-          self->controller->list_user_comments(
-            [&](auto& e){r.write_comment_entry(e, c.site, c.login, PostContext::User, show_images); any_entries = true;},
-            txn, user_id, sort, c.login, from
-          );
+        PageCursor cursor(from);
+        bool any_entries = false;
+        if (show_threads) {
+          for (auto& e : self->controller->list_user_threads(txn, cursor, user_id, sort, c.login)) {
+            r.write_thread_entry(e, c.site, c.login, PostContext::User, show_images);
+            any_entries = true;
+          }
+        } else {
+          for (auto& e : self->controller->list_user_comments(txn, cursor, user_id, sort, c.login)) {
+            r.write_comment_entry(e, c.site, c.login, PostContext::User, show_images);
+            any_entries = true;
+          }
+        }
         if (!c.is_htmx && !any_entries) r.write(R"(<li class="no-entries">There's nothing here.)");
-        r.write("</ol>").write_pagination(base_url, from.empty(), next);
+        r.write("</ol>").write_pagination(base_url, from.empty(), cursor);
         if (!c.is_htmx) r.write("</main></div>").write_html_footer(c);
         r.finish();
       });
@@ -2512,27 +2419,23 @@ namespace Ludwig {
           };
         });
         auto& c = co_await _c;
-        /*
-        self->controller->search_step_1(query, [self, rsp, m = std::move(m), resume = std::move(resume)](auto results) mutable {
-          resume([self, rsp, results, m = std::move(m)] {
-            auto txn = self->controller->open_read_txn();
-            m->populate(txn);
-            const auto results_detail = self->controller->search_step_2(txn, results, ITEMS_PER_PAGE, m->login);
-            self->writer(rsp)
-              .write_html_header(*m, {
-                .canonical_path = "/search",
-                .banner_title = "Search",
-              })
-              .write("<div>")
-              .write_sidebar(m->login, m->site)
-              .write("<main>")
-              .write_search_result_list(results_detail, m->site, m->login, true)
-              .write("</main></div>")
-              .write_html_footer(*m)
-              .finish();
-          });
-        });
-        */
+        {
+          auto txn = self->controller->open_read_txn();
+          c.populate(txn);
+        }
+        auto results = co_await self->controller->search(c, query, c.login);
+        self->writer(rsp)
+          .write_html_header(c, {
+            .canonical_path = "/search",
+            .banner_title = "Search",
+          })
+          .write("<div>")
+          .write_sidebar(c.login, c.site)
+          .write("<main>")
+          .write_search_result_list(results, c.site, c.login, true)
+          .write("</main></div>")
+          .write_html_footer(c)
+          .finish();
       });
       r.get("/create_board", [self](auto* rsp, auto*, Context& c) {
         auto txn = self->controller->open_read_txn();
@@ -2869,6 +2772,7 @@ namespace Ludwig {
         } else if (c.is_htmx) {
           const auto context = static_cast<PostContext>(form.required_int("context"));
           auto txn = self->controller->open_read_txn();
+          c.populate(txn);
           const auto thread = ThreadDetail::get(txn, id, c.login);
           rsp->writeHeader("Content-Type", TYPE_HTML);
           c.write_cookie(rsp);
@@ -2895,6 +2799,7 @@ namespace Ludwig {
         } else if (c.is_htmx) {
           const auto context = static_cast<PostContext>(form.required_int("context"));
           auto txn = self->controller->open_read_txn();
+          c.populate(txn);
           const auto comment = CommentDetail::get(txn, id, c.login);
           rsp->writeHeader("Content-Type", TYPE_HTML);
           c.write_cookie(rsp);
@@ -2916,6 +2821,7 @@ namespace Ludwig {
         self->controller->vote(WRITE_TXN, user, post_id, vote);
         if (c.is_htmx) {
           auto txn = self->controller->open_read_txn();
+          c.populate(txn);
           const auto thread = ThreadDetail::get(txn, post_id, c.login);
           rsp->writeHeader("Content-Type", TYPE_HTML);
           self->writer(rsp).write_vote_buttons(thread, c.site, c.login).finish();
@@ -2934,6 +2840,7 @@ namespace Ludwig {
         self->controller->vote(WRITE_TXN, user, post_id, vote);
         if (c.is_htmx) {
           auto txn = self->controller->open_read_txn();
+          c.populate(txn);
           const auto comment = CommentDetail::get(txn, post_id, c.login);
           rsp->writeHeader("Content-Type", TYPE_HTML);
           self->writer(rsp).write_vote_buttons(comment, c.site, c.login).finish();
@@ -3021,37 +2928,38 @@ namespace Ludwig {
             "Content-Disposition",
             format(R"(attachment; filename="ludwig-{:%F-%H%M%S}.dbdump.zst")"_cf, now_t())
           );
-        struct DumpAwaiter : public RouterAwaiter<std::monostate, Context> {
-          DumpAwaiter(shared_ptr<Webapp<SSL>> self, Context& c) {
-            std::thread([this, self, &c] mutable {
-              spdlog::info("Beginning database dump");
-              std::binary_semaphore lock(0);
-              try {
-                auto txn = self->controller->open_read_txn();
-                for (auto chunk : zstd_db_dump_export(txn)) {
-                  {
-                    std::lock_guard<std::mutex> g(this->mutex);
-                    if (this->canceled) return;
-                  }
-                  c.on_response_thread([&](Response rsp) {
-                    std::lock_guard<std::mutex> g(this->mutex);
-                    if (!this->canceled) {
-                      rsp->write(string_view{(const char*)chunk.data(), chunk.size()});
-                    }
-                    lock.release();
-                  });
-                  lock.acquire();
-                }
-                spdlog::info("Database dump completed successfully");
-                this->set_value({});
-              } catch (const std::exception& e) {
-                spdlog::error("Database dump failed: {}", e.what());
-                this->cancel();
-              }
-            }).detach();
+        struct Canceler : public Cancelable {
+          std::atomic<bool> canceled = false;
+          void cancel() noexcept override {
+            canceled.store(true, std::memory_order_release);
           }
         };
-        co_await DumpAwaiter(self, c);
+        co_await RouterAwaiter<monostate, Context>([&](auto* awaiter) {
+          auto canceler = make_shared<Canceler>();
+          thread([awaiter, self, canceler, &c] mutable {
+            spdlog::info("Beginning database dump");
+            std::binary_semaphore lock(0);
+            try {
+              auto txn = self->controller->open_read_txn();
+              for (auto chunk : zstd_db_dump_export(txn)) {
+                if (canceler->canceled.load(std::memory_order_acquire)) return;
+                c.on_response_thread([&](Response rsp) {
+                  if (!canceler->canceled.load(std::memory_order_acquire)) {
+                    rsp->write(string_view{(const char*)chunk.data(), chunk.size()});
+                  }
+                  lock.release();
+                });
+                lock.acquire();
+              }
+              spdlog::info("Database dump completed successfully");
+              awaiter->set_value({});
+            } catch (const std::exception& e) {
+              spdlog::error("Database dump failed: {}", e.what());
+              awaiter->cancel();
+            }
+          }).detach();
+          return canceler;
+        });
         rsp->end();
       });
       r.post("/site_admin/applications/:action/:id", [self](auto* rsp, auto _c, auto) -> Coro {

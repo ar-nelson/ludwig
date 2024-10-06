@@ -33,6 +33,6 @@ namespace Ludwig {
     virtual auto index(uint64_t id, const Thread& thread, std::optional<std::reference_wrapper<const LinkCard>> card_opt = {}) -> void = 0;
     virtual auto index(uint64_t id, const Comment& comment) -> void = 0;
     virtual auto unindex(uint64_t id, SearchResultType type) -> void = 0;
-    virtual auto search(SearchQuery query, Callback&& callback) -> void = 0;
+    virtual auto search(SearchQuery query, Callback&& callback) -> std::shared_ptr<Cancelable> = 0;
   };
 }

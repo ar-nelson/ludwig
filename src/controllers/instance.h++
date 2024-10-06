@@ -10,7 +10,6 @@
 #include <atomic>
 #include <map>
 #include <regex>
-#include <variant>
 #include <openssl/crypto.h>
 
 namespace Ludwig {
@@ -53,15 +52,17 @@ namespace Ludwig {
         k = std::stoull(std::string(match[1].str()), nullptr, 16);
         if (match[2].matched) v = std::stoull(std::string(match[2].str()), nullptr, 16);
       } else {
-        throw ApiError(fmt::format("Invalid cursor: {}", str), 400);
+        using namespace fmt;
+        throw ApiError(format("Invalid cursor: {}"_cf, str), 400);
       }
     }
 
     operator bool() const noexcept { return exists; }
     auto to_string() const noexcept -> std::string {
+      using namespace fmt;
       if (!exists) return "";
-      if (!v) return fmt::format("{:x}", k);
-      return fmt::format("{:x}_{:x}", k, v);
+      if (!v) return format("{:x}"_cf, k);
+      return format("{:x}_{:x}"_cf, k, v);
     }
 
     using OptKV = std::optional<std::pair<Cursor, uint64_t>>;
@@ -86,8 +87,6 @@ namespace Ludwig {
       return {{Cursor(prefix, k), v ? v + 1 : ID_MAX}};
     }
   };
-
-  template <typename T> using Writer = std::function<void (const T&)>;
 
   struct CommentTree {
     std::unordered_map<uint64_t, PageCursor> continued;
@@ -191,6 +190,8 @@ namespace Ludwig {
   //   catch (...) { throw ApiError("Bad hexadecimal ID", 400); }
   // }
 
+  class SearchHandler;
+
   class InstanceController : public std::enable_shared_from_this<InstanceController> {
   private:
     std::shared_ptr<DB> db;
@@ -238,8 +239,10 @@ namespace Ludwig {
       std::string_view text_content_markdown,
       std::optional<std::string_view> content_warning = {}
     ) -> uint64_t;
+    auto fetch_card(const ThreadDetail& thread) -> void {
+      if (thread.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, thread.id);
+    };
 
-    class SearchFunctor;
   public:
     static constexpr uint64_t FEED_ALL = 0, FEED_LOCAL = 1, FEED_HOME = 2;
 
@@ -252,8 +255,6 @@ namespace Ludwig {
     );
     ~InstanceController();
 
-    using SearchResultDetail = std::variant<UserDetail, BoardDetail, ThreadDetail, CommentDetail>;
-
     static auto can_change_site_settings(Login login) -> bool;
     auto can_create_board(Login login) -> bool;
 
@@ -261,8 +262,12 @@ namespace Ludwig {
       return db->open_read_txn();
     }
     template <IsRequestContext Ctx>
-    auto open_write_txn() -> WriteTxnAwaiter<Ctx> {
-      return WriteTxnAwaiter<Ctx>(*db);
+    auto open_write_txn(WritePriority priority = WritePriority::Medium) -> RouterAwaiter<WriteTxn, Ctx> {
+      return RouterAwaiter<WriteTxn, Ctx>([&](auto* self) {
+        return db->open_write_txn_async([self](auto txn, bool) noexcept {
+          self->set_value(std::move(txn));
+        }, priority);
+      });
     }
 
     static auto hash_password(SecretString&& password, const uint8_t salt[16], uint8_t hash[32]) -> void;
@@ -314,99 +319,84 @@ namespace Ludwig {
     auto board_detail(ReadTxn& txn, uint64_t id, Login login) -> BoardDetail;
     auto local_board_detail(ReadTxn& txn, uint64_t id, Login login) -> LocalBoardDetail;
     auto list_users(
-      Writer<UserDetail> out,
       ReadTxn& txn,
+      PageCursor& cursor,
       UserSortType sort,
       bool local_only,
       Login login = {},
-      PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
-    ) -> PageCursor;
+    ) -> std::generator<const UserDetail&>;
     auto list_applications(
-      Writer<std::pair<const Application&, LocalUserDetail>> out,
       ReadTxn& txn,
+      std::optional<uint64_t>& cursor,
       Login login = {},
-      std::optional<uint64_t> from = {},
       uint16_t limit = ITEMS_PER_PAGE
-    ) -> std::optional<uint64_t>;
+    ) -> std::generator<std::pair<const Application&, const LocalUserDetail&>>;
     auto list_invites_from_user(
-      Writer<std::pair<uint64_t, const Invite&>> out,
       ReadTxn& txn,
+      PageCursor& cursor,
       uint64_t user_id,
-      PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
-    ) -> PageCursor;
+    ) -> std::generator<std::pair<uint64_t, const Invite&>>;
     auto list_boards(
-      Writer<BoardDetail> out,
       ReadTxn& txn,
+      PageCursor& cursor,
       BoardSortType sort,
       bool local_only,
       bool subscribed_only,
       Login login = {},
-      PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
-    ) -> PageCursor;
+    ) -> std::generator<const BoardDetail&>;
     auto list_board_threads(
-      Writer<ThreadDetail> out,
       ReadTxn& txn,
+      PageCursor& cursor,
       uint64_t board_id,
       SortType sort = SortType::Active,
       Login login = {},
-      PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
-    ) -> PageCursor;
+    ) -> std::generator<const ThreadDetail&>;
     auto list_board_comments(
-      Writer<CommentDetail> out,
       ReadTxn& txn,
+      PageCursor& cursor,
       uint64_t board_id,
       SortType sort = SortType::Active,
       Login login = {},
-      PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
-    ) -> PageCursor;
+    ) -> std::generator<const CommentDetail&>;
     auto list_feed_threads(
-      Writer<ThreadDetail> out,
       ReadTxn& txn,
+      PageCursor& cursor,
       uint64_t feed_id,
       SortType sort = SortType::Active,
       Login login = {},
-      PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
-    ) -> PageCursor;
+    ) -> std::generator<const ThreadDetail&>;
     auto list_feed_comments(
-      Writer<CommentDetail> out,
       ReadTxn& txn,
+      PageCursor& from,
       uint64_t feed_id,
       SortType sort = SortType::Active,
       Login login = {},
-      PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
-    ) -> PageCursor;
+    ) -> std::generator<const CommentDetail&>;
     auto list_user_threads(
-      Writer<ThreadDetail> out,
       ReadTxn& txn,
+      PageCursor& cursor,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
-      PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
-    ) -> PageCursor;
+    ) -> std::generator<const ThreadDetail&>;
     auto list_user_comments(
-      Writer<CommentDetail> out,
       ReadTxn& txn,
+      PageCursor& from,
       uint64_t user_id,
       UserPostSortType sort = UserPostSortType::New,
       Login login = {},
-      PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
-    ) -> PageCursor;
-    auto search_step_1(SearchQuery query, SearchEngine::Callback&& callback) -> void;
-    auto search_step_2(
-      ReadTxn& txn,
-      const std::vector<SearchResult>& results,
-      size_t max_len,
-      Login login
-    ) -> std::vector<SearchResultDetail>;
+    ) -> std::generator<const CommentDetail&>;
+    template <IsRequestContext Ctx>
+    auto search(const Ctx& ctx, SearchQuery query, Login login) -> RouterAwaiter<std::vector<SearchResultDetail>, Ctx>;
     auto first_run_setup_options(ReadTxn& txn) -> FirstRunSetupOptions;
 
     auto first_run_setup(WriteTxn txn, FirstRunSetup&& update) -> void;
@@ -569,5 +559,68 @@ namespace Ludwig {
       uint64_t board_id,
       bool hidden = true
     ) -> void;
+
+    friend class SearchHandler;
   };
+
+  class SearchHandler : public std::enable_shared_from_this<SearchHandler> {
+  private:
+    InstanceController& controller;
+    SearchQuery query;
+    Login login;
+    std::vector<SearchResultDetail> results;
+
+    template <IsRequestContext Ctx>
+    auto search_callback(RouterAwaiter<std::vector<SearchResultDetail>, Ctx>* awaiter) -> SearchEngine::Callback {
+      return [awaiter, self = this->shared_from_this()](std::vector<SearchResult> page) {
+        if (page.empty()) {
+          spdlog::info("Got nothing!");
+          awaiter->set_value(std::move(self->results));
+          return;
+        }
+        spdlog::info("Got page of {:d} results", page.size());
+        {
+          auto txn = self->controller.open_read_txn();
+          for (auto& r : page) {
+            try {
+              if (auto d = search_result_detail(txn, r, self->login)) {
+                spdlog::info("+ Accepted result");
+                self->results.push_back(*d);
+              } else {
+                spdlog::info("- Rejected result");
+              }
+            } catch (const std::exception& e) {
+              spdlog::warn("Error in search result: {}", e.what());
+            }
+            if (self->results.size() >= self->query.limit) {
+              spdlog::info("Done, got {:d} total results", self->results.size());
+              awaiter->set_value(std::move(self->results));
+              return;
+            }
+          }
+        }
+        self->query.offset += self->query.limit;
+        spdlog::info("Repeating with offset {:d}", self->query.offset);
+        auto se = self->controller.search_engine.value();
+        awaiter->replace_canceler(se->search(self->query, self->search_callback(awaiter)));
+      };
+    }
+  public:
+    SearchHandler(InstanceController& controller, SearchQuery query, Login login) :
+      controller(controller), query(query), login(login) {}
+
+    template <IsRequestContext Ctx>
+    auto awaiter(const Ctx&) {
+      return RouterAwaiter<std::vector<SearchResultDetail>, Ctx>([&, se = controller.search_engine.value()](auto* a) {
+        return se->search(query, search_callback(a));
+      });
+    }
+  };
+
+  template <IsRequestContext Ctx>
+  auto InstanceController::search(const Ctx& ctx, SearchQuery query, Login login) -> RouterAwaiter<std::vector<SearchResultDetail>, Ctx> {
+    if (!search_engine) throw ApiError("Search is not enabled on this server", 403);
+    auto handler = std::make_shared<SearchHandler>(*this, query, login);
+    return handler->awaiter(ctx);
+  }
 }

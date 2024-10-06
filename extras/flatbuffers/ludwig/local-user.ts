@@ -135,30 +135,35 @@ infiniteScrollEnabled():boolean {
   return offset ? !!this.bb!.readInt8(this.bb_pos + offset) : true;
 }
 
-theme():bigint {
+collapsePostsBelowScore():bigint|null {
   const offset = this.bb!.__offset(this.bb_pos, 46);
+  return offset ? this.bb!.readInt64(this.bb_pos + offset) : null;
+}
+
+theme():bigint {
+  const offset = this.bb!.__offset(this.bb_pos, 48);
   return offset ? this.bb!.readUint64(this.bb_pos + offset) : BigInt('0');
 }
 
 lemmyTheme():string|null
 lemmyTheme(optionalEncoding:flatbuffers.Encoding):string|Uint8Array|null
 lemmyTheme(optionalEncoding?:any):string|Uint8Array|null {
-  const offset = this.bb!.__offset(this.bb_pos, 48);
+  const offset = this.bb!.__offset(this.bb_pos, 50);
   return offset ? this.bb!.__string(this.bb_pos + offset, optionalEncoding) : null;
 }
 
 defaultSortType():SortType {
-  const offset = this.bb!.__offset(this.bb_pos, 50);
+  const offset = this.bb!.__offset(this.bb_pos, 52);
   return offset ? this.bb!.readUint8(this.bb_pos + offset) : SortType.Active;
 }
 
 defaultCommentSortType():CommentSortType {
-  const offset = this.bb!.__offset(this.bb_pos, 52);
+  const offset = this.bb!.__offset(this.bb_pos, 54);
   return offset ? this.bb!.readUint8(this.bb_pos + offset) : CommentSortType.Hot;
 }
 
 static startLocalUser(builder:flatbuffers.Builder) {
-  builder.startObject(25);
+  builder.startObject(26);
 }
 
 static addEmail(builder:flatbuffers.Builder, emailOffset:flatbuffers.Offset) {
@@ -245,20 +250,24 @@ static addInfiniteScrollEnabled(builder:flatbuffers.Builder, infiniteScrollEnabl
   builder.addFieldInt8(20, +infiniteScrollEnabled, +true);
 }
 
+static addCollapsePostsBelowScore(builder:flatbuffers.Builder, collapsePostsBelowScore:bigint) {
+  builder.addFieldInt64(21, collapsePostsBelowScore, null);
+}
+
 static addTheme(builder:flatbuffers.Builder, theme:bigint) {
-  builder.addFieldInt64(21, theme, BigInt('0'));
+  builder.addFieldInt64(22, theme, BigInt('0'));
 }
 
 static addLemmyTheme(builder:flatbuffers.Builder, lemmyThemeOffset:flatbuffers.Offset) {
-  builder.addFieldOffset(22, lemmyThemeOffset, 0);
+  builder.addFieldOffset(23, lemmyThemeOffset, 0);
 }
 
 static addDefaultSortType(builder:flatbuffers.Builder, defaultSortType:SortType) {
-  builder.addFieldInt8(23, defaultSortType, SortType.Active);
+  builder.addFieldInt8(24, defaultSortType, SortType.Active);
 }
 
 static addDefaultCommentSortType(builder:flatbuffers.Builder, defaultCommentSortType:CommentSortType) {
-  builder.addFieldInt8(24, defaultCommentSortType, CommentSortType.Hot);
+  builder.addFieldInt8(25, defaultCommentSortType, CommentSortType.Hot);
 }
 
 static endLocalUser(builder:flatbuffers.Builder):flatbuffers.Offset {

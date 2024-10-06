@@ -1,4 +1,5 @@
 #pragma once
+#include "models/detail.h++"
 #include "services/db.h++"
 #include "controllers/instance.h++"
 #include "models/lemmy_api.h++"
@@ -166,8 +167,8 @@ namespace Ludwig::Lemmy {
     ApiController(std::shared_ptr<InstanceController> instance) : instance(instance) {}
 
     template <IsRequestContext Ctx>
-    auto open_write_txn() {
-      return instance->template open_write_txn<Ctx>();
+    auto open_write_txn(WritePriority priority = WritePriority::Medium) {
+      return instance->template open_write_txn<Ctx>(priority);
     }
 
     /* addAdmin */
@@ -311,7 +312,10 @@ namespace Ludwig::Lemmy {
 
     auto save_user_settings(WriteTxn txn, SaveUserSettings& form, std::optional<SecretString>&& auth) -> LoginResponse;
 
-    auto search(Search& form, std::optional<SecretString>&& auth, uWS::MoveOnlyFunction<void (SearchResponse)> cb) -> void;
+    template <IsRequestContext Ctx>
+    auto search(const Ctx& ctx, Search& form, std::optional<SecretString>&& auth) -> RouterAwaiter<std::vector<SearchResultDetail>, Ctx>;
+
+    auto search_results(const std::vector<SearchResultDetail>& results) -> SearchResponse;
 
     /* transferCommunity */
 

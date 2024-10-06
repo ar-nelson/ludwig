@@ -21,13 +21,13 @@ namespace Ludwig {
       if (!committed) mdb_txn_abort(txn);
     }
     operator MDB_txn*() { return txn; }
-    inline auto commit() -> int {
+    auto commit() -> int {
       int err = mdb_txn_commit(txn);
       if (err) return err;
       committed = true;
       return 0;
     }
-    inline auto get_all(MDB_dbi dbi, uint64_t key) -> set<uint64_t> {
+    auto get_all(MDB_dbi dbi, uint64_t key) -> set<uint64_t> {
       set<uint64_t> set;
       MDB_cursor* cur;
       MDB_val k = int_val(&key), v;
@@ -44,7 +44,7 @@ namespace Ludwig {
       mdb_cursor_close(cur);
       return set;
     }
-    inline auto del_vals_in_key(MDB_dbi dbi, uint64_t key, set<uint64_t> vals) -> void {
+    auto del_vals_in_key(MDB_dbi dbi, uint64_t key, set<uint64_t> vals) -> void {
       MDB_cursor* cur;
       MDB_val k = int_val(&key), v;
       if (mdb_cursor_open(txn, dbi, &cur)) goto done;
@@ -55,7 +55,7 @@ namespace Ludwig {
     done:
       mdb_cursor_close(cur);
     }
-    inline auto del_val_for_all_keys(MDB_dbi dbi, set<uint64_t> keys, uint64_t value) -> void {
+    auto del_val_for_all_keys(MDB_dbi dbi, set<uint64_t> keys, uint64_t value) -> void {
       MDB_cursor* cur;
       MDB_val k, v = int_val(&value);
       if (mdb_cursor_open(txn, dbi, &cur)) goto done;
@@ -205,7 +205,7 @@ namespace Ludwig {
     }
   }
 
-  auto LmdbSearchEngine::search(SearchQuery query, Callback&& callback) -> void {
+  auto LmdbSearchEngine::search(SearchQuery query, Callback&& callback) -> std::shared_ptr<Cancelable> {
     set<int> tokens;
     MatchMap matches;
 
@@ -222,7 +222,7 @@ namespace Ludwig {
     }
     if (matches.size() <= query.offset) {
       std::move(callback)({});
-      return;
+      return nullptr;
     }
 
     // TODO: Filter and sort
@@ -239,5 +239,6 @@ namespace Ludwig {
     }
 
     std::move(callback)(results);
+    return nullptr;
   }
 }

@@ -148,7 +148,10 @@ ssl_dep = boringssl.dependency('ssl')
 sentencepiece = cmake.subproject('sentencepiece', options: cmake_opts)
 sentencepiece_dep = sentencepiece.dependency('sentencepiece-static')
 simdjson_dep = dependency('simdjson', static: true)
-subproject('spdlog', default_options: ['std_format=disabled', 'external_fmt=enabled'])
+subproject(
+  'spdlog',
+  default_options: ['tests=disabled', 'std_format=disabled', 'external_fmt=enabled'],
+)
 spdlog_dep = dependency('spdlog', static: true)
 thread_dep = dependency('threads')
 zstd_dep = dependency('libzstd', static: true)
