@@ -2,6 +2,7 @@
 #include "services/db.h++"
 #include "util/json.h++"
 #include "util/web.h++"
+#include <parallel_hashmap/btree.h>
 #include <atomic>
 #include <concepts>
 #include <coroutine>
@@ -412,14 +413,18 @@ namespace Ludwig {
     requires std::is_base_of<RequestContext<SSL, AppContext>, Ctx>::value
   class Router {
   private:
-    std::unordered_map<std::string, std::set<std::string_view>> options_allow_by_pattern;
+    phmap::btree_multimap<std::string, std::string_view> options_allow_by_pattern;
     std::optional<std::string> _access_control_allow_origin;
     uWS::MoveOnlyFunction<Ctx ()> ctx_ctor;
     uWS::TemplatedApp<SSL>& app;
     AppContext ac;
 
     auto register_route(std::string pattern, std::string_view method) -> void {
-      options_allow_by_pattern.try_emplace({ pattern, {} }).first->second.insert(method);
+      options_allow_by_pattern.emplace(pattern, method);
+    }
+
+    static inline auto compare_first(const std::pair<std::string, std::string_view>& a, const std::pair<std::string, std::string_view>& b) noexcept -> bool {
+      return a.first < b.first;
     }
 
   public:
@@ -435,10 +440,12 @@ namespace Ludwig {
     ~Router() {
       // uWebSockets doesn't provide OPTIONS or CORS preflight handlers,
       // so we have to add those manually, after all routes have been defined.
-      for (const auto [pattern, methods] : options_allow_by_pattern) {
-        std::string allow = "OPTIONS";
-        for (const auto method : methods) {
-          fmt::format_to(std::back_inserter(allow), ", {}", method);
+      auto it = options_allow_by_pattern.cbegin();
+      while (it != options_allow_by_pattern.cend()) {
+        std::string pattern = it->first, allow = "OPTIONS";
+        auto key_end = std::upper_bound(it, options_allow_by_pattern.cend(), *it, compare_first);
+        for (; it != key_end; it++) {
+          fmt::format_to(std::back_inserter(allow), ", {}", it->second);
         }
         app.any(pattern, [=, origin = _access_control_allow_origin](auto* rsp, auto* req) {
           if (req->getMethod() == "options") {

@@ -4,6 +4,7 @@
 #include <vector>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <parallel_hashmap/phmap.h>
 #include <openssl/bio.h>
 #include <openssl/pem.h>
 #include <openssl/rand.h>
@@ -1608,7 +1609,7 @@ namespace Ludwig {
     db_del(txn, db.dbis[ChildrenNew_PostTime], Cursor(parent, created_at), id);
     db_del(txn, db.dbis[ChildrenTop_PostKarma], Cursor(parent, karma_uint(karma)), id);
 
-    std::set<uint64_t> children;
+    phmap::flat_hash_set<uint64_t> children;
     delete_range(txn, db.dbis[ChildrenNew_PostTime], Cursor(id, 0), Cursor(id, ID_MAX),
       [&children](MDB_val&, MDB_val& v) {
         children.insert(val_as<uint64_t>(v));
@@ -1690,7 +1691,7 @@ namespace Ludwig {
     // There used to be a bidirectional User<->Post index for votes,
     // but that almost doubled the size of the database.
 
-    std::set<uint64_t> children;
+    phmap::flat_hash_set<uint64_t> children;
     delete_range(txn, db.dbis[ChildrenNew_PostTime], Cursor(id, 0), Cursor(id, ID_MAX),
       [&children](MDB_val&, MDB_val& v) {
         children.insert(val_as<uint64_t>(v));

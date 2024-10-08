@@ -1,4 +1,5 @@
 #pragma once
+#include "parallel_hashmap/phmap_fwd_decl.h"
 #include "util/router.h++"
 #include "util/web.h++"
 #include "models/db.h++"
@@ -7,8 +8,9 @@
 #include "services/event_bus.h++"
 #include "services/http_client.h++"
 #include "services/search_engine.h++"
+#include <parallel_hashmap/phmap.h>
+#include <parallel_hashmap/btree.h>
 #include <atomic>
-#include <map>
 #include <regex>
 #include <openssl/crypto.h>
 
@@ -89,8 +91,8 @@ namespace Ludwig {
   };
 
   struct CommentTree {
-    std::unordered_map<uint64_t, PageCursor> continued;
-    std::multimap<uint64_t, CommentDetail> comments;
+    phmap::flat_hash_map<uint64_t, PageCursor> continued;
+    phmap::btree_multimap<uint64_t, CommentDetail> comments;
 
     auto size() const -> size_t {
       return comments.size();
@@ -201,7 +203,7 @@ namespace Ludwig {
     std::optional<std::shared_ptr<SearchEngine>> search_engine;
     std::optional<std::pair<Hash, Salt>> first_run_admin_password;
     std::atomic<const SiteDetail*> cached_site_detail;
-    std::map<uint64_t, std::pair<uint64_t, Timestamp>> password_reset_tokens;
+    phmap::flat_hash_map<uint64_t, std::pair<uint64_t, Timestamp>> password_reset_tokens;
     std::mutex password_reset_tokens_mutex;
 
     auto create_local_user_internal(
@@ -300,20 +302,22 @@ namespace Ludwig {
     }
     auto thread_detail(
       ReadTxn& txn,
+      CommentTree& tree_out,
       uint64_t id,
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
       PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
-    ) -> std::pair<ThreadDetail, CommentTree>;
+    ) -> ThreadDetail;
     auto comment_detail(
       ReadTxn& txn,
+      CommentTree& tree_out,
       uint64_t id,
       CommentSortType sort = CommentSortType::Hot,
       Login login = {},
       PageCursor from = {},
       uint16_t limit = ITEMS_PER_PAGE
-    ) -> std::pair<CommentDetail, CommentTree>;
+    ) -> CommentDetail;
     auto user_detail(ReadTxn& txn, uint64_t id, Login login) -> UserDetail;
     auto local_user_detail(ReadTxn& txn, uint64_t id, Login login) -> LocalUserDetail;
     auto board_detail(ReadTxn& txn, uint64_t id, Login login) -> BoardDetail;

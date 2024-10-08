@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <lmdb.h>
 #include <sentencepiece_processor.h>
+#include <parallel_hashmap/phmap.h>
 
 namespace Ludwig {
   class LmdbSearchEngine : public SearchEngine {
@@ -12,7 +13,7 @@ namespace Ludwig {
     MDB_dbi Id_Tokens, Token_Users, Token_Boards, Token_Threads, Token_Comments;
     sentencepiece::SentencePieceProcessor processor;
     struct Txn;
-    auto index_tokens(Txn&& txn, uint64_t id, MDB_dbi dbi, std::set<uint64_t> tokens) -> void;
+    auto index_tokens(Txn&& txn, uint64_t id, MDB_dbi dbi, phmap::flat_hash_set<uint64_t>& tokens) -> void;
   public:
     LmdbSearchEngine(std::filesystem::path filename, size_t map_size_mb = 1024);
     ~LmdbSearchEngine();

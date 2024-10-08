@@ -8,15 +8,17 @@
 #include <static_vector.hpp>
 #include "__generator.hpp"
 #include "models/detail.h++"
+#include "parallel_hashmap/phmap.h"
 #include "util/rich_text.h++"
 #include "util/web.h++"
 #include "models/patch.h++"
 
-using std::ranges::elements_of, std::function, std::generator, std::max, std::min, std::nullopt, std::optional, std::pair,
-    std::priority_queue, std::regex, std::regex_match, std::runtime_error,
-    std::shared_ptr, std::string, std::string_view, std::unique_ptr,
+using std::ranges::elements_of, std::function, std::generator, std::max, std::min,
+    std::nullopt, std::optional, std::pair, std::priority_queue, std::regex, std::regex_match,
+    std::runtime_error, std::shared_ptr, std::string, std::string_view, std::unique_ptr,
     std::vector, flatbuffers::Offset, flatbuffers::FlatBufferBuilder,
-    flatbuffers::GetRoot, fmt::format, fmt::operator""_cf;
+    flatbuffers::GetRoot, fmt::format,
+    fmt::operator""_cf; // NOLINT
 namespace chrono = std::chrono;
 
 namespace Ludwig {
@@ -416,40 +418,44 @@ namespace Ludwig {
   }
   auto InstanceController::thread_detail(
     ReadTxn& txn,
+    CommentTree& tree_out,
     uint64_t id,
     CommentSortType sort,
     Login login,
     PageCursor from,
     uint16_t limit
-  ) -> pair<ThreadDetail, CommentTree> {
-    pair<ThreadDetail, CommentTree> p(ThreadDetail::get(txn, id, login), {});
-    if (!p.first.can_view(login)) throw ApiError("Cannot view this thread", 403);
-    if (p.first.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, id);
+  ) -> ThreadDetail {
+    auto t = ThreadDetail::get(txn, id, login);
+    if (!t.can_view(login)) throw ApiError("Cannot view this thread", 403);
+    if (t.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, id);
     comment_tree(
-      txn, p.second, id, sort, login,
-      p.first.thread(), p.first.hidden,
-      p.first.board(), p.first.board_hidden,
+      txn, tree_out, id, sort, login,
+      t.thread(), t.hidden,
+      t.board(), t.board_hidden,
       from, limit
     );
-    return p;
+    return t;
   }
   auto InstanceController::comment_detail(
     ReadTxn& txn,
+    CommentTree& tree_out,
     uint64_t id,
     CommentSortType sort,
     Login login,
     PageCursor from,
     uint16_t limit
-  ) -> pair<CommentDetail, CommentTree> {
-    pair<CommentDetail, CommentTree> p(CommentDetail::get(txn, id, login), {});
-    if (!p.first.can_view(login)) throw ApiError("Cannot view this comment", 403);
+  ) -> CommentDetail {
+    auto c = CommentDetail::get(txn, id, login);
+    if (!c.can_view(login)) throw ApiError("Cannot view this comment", 403);
     comment_tree(
-      txn, p.second, id, sort, login,
-      p.first.thread(), p.first.thread_hidden,
-      p.first.board(), p.first.board_hidden,
+      txn, tree_out, id, sort, login,
+      c.thread(), c.thread_hidden,
+      c.board(), c.board_hidden,
       from, limit
     );
-    return p;
+    spdlog::info("comment_detail limit={:d} id={:d} parent={:d} tree_size={:d}",
+      limit, id, c.comment().parent(), tree_out.size());
+    return c;
   }
   auto InstanceController::user_detail(ReadTxn& txn, uint64_t id, Login login) -> UserDetail {
     const auto detail = UserDetail::get(txn, id, login);
@@ -811,7 +817,7 @@ namespace Ludwig {
         return [&](auto& e) { return !e.board().instance() && e.should_show(login); };
       case InstanceController::FEED_HOME: {
         if (!login) throw ApiError("Must be logged in to view Home feed", 403);
-        std::set<uint64_t> subs;
+        phmap::flat_hash_set<uint64_t> subs;
         for (const auto id : txn.list_subscribed_boards(login->id)) subs.insert(id);
         return [subs = std::move(subs), &login](auto& e) {
           return subs.contains(e.thread().board()) && e.should_show(login);

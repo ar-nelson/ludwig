@@ -1,7 +1,6 @@
 #pragma once
-#include "util/common.h++"
 #include "services/event_bus.h++"
-#include <map>
+#include <parallel_hashmap/btree.h>
 #include <shared_mutex>
 #include <asio.hpp>
 
@@ -35,7 +34,7 @@ namespace Ludwig {
     std::shared_ptr<asio::io_context> io;
     std::shared_mutex listener_lock;
     uint64_t next_event_id = 0;
-    std::multimap<std::pair<Event, uint64_t>, std::shared_ptr<EventListener>> event_listeners;
+    phmap::btree_multimap<std::pair<Event, uint64_t>, std::shared_ptr<EventListener>> event_listeners;
 
   protected:
     auto unsubscribe(uint64_t event_id, std::pair<Event, uint64_t> key) -> void;

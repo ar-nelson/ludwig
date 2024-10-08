@@ -461,7 +461,7 @@ TEST_CASE("generate and delete random posts and check stats", "[db]") {
     REQUIRE(total_threads == RND_SIZE);
     REQUIRE(total_comments == RND_SIZE);
   }
-  std::set<uint64_t> del_threads, del_comments;
+  phmap::flat_hash_set<uint64_t> del_threads, del_comments;
   std::sample(threads.begin(), threads.end(), std::inserter(del_threads, del_threads.begin()), RND_SIZE / 20, gen);
   std::sample(comments.begin(), comments.end(), std::inserter(del_comments, del_comments.begin()), RND_SIZE / 20, gen);
   {

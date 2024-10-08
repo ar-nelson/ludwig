@@ -2351,7 +2351,8 @@ namespace Ludwig {
         const auto sort = parse_comment_sort_type(req->getQuery("sort"), c.login);
         const auto show_images = req->getQuery("images") == "1" ||
           (req->getQuery("sort").empty() ? !c.login || c.login->local_user().show_images_comments() : false);
-        const auto [detail, comments] = self->controller->thread_detail(txn, id, sort, c.login, req->getQuery("from"));
+        CommentTree comments;
+        const auto detail = self->controller->thread_detail(txn, comments, id, sort, c.login, req->getQuery("from"));
         auto r = self->writer(rsp);
         if (c.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
@@ -2388,7 +2389,8 @@ namespace Ludwig {
         const auto sort = parse_comment_sort_type(req->getQuery("sort"), c.login);
         const auto show_images = req->getQuery("images") == "1" ||
           (req->getQuery("sort").empty() ? !c.login || c.login->local_user().show_images_comments() : false);
-        const auto [detail, comments] = self->controller->comment_detail(txn, id, sort, c.login, req->getQuery("from"));
+        CommentTree comments;
+        const auto detail = self->controller->comment_detail(txn, comments, id, sort, c.login, req->getQuery("from"));
         auto r = self->writer(rsp);
         if (c.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);

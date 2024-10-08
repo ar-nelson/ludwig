@@ -4,6 +4,7 @@
 #include "static/emoji_table.fb.h++"
 #include <stdio.h>
 #include <md4c.h>
+#include <parallel_hashmap/phmap.h>
 #include <static_block.hpp>
 #include <static_vector.hpp>
 
@@ -24,7 +25,7 @@ namespace Ludwig {
     html_regex(R"(<[^>]*>|[&](\w+);)"); // beware of zalgo
 
 
-  static std::unordered_map<std::string_view, std::string_view> shortcode_to_emoji;
+  static phmap::flat_hash_map<std::string_view, std::string_view> shortcode_to_emoji;
 
   static_block {
     const auto emoji_table = flatbuffers::GetRoot<EmojiTable>(emoji_table_fb);

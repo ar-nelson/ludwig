@@ -356,6 +356,12 @@ namespace Ludwig::Lemmy {
     });
     // TODO: /api/v3/user/report_count
     // TODO: /api/v3/user/unread_count
+    // Placeholder implementation because Lemmy frontend calls this a lot
+    router.get("/api/v3/user/unread_count", [](auto* rsp, auto*, auto&) {
+      rsp->writeHeader("Content-Type", "application/json; charset=utf-8")
+        ->writeHeader("Access-Control-Allow-Origin", "*")
+        ->end(R"({"replies":0,"mentions":0,"private_messages":0})");
+    });
     router.template post_json<VerifyEmail>("/api/v3/user/verify_email", parser, [controller](auto* rsp, auto, auto body) -> Coro {
       auto form = co_await body;
       controller->verify_email(co_await controller->template open_write_txn<Context<SSL>>(), form);
@@ -386,6 +392,12 @@ namespace Ludwig::Lemmy {
     ///////////////////////////////////////////////////////
 
     // TODO: Custom emoji
+    // Placeholder implementation because Lemmy frontend calls this a lot
+    router.get("/api/v3/custom_emoji/list", [](auto* rsp, auto*, auto&) {
+      rsp->writeHeader("Content-Type", "application/json; charset=utf-8")
+        ->writeHeader("Access-Control-Allow-Origin", "*")
+        ->end(R"({"custom_emojis":[]})");
+    });
 
     router.any("/api/*", [](auto*, auto*, auto&) {
       throw ApiError("Endpoint does not exist or is not yet implemented", 404);

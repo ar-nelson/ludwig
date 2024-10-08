@@ -1,6 +1,7 @@
 #include "lemmy_api.h++"
 #include <stack>
 #include <static_vector.hpp>
+#include "controllers/instance.h++"
 #include "models/detail.h++"
 #include "util/jwt.h++"
 #include "util/rich_text.h++"
@@ -10,21 +11,23 @@
 using std::nullopt, std::optional, std::pair, std::string, std::string_view, std::vector;
 
 namespace Ludwig::Lemmy {
-  static inline auto listing_type_to_feed(ListingType lt) -> uint64_t {
+  static inline auto listing_type_to_feed(ListingType lt, Ludwig::Login login) -> uint64_t {
+    using enum ListingType;
     switch (lt) {
-      case ListingType::All: return InstanceController::FEED_ALL;
-      case ListingType::Local: return InstanceController::FEED_LOCAL;
-      case ListingType::Subscribed: return InstanceController::FEED_HOME;
-      case ListingType::ModeratorView: throw ApiError("ModeratorView is not yet implemented", 500);
+      case All: return InstanceController::FEED_ALL;
+      case Local: return InstanceController::FEED_LOCAL;
+      case Subscribed: return login ? InstanceController::FEED_HOME : InstanceController::FEED_LOCAL;
+      case ModeratorView: throw ApiError("ModeratorView is not yet implemented", 500);
     }
   }
 
   static inline auto listing_type_to_home_page_type(ListingType lt) -> HomePageType {
+    using enum ListingType;
     switch (lt) {
-      case ListingType::All: return HomePageType::All;
-      case ListingType::Local: return HomePageType::Local;
-      case ListingType::Subscribed: return HomePageType::Subscribed;
-      case ListingType::ModeratorView: throw ApiError("default_post_listing_type cannot be ModeratorView", 400);
+      case All: return HomePageType::All;
+      case Local: return HomePageType::Local;
+      case Subscribed: return HomePageType::Subscribed;
+      case ModeratorView: throw ApiError("default_post_listing_type cannot be ModeratorView", 400);
     }
   }
 
@@ -617,7 +620,9 @@ namespace Ludwig::Lemmy {
   template <class T>
   static inline auto paginate(const T& form, string_view endpoint) -> pair<uint16_t, uint16_t> {
     const uint16_t limit = form.limit ? form.limit : ITEMS_PER_PAGE, page = form.page ? form.page - 1 : 0;
-    if (limit < 1 || limit > 256) throw ApiError(fmt::format("{} requires 0 < limit <= 256", endpoint), 400);
+    if (limit < 1 || limit > 999) {
+      throw ApiError(fmt::format("{} requires 0 < limit <= 999 (got {:d})", endpoint, limit), 400);
+    }
     const uint64_t offset = limit * page, final_total = offset + limit;
     if (final_total > std::numeric_limits<uint16_t>::max()) throw ApiError("Reached maximum page depth", 400);
     return {(uint16_t)offset, (uint16_t)final_total};
@@ -644,19 +649,20 @@ namespace Ludwig::Lemmy {
     const auto [offset, limit] = paginate(form, "get_comments");
     const auto login_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
     const auto login = LocalUserDetail::get_login(txn, login_id);
-    if ((int)!form.parent_id + (int)!form.post_id + (int)form.community_name.empty() < 2) {
-      throw ApiError(R"(get_comments requires at most one of "parent_id", "post_id", or "community_name")", 400);
-    }
     PageCursor next;
     vector<CommentView> entries;
     if (form.parent_id || form.post_id) {
       const uint64_t parent_id = form.parent_id ? form.parent_id : form.post_id;
       const bool is_thread = !!txn.get_thread(parent_id);
       const auto sort = parse_comment_sort_type(form.sort, login);
-      auto tree = is_thread ?
-        instance->thread_detail(txn, parent_id, sort, login, next, limit).second :
-        instance->comment_detail(txn, parent_id, sort, login, next, limit).second;
-      using Iter = std::multimap<uint64_t, CommentDetail>::iterator;
+      CommentTree tree;
+      if (is_thread) {
+        instance->thread_detail(txn, tree, parent_id, sort, login, next, limit);
+      } else {
+        entries.push_back(to_comment_view(txn,
+          instance->comment_detail(txn, tree, parent_id, sort, login, next, limit)));
+      }
+      using Iter = phmap::btree_multimap<uint64_t, CommentDetail>::iterator;
       stlpb::static_vector<pair<Iter, Iter>, 256> stack_vec;
       std::stack stack(stack_vec);
       stack.push(tree.comments.equal_range(parent_id));
@@ -681,7 +687,7 @@ namespace Ludwig::Lemmy {
           throw ApiError(fmt::format("No community named \"{}\" exists", form.community_name), 410);
         }
       } else {
-        const auto feed = form.type ? listing_type_to_feed(*form.type) : InstanceController::FEED_ALL;
+        const auto feed = form.type ? listing_type_to_feed(*form.type, login) : InstanceController::FEED_ALL;
         entries = page_to_vector(offset, [&](auto& e) { return to_comment_view(txn, e); },
           instance->list_feed_comments(txn, next, feed, sort, login, limit));
       }
@@ -751,15 +757,15 @@ namespace Ludwig::Lemmy {
   auto ApiController::get_post(const GetPost& form, optional<SecretString>&& auth) -> GetPostResponse {
     auto txn = instance->open_read_txn();
     const auto user_id = auth.transform([&](auto&& s){return validate_jwt(txn, std::move(s));});
-    if (!form.id == !form.comment_id) {
-      throw ApiError(R"(get_post requires exactly one of "id" or "comment_id")", 400);
+    if (!form.id && !form.comment_id) {
+      throw ApiError(R"(get_post requires one of "id" or "comment_id")", 400);
     }
     uint64_t id;
-    if (form.id) {
-      id = form.id;
-    } else {
+    if (form.comment_id) {
       const auto login = LocalUserDetail::get_login(txn, user_id);
       id = CommentDetail::get(txn, form.comment_id, login).comment().thread();
+    } else {
+      id = form.id;
     }
     const auto post_view = get_post_view(txn, id, user_id);
     return {
@@ -794,7 +800,7 @@ namespace Ludwig::Lemmy {
       return { page_to_vector(offset, [&](auto& e) { return to_post_view(txn, e); },
         instance->list_board_threads(txn, cur, board_id, sort, login, limit)) };
     }
-    auto feed = form.type ? listing_type_to_feed(*form.type) : InstanceController::FEED_ALL;
+    auto feed = form.type ? listing_type_to_feed(*form.type, login) : InstanceController::FEED_ALL;
     return { page_to_vector(offset, [&](auto& e) { return to_post_view(txn, e); },
       instance->list_feed_threads(txn, cur, feed, sort, login, limit)) };
   }

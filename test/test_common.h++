@@ -1,8 +1,8 @@
 #include "util/common.h++"
 #include "util/web.h++"
 #include "services/http_client.h++"
+#include <parallel_hashmap/phmap.h>
 #include <glib.h>
-#include <map>
 #include <filesystem>
 #include <fstream>
 #include <lmdb.h>
@@ -81,7 +81,7 @@ struct TempDB {
 
 class MockHttpClient : public HttpClient {
 private:
-  std::unordered_map<string, std::tuple<uint16_t, string, string>> get_responses;
+  phmap::flat_hash_map<string, std::tuple<uint16_t, string, string>> get_responses;
   class Response : public HttpClientResponse {
   private:
     uint16_t _status;

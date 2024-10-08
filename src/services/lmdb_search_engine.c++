@@ -1,10 +1,9 @@
 #include "lmdb_search_engine.h++"
 #include "util/rich_text.h++"
 #include "static/en.wiki.bpe.vs200000.model.h++"
-#include <map>
 
-using std::inserter, std::optional, std::pair, std::runtime_error, std::set,
-    std::string, std::string_view;
+using std::inserter, std::optional, std::pair, std::runtime_error,
+    std::string, std::string_view, phmap::flat_hash_set;
 
 namespace Ludwig {
   static inline auto int_val(uint64_t* i) -> MDB_val {
@@ -27,8 +26,8 @@ namespace Ludwig {
       committed = true;
       return 0;
     }
-    auto get_all(MDB_dbi dbi, uint64_t key) -> set<uint64_t> {
-      set<uint64_t> set;
+    auto get_all(MDB_dbi dbi, uint64_t key) -> flat_hash_set<uint64_t> {
+      flat_hash_set<uint64_t> set;
       MDB_cursor* cur;
       MDB_val k = int_val(&key), v;
       if (mdb_cursor_open(txn, dbi, &cur)) goto done;
@@ -44,7 +43,7 @@ namespace Ludwig {
       mdb_cursor_close(cur);
       return set;
     }
-    auto del_vals_in_key(MDB_dbi dbi, uint64_t key, set<uint64_t> vals) -> void {
+    auto del_vals_in_key(MDB_dbi dbi, uint64_t key, flat_hash_set<uint64_t> vals) -> void {
       MDB_cursor* cur;
       MDB_val k = int_val(&key), v;
       if (mdb_cursor_open(txn, dbi, &cur)) goto done;
@@ -55,7 +54,7 @@ namespace Ludwig {
     done:
       mdb_cursor_close(cur);
     }
-    auto del_val_for_all_keys(MDB_dbi dbi, set<uint64_t> keys, uint64_t value) -> void {
+    auto del_val_for_all_keys(MDB_dbi dbi, flat_hash_set<uint64_t> keys, uint64_t value) -> void {
       MDB_cursor* cur;
       MDB_val k, v = int_val(&value);
       if (mdb_cursor_open(txn, dbi, &cur)) goto done;
@@ -99,15 +98,15 @@ namespace Ludwig {
     mdb_env_close(env);
   }
 
-  template <typename T, typename V> static inline auto into_set(set<T>& to, const V& from) -> void {
+  template <typename T, typename V> static inline auto into_set(flat_hash_set<T>& to, const V& from) -> void {
     std::copy(from.begin(), from.end(), inserter(to, to.end()));
   }
 
-  auto LmdbSearchEngine::index_tokens(Txn&& txn, uint64_t id, MDB_dbi dbi, set<uint64_t> tokens) -> void {
-    set<uint64_t> existing = txn.get_all(Id_Tokens, id);
+  auto LmdbSearchEngine::index_tokens(Txn&& txn, uint64_t id, MDB_dbi dbi, flat_hash_set<uint64_t>& tokens) -> void {
+    flat_hash_set<uint64_t> existing = txn.get_all(Id_Tokens, id);
     MDB_val id_val = int_val(&id), token_val;
     if (!existing.empty()) {
-      set<uint64_t> to_insert, to_remove;
+      flat_hash_set<uint64_t> to_insert, to_remove;
       set_difference(tokens.begin(), tokens.end(), existing.begin(), existing.end(), inserter(to_insert, to_insert.begin()));
       set_difference(existing.begin(), existing.end(), tokens.begin(), tokens.end(), inserter(to_remove, to_remove.begin()));
       txn.del_vals_in_key(Id_Tokens, id, to_remove);
@@ -128,7 +127,7 @@ namespace Ludwig {
 
   auto LmdbSearchEngine::index(uint64_t id, const User& user) -> void {
     Txn txn(env, 0);
-    set<uint64_t> tokens;
+    flat_hash_set<uint64_t> tokens;
     into_set(tokens, processor.EncodeAsIds(user.name()->string_view()));
     if (user.display_name_type() && user.display_name_type()->size()) {
       into_set(tokens, processor.EncodeAsIds(rich_text_to_plain_text(user.display_name_type(), user.display_name())));
@@ -141,7 +140,7 @@ namespace Ludwig {
 
   auto LmdbSearchEngine::index(uint64_t id, const Board& board) -> void {
     Txn txn(env, 0);
-    set<uint64_t> tokens;
+    flat_hash_set<uint64_t> tokens;
     into_set(tokens, processor.EncodeAsIds(board.name()->string_view()));
     if (board.display_name_type() && board.display_name_type()->size()) {
       into_set(tokens, processor.EncodeAsIds(rich_text_to_plain_text(board.display_name_type(), board.display_name())));
@@ -154,7 +153,7 @@ namespace Ludwig {
 
   auto LmdbSearchEngine::index(uint64_t id, const Thread& thread, optional<std::reference_wrapper<const LinkCard>> card_opt) -> void {
     Txn txn(env, 0);
-    set<uint64_t> tokens;
+    flat_hash_set<uint64_t> tokens;
     into_set(tokens, processor.EncodeAsIds(rich_text_to_plain_text(thread.title_type(), thread.title())));
     if (thread.content_text_type() && thread.content_text_type()->size()) {
       into_set(tokens, processor.EncodeAsIds(rich_text_to_plain_text(thread.content_text_type(), thread.content_text())));
@@ -173,12 +172,13 @@ namespace Ludwig {
 
   auto LmdbSearchEngine::index(uint64_t id, const Comment& comment) -> void {
     Txn txn(env, 0);
-    set<uint64_t> tokens;
+    flat_hash_set<uint64_t> tokens;
     into_set(tokens, processor.EncodeAsIds(rich_text_to_plain_text(comment.content_type(), comment.content())));
     index_tokens(std::move(txn), id, Token_Comments, tokens);
   }
 
   auto LmdbSearchEngine::unindex(uint64_t id, SearchResultType type) -> void {
+    using enum SearchResultType;
     Txn txn(env, 0);
     auto tokens = txn.get_all(Id_Tokens, id);
     MDB_val id_val = int_val(&id);
@@ -187,18 +187,18 @@ namespace Ludwig {
     }
     MDB_dbi dbi;
     switch (type) {
-      case SearchResultType::User: dbi = Token_Users; break;
-      case SearchResultType::Board: dbi = Token_Boards; break;
-      case SearchResultType::Thread: dbi = Token_Threads; break;
-      case SearchResultType::Comment: dbi = Token_Comments; break;
+      case User: dbi = Token_Users; break;
+      case Board: dbi = Token_Boards; break;
+      case Thread: dbi = Token_Threads; break;
+      case Comment: dbi = Token_Comments; break;
     }
     txn.del_val_for_all_keys(dbi, tokens, id);
     txn.commit();
   }
 
-  using MatchMap = std::map<uint64_t, pair<SearchResultType, uint64_t>>;
+  using MatchMap = phmap::flat_hash_map<uint64_t, pair<SearchResultType, uint64_t>>;
 
-  static inline auto into_match_map(MatchMap& mm, SearchResultType type, set<uint64_t> ids) {
+  static inline auto into_match_map(MatchMap& mm, SearchResultType type, flat_hash_set<uint64_t> ids) {
     for (auto id : ids) {
       const auto [it, inserted] = mm.insert({ id, { type, 1 } });
       if (!inserted) it->second.second++;
@@ -206,7 +206,8 @@ namespace Ludwig {
   }
 
   auto LmdbSearchEngine::search(SearchQuery query, Callback&& callback) -> std::shared_ptr<Cancelable> {
-    set<int> tokens;
+    using enum SearchResultType;
+    flat_hash_set<int> tokens;
     MatchMap matches;
 
     // string-start tokens are different from mid-string tokens
@@ -215,10 +216,10 @@ namespace Ludwig {
 
     Txn txn(env, MDB_RDONLY);
     for (const auto token : tokens) {
-      if (query.include_users) into_match_map(matches, SearchResultType::User, txn.get_all(Token_Users, (uint64_t)token));
-      if (query.include_boards) into_match_map(matches, SearchResultType::Board, txn.get_all(Token_Boards, (uint64_t)token));
-      if (query.include_threads) into_match_map(matches, SearchResultType::Thread, txn.get_all(Token_Threads, (uint64_t)token));
-      if (query.include_comments) into_match_map(matches, SearchResultType::Comment, txn.get_all(Token_Comments, (uint64_t)token));
+      if (query.include_users) into_match_map(matches, User, txn.get_all(Token_Users, (uint64_t)token));
+      if (query.include_boards) into_match_map(matches, Board, txn.get_all(Token_Boards, (uint64_t)token));
+      if (query.include_threads) into_match_map(matches, Thread, txn.get_all(Token_Threads, (uint64_t)token));
+      if (query.include_comments) into_match_map(matches, Comment, txn.get_all(Token_Comments, (uint64_t)token));
     }
     if (matches.size() <= query.offset) {
       std::move(callback)({});
