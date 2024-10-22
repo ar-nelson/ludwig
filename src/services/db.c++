@@ -8,6 +8,7 @@
 #include <openssl/bio.h>
 #include <openssl/pem.h>
 #include <openssl/rand.h>
+#include "flatbuffers/flatbuffer_builder.h"
 #include "lmdb.h"
 #include "simdjson.h"
 #include "uWebSockets/MoveOnlyFunction.h"
@@ -31,6 +32,7 @@ namespace Ludwig {
     User_Email,
     UserStats_User,
     LocalUser_User,
+    LocalUserStats_User,
     Application_User,
     InvitesOwned_UserTime,
     BoardsOwned_User,
@@ -81,6 +83,12 @@ namespace Ludwig {
     CommentsTop_Karma,
     CommentsMostComments_Comments,
 
+    Notification_Notification,
+    NotificationsNew_UserTime,
+    UnreadNotificationsNew_UserTime,
+    UnreadReplies_UserPost,
+    UnreadMentions_UserPost,
+
     Invite_Invite,
     Media_Media,
     PostsContaining_Media,
@@ -98,6 +106,11 @@ namespace Ludwig {
 
   static inline auto db_get(MDB_txn* txn, MDB_dbi dbi, uint64_t k, MDB_val& v) -> int {
     MDB_val kval { sizeof(uint64_t), &k };
+    return mdb_get(txn, dbi, &kval, &v);
+  }
+
+  static inline auto db_get(MDB_txn* txn, MDB_dbi dbi, Cursor k, MDB_val& v) -> int {
+    MDB_val kval = k.val();
     return mdb_get(txn, dbi, &kval, &v);
   }
 
@@ -208,6 +221,7 @@ namespace Ludwig {
     MK_DBI(User_Email, 0)
     MK_DBI(UserStats_User, MDB_INTEGERKEY)
     MK_DBI(LocalUser_User, MDB_INTEGERKEY)
+    MK_DBI(LocalUserStats_User, MDB_INTEGERKEY)
     MK_DBI(Application_User, MDB_INTEGERKEY)
     MK_DBI(InvitesOwned_UserTime, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
     MK_DBI(BoardsOwned_User, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
@@ -258,6 +272,12 @@ namespace Ludwig {
     MK_DBI(CommentsTop_Karma, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
     MK_DBI(CommentsMostComments_Comments, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
 
+    MK_DBI(Notification_Notification, MDB_INTEGERKEY)
+    MK_DBI(NotificationsNew_UserTime, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(UnreadNotificationsNew_UserTime, MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
+    MK_DBI(UnreadReplies_UserPost, 0)
+    MK_DBI(UnreadMentions_UserPost, 0)
+
     MK_DBI(Invite_Invite, MDB_INTEGERKEY)
     MK_DBI(Media_Media, MDB_INTEGERKEY)
     MK_DBI(PostsContaining_Media, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP)
@@ -291,21 +311,6 @@ namespace Ludwig {
     mdb_env_close(env);
     throw DBError("Failed to open database", err);
   }
-
-  /*
-  DB::DB(DB&& from) : map_size(from.map_size), env(from.env) {
-    memcpy(dbis, from.dbis, sizeof(dbis));
-    from.env = nullptr;
-  }
-
-  auto DB::operator=(DB&& from) -> DB& {
-    map_size = from.map_size;
-    env = from.env;
-    from.env = nullptr;
-    memcpy(dbis, from.dbis, sizeof(dbis));
-    return *this;
-  }
-  */
 
   DB::~DB() {
     if (env != nullptr) mdb_env_close(env);
@@ -369,6 +374,9 @@ namespace Ludwig {
         case DumpType::Comment:
           txn.set_comment(entry->id(), span, true);
           if (search) (*search)->index(entry->id(), *GetRoot<Comment>(span.data()));
+          break;
+        case DumpType::Notification:
+          txn.create_notification(span);
           break;
         case DumpType::SettingRecord: {
           const auto rec = GetRoot<SettingRecord>(span.data());
@@ -574,6 +582,11 @@ namespace Ludwig {
     MDB_val v;
     if (db_get(txn, db.dbis[LocalUser_User], id, v)) return {};
     return get_fb<LocalUser>(v);
+  }
+  auto ReadTxn::get_local_user_stats(uint64_t id) -> OptRef<LocalUserStats> {
+    MDB_val v;
+    if (db_get(txn, db.dbis[LocalUserStats_User], id, v)) return {};
+    return get_fb<LocalUserStats>(v);
   }
   auto ReadTxn::count_local_users() -> uint64_t {
     return count(db.dbis[LocalUser_User], txn);
@@ -932,6 +945,30 @@ namespace Ludwig {
     return db_has(txn, db.dbis[BoardsHidden_User], user_id, board_id);
   }
 
+  auto ReadTxn::get_notification(uint64_t id) -> OptRef<const Notification> {
+    MDB_val v;
+    if (db_get(txn, db.dbis[Notification_Notification], id, v)) return {};
+    return get_fb<Notification>(v);
+  }
+  auto ReadTxn::list_notifications(uint64_t user_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[NotificationsNew_UserTime],
+      txn,
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(user_id, ID_MAX), ID_MAX)),
+      Cursor(user_id, 0)
+    );
+  }
+  auto ReadTxn::list_unread_notifications(uint64_t user_id, OptKV cursor) -> DBIter {
+    return DBIter(
+      db.dbis[UnreadNotificationsNew_UserTime],
+      txn,
+      Dir::Desc,
+      cursor.value_or(pair(Cursor(user_id, ID_MAX), ID_MAX)),
+      Cursor(user_id, 0)
+    );
+  }
+
   auto ReadTxn::get_application(uint64_t user_id) -> OptRef<Application> {
     MDB_val v;
     if (db_get(txn, db.dbis[Application_User], user_id, v)) return {};
@@ -1051,6 +1088,15 @@ namespace Ludwig {
       fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::Comment, fbb.CreateVector((uint8_t*)v.mv_data, v.mv_size)));
     }
     if (err != MDB_NOTFOUND) throw DBError("Export failed (step: comments)", err);
+    mdb_cursor_close(cur);
+    // Notifications
+    err = mdb_cursor_open(txn, db.dbis[Notification_Notification], &cur);
+    for (err = mdb_cursor_get(cur, &k, &v, MDB_FIRST); !err; err = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) {
+      co_yield fbb.GetBufferSpan();
+      fbb.Clear();
+      fbb.FinishSizePrefixed(CreateDump(fbb, val_as<uint64_t>(k), DumpType::Notification, fbb.CreateVector((uint8_t*)v.mv_data, v.mv_size)));
+    }
+    if (err != MDB_NOTFOUND) throw DBError("Export failed (step: notifications)", err);
     mdb_cursor_close(cur);
     // Votes
     err = mdb_cursor_open(txn, db.dbis[UpvotePost_User], &cur);
@@ -1193,7 +1239,8 @@ namespace Ludwig {
   auto WriteTxn::set_local_user(uint64_t id, span<uint8_t> span, bool sequential) -> void {
     const auto& user = get_fb<LocalUser>(span);
     const auto email = opt_str(user.email());
-    bool user_added = sequential;
+    MDB_val unused;
+    bool user_added = sequential || !!db_get(txn, db.dbis[LocalUser_User], id, unused);
     if (!sequential) {
       const auto is_admin = user.admin();
       bool admin_changed = true;
@@ -1215,8 +1262,12 @@ namespace Ludwig {
       }
     }
     if (user_added) {
-      const auto& s = get_site_stats();
       FlatBufferBuilder fbb;
+      fbb.ForceDefaults(true);
+      fbb.Finish(CreateLocalUserStats(fbb));
+      db_put(txn, db.dbis[LocalUserStats_User], id, fbb.GetBufferSpan());
+      fbb.Clear();
+      const auto& s = get_site_stats();
       fbb.Finish(CreateSiteStats(fbb,
         s.user_count() + 1,
         s.board_count(),
@@ -2008,6 +2059,79 @@ namespace Ludwig {
         db_put(txn, db.dbis[CommentsTop_BoardKarma], Cursor(comment_thread.board(), karma_uint(new_karma)), post_id);
       }
     }
+  }
+
+  auto WriteTxn::create_notification(flatbuffers::span<uint8_t> span) -> uint64_t {
+    using enum NotificationType;
+    // Notification IDs are random.
+    // There's a _tiny_ chance of ID collisions, but even if they happen they're harmless.
+    const auto& notification = get_fb<Notification>(span);
+    const uint64_t id = random_uint64(), user_id = notification.user(), created_at = notification.created_at();
+    const auto& stats = get_local_user_stats(user_id);
+    assert_fmt(!!stats, "create_notification: local user {:x} does not exist", user_id);
+    spdlog::debug("Creating notification {:x} for user {:x}", id, user_id);
+    db_put(txn, db.dbis[Notification_Notification], id, span);
+    db_put(txn, db.dbis[NotificationsNew_UserTime], Cursor(user_id, created_at), id);
+    if (!notification.read_at()) {
+      db_put(txn, db.dbis[UnreadNotificationsNew_UserTime], Cursor(user_id, created_at), id);
+      const auto& s = stats->get();
+      auto unread_reply_count = s.unread_reply_count(), unread_mention_count = s.unread_mention_count();
+      switch (notification.type()) {
+        case ReplyToThread:
+        case ReplyToComment:
+          db_put(txn, db.dbis[UnreadReplies_UserPost], Cursor(user_id, notification.subject().value()), id);
+          unread_reply_count++;
+          break;
+        case MentionInThread:
+        case MentionInComment:
+          db_put(txn, db.dbis[UnreadMentions_UserPost], Cursor(user_id, notification.subject().value()), id);
+          unread_mention_count++;
+          break;
+        default: // do nothing
+      }
+      FlatBufferBuilder fbb;
+      fbb.Finish(CreateLocalUserStats(fbb,
+        unread_reply_count,
+        unread_mention_count,
+        s.unread_dm_count(),
+        s.unread_notification_count() + 1
+      ));
+      db_put(txn, db.dbis[LocalUserStats_User], user_id, fbb.GetBufferSpan());
+    }
+    return id;
+  }
+  auto WriteTxn::mark_notification_read(uint64_t user_id, uint64_t notification_id) -> void {
+    if (const auto n_opt = get_notification(notification_id)) {
+      const auto& n = n_opt->get();
+      if (n.user() == user_id) {
+        FlatBufferBuilder fbb;
+        fbb.Finish(CreateNotification(fbb, n.type(), user_id, n.created_at(), now_s(), n.subject()));
+        db_put(txn, db.dbis[Notification_Notification], notification_id, fbb.GetBufferSpan());
+        db_del(txn, db.dbis[UnreadNotificationsNew_UserTime], Cursor(user_id, n.created_at()), notification_id);
+        if (n.subject()) {
+          db_del(txn, db.dbis[UnreadReplies_UserPost], Cursor(user_id, *n.subject()), notification_id);
+          db_del(txn, db.dbis[UnreadMentions_UserPost], Cursor(user_id, *n.subject()), notification_id);
+        }
+        return;
+      }
+    }
+    spdlog::warn("Cannot mark notification read: notification {:x} does not exist for user {:x}", notification_id, user_id);
+  }
+  auto WriteTxn::mark_reply_read(uint64_t user_id, uint64_t post_id) -> void {
+    MDB_val v;
+    if (!db_get(txn, db.dbis[UnreadReplies_UserPost], Cursor(user_id, post_id), v)) {
+      mark_notification_read(user_id, val_as<uint64_t>(v));
+      return;
+    }
+    spdlog::warn("Cannot mark notification read: reply {:x} does not exist for user {:x}", post_id, user_id);
+  }
+  auto WriteTxn::mark_mention_read(uint64_t user_id, uint64_t post_id) -> void {
+    MDB_val v;
+    if (!db_get(txn, db.dbis[UnreadMentions_UserPost], Cursor(user_id, post_id), v)) {
+      mark_notification_read(user_id, val_as<uint64_t>(v));
+      return;
+    }
+    spdlog::warn("Cannot mark notification read: mention {:x} does not exist for user {:x}", post_id, user_id);
   }
 
   auto WriteTxn::create_application(uint64_t user_id, span<uint8_t> span) -> void {

@@ -19,6 +19,7 @@ namespace Ludwig {
     CommentUpdate,
     CommentDelete,
     PostStatsUpdate,
+    Notification,
     MAX
   };
 

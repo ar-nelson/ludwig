@@ -5,14 +5,14 @@
 
 namespace Ludwig {
 
-  enum UnsafeHttps {
-    SAFE_HTTPS,
-    UNSAFE_HTTPS
+  enum class UnsafeHttps : bool {
+    SAFE = false,
+    UNSAFE = true
   };
   
-  enum UnsafeLocalRequests {
-    SAFE_LOCAL_REQUESTS,
-    UNSAFE_LOCAL_REQUESTS
+  enum class UnsafeLocalRequests : bool {
+    SAFE = false,
+    UNSAFE = true
   };
 
   class AsioHttpClientResponse;
@@ -34,8 +34,8 @@ namespace Ludwig {
     AsioHttpClient(
       std::shared_ptr<asio::io_context> io,
       uint32_t requests_per_host_per_5min = 1000,
-      UnsafeHttps unsafe_https = SAFE_HTTPS,
-      UnsafeLocalRequests unsafe_local_requests = SAFE_LOCAL_REQUESTS
+      UnsafeHttps unsafe_https = UnsafeHttps::SAFE,
+      UnsafeLocalRequests unsafe_local_requests = UnsafeLocalRequests::SAFE
     );
   };
 

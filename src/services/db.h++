@@ -6,6 +6,7 @@
 #include "models/db.h++"
 #include <atomic>
 #include <__generator.hpp>
+#include <cstdint>
 #include <openssl/evp.h>
 #include <queue>
 
@@ -92,7 +93,6 @@ namespace Ludwig {
   concept DbWriteCallback = requires (Fn&& fn, WriteTxn&& txn, bool async) {
     std::invocable<Fn, WriteTxn, bool>;
     { fn(std::move(txn), async) } -> std::same_as<void>;
-    //requires noexcept(fn(std::move(txn), async));
   };
 
   class DBError : public std::runtime_error {
@@ -185,6 +185,7 @@ namespace Ludwig {
     auto get_user(uint64_t id) -> OptRef<const User>;
     auto get_user_stats(uint64_t id) -> OptRef<const UserStats>;
     auto get_local_user(uint64_t id) -> OptRef<const LocalUser>;
+    auto get_local_user_stats(uint64_t id) -> OptRef<const LocalUserStats>;
     auto count_local_users() -> uint64_t;
     auto list_users_alphabetical(std::optional<std::string_view> cursor = {}) -> DBIter;
     auto list_users_new(OptKV cursor = {}) -> DBIter;
@@ -247,6 +248,10 @@ namespace Ludwig {
     auto has_user_hidden_post(uint64_t user_id, uint64_t post_id) -> bool;
     auto has_user_hidden_user(uint64_t user_id, uint64_t hidden_user_id) -> bool;
     auto has_user_hidden_board(uint64_t user_id, uint64_t board_id) -> bool;
+
+    auto get_notification(uint64_t id) -> OptRef<const Notification>;
+    auto list_notifications(uint64_t user_id, OptKV cursor = {}) -> DBIter;
+    auto list_unread_notifications(uint64_t user_id, OptKV cursor = {}) -> DBIter;
 
     auto get_application(uint64_t user_id) -> OptRef<const Application>;
     auto list_applications(OptCursor cursor = {}) -> DBKeyIter;
@@ -340,6 +345,11 @@ namespace Ludwig {
     auto set_hide_post(uint64_t user_id, uint64_t post_id, bool hidden) -> void;
     auto set_hide_user(uint64_t user_id, uint64_t hidden_user_id, bool hidden) -> void;
     auto set_hide_board(uint64_t user_id, uint64_t board_id, bool hidden) -> void;
+
+    auto create_notification(flatbuffers::span<uint8_t> span) -> uint64_t;
+    auto mark_notification_read(uint64_t user_id, uint64_t id) -> void;
+    auto mark_reply_read(uint64_t user_id, uint64_t post_id) -> void;
+    auto mark_mention_read(uint64_t user_id, uint64_t post_id) -> void;
 
     auto create_application(uint64_t user_id, flatbuffers::span<uint8_t> span) -> void;
     auto create_invite(uint64_t sender_user_id, uint64_t lifetime_seconds) -> uint64_t;

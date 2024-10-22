@@ -31,7 +31,7 @@ public:
   IntegrationTest() :
     pool(1),
     xml(make_shared<LibXmlContext>()),
-    http(pool.io, 100000, UNSAFE_HTTPS, UNSAFE_LOCAL_REQUESTS),
+    http(pool.io, 100000, UnsafeHttps::UNSAFE, UnsafeLocalRequests::UNSAFE),
     outer_http(make_shared<MockHttpClient>())
   {
     pair<Hash, Salt> first_run_hash;

@@ -1,9 +1,14 @@
 #pragma once
+#include "db.h++"
 #include "util/common.h++"
 #include "services/db.h++"
+#include "util/rich_text.h++"
+#include <functional>
 
 namespace Ludwig {
 
+  // Defined here instead of enums.h++ because the enums parse functions
+  // depend on the type Login, defined in this file.
   enum class HomePageType : uint8_t {
     Subscribed = 1,
     Local,
@@ -265,15 +270,33 @@ namespace Ludwig {
     }
   };
 
+  struct NotificationDetail {
+    uint64_t id;
+    std::reference_wrapper<const Notification> notification;
+    std::variant<
+      std::monostate,
+      ThreadDetail,
+      CommentDetail,
+      std::reference_wrapper<const Board>,
+      std::reference_wrapper<const User>
+    > subject = {};
+
+    static auto get(ReadTxn& txn, uint64_t id, const LocalUserDetail& login) -> NotificationDetail;
+  };
+
   struct LocalUserDetail : UserDetail {
     static const User* const temp_admin_user;
     static const LocalUser* const temp_admin_local_user;
     static const UserStats* const temp_admin_stats;
+    static const LocalUserStats* const temp_admin_local_stats;
     static auto temp_admin() -> LocalUserDetail {
-      return {{ 0, *temp_admin_user, std::reference_wrapper(*temp_admin_local_user), *temp_admin_stats, false }};
+      return {{ 0, *temp_admin_user, std::reference_wrapper(*temp_admin_local_user), *temp_admin_stats, false }, *temp_admin_local_stats };
     }
 
-    inline auto local_user() const -> const LocalUser& { return _local_user->get(); }
+    std::reference_wrapper<const LocalUserStats> _local_user_stats;
+
+    auto local_user() const -> const LocalUser& { return _local_user->get(); }
+    auto local_user_stats() const noexcept -> const LocalUserStats& { return _local_user_stats.get(); }
 
     static auto get(ReadTxn& txn, uint64_t id, Login login) -> LocalUserDetail;
     static auto get_login(ReadTxn& txn, uint64_t id) -> LocalUserDetail;

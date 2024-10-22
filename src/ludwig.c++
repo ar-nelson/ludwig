@@ -228,8 +228,8 @@ int main(int argc, char** argv) {
   AsioThreadPool pool(threads);
   auto rate_limiter = make_shared<KeyedRateLimiter>(rate_limit / 300.0, rate_limit);
   auto http_client = make_shared<AsioHttpClient>(pool.io, 1000,
-    options.is_set_by_user("unsafe_https") ? UNSAFE_HTTPS : SAFE_HTTPS,
-    options.is_set_by_user("unsafe_local_requests") ? UNSAFE_LOCAL_REQUESTS : SAFE_LOCAL_REQUESTS
+    options.is_set_by_user("unsafe_https") ? UnsafeHttps::UNSAFE : UnsafeHttps::SAFE,
+    options.is_set_by_user("unsafe_local_requests") ? UnsafeLocalRequests::UNSAFE : UnsafeLocalRequests::SAFE
   );
   auto event_bus = make_shared<AsioEventBus>(pool.io);
   auto xml_ctx = make_shared<LibXmlContext>();

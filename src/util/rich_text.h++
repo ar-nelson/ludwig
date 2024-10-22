@@ -80,7 +80,7 @@ namespace Ludwig {
     bool links_nofollow = true;
   };
 
-  using RichTextVectors =  std::pair<
+  using RichTextVectors = std::pair<
     flatbuffers::Offset<flatbuffers::Vector<RichText>>,
     flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<void>>>
   >;

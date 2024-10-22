@@ -1,4 +1,5 @@
 #include "instance.h++"
+#include <iterator>
 #include <regex>
 #include <queue>
 #include <openssl/bio.h>
@@ -7,8 +8,11 @@
 #include <openssl/rand.h>
 #include <static_vector.hpp>
 #include "__generator.hpp"
+#include "db.h++"
+#include "flatbuffers/flatbuffer_builder.h"
 #include "models/detail.h++"
 #include "parallel_hashmap/phmap.h"
+#include "util/common.h++"
 #include "util/rich_text.h++"
 #include "util/web.h++"
 #include "models/patch.h++"
@@ -485,18 +489,19 @@ namespace Ludwig {
     Login login,
     uint16_t limit
   ) -> generator<const UserDetail&> {
+    using enum UserSortType;
     optional<DBIter> iter;
     switch (sort) {
-      case UserSortType::New:
+      case New:
         iter.emplace(txn.list_users_new(cursor.next_cursor_desc()));
         break;
-      case UserSortType::Old:
+      case Old:
         iter.emplace(txn.list_users_old(cursor.next_cursor_asc()));
         break;
-      case UserSortType::NewPosts:
+      case NewPosts:
         iter.emplace(txn.list_users_new_posts(cursor.next_cursor_desc()));
         break;
-      case UserSortType::MostPosts:
+      case MostPosts:
         iter.emplace(txn.list_users_most_posts(cursor.next_cursor_desc()));
         break;
     }
@@ -835,7 +840,6 @@ namespace Ludwig {
     Login login,
     uint16_t limit
   ) -> generator<const ThreadDetail&> {
-    using enum SortType;
     auto filter_thread = feed_filter_fn<ThreadDetail>(feed_id, txn, login);
     const auto get_entry = [&](uint64_t id) -> optional<ThreadDetail> {
       const auto e = optional(ThreadDetail::get(txn, id, login));
@@ -857,61 +861,56 @@ namespace Ludwig {
       if (iter.is_done()) cursor = {};
       else cursor = PageCursor(iter.get_cursor()->int_field_0(), *iter);
     };
-    generator<const ThreadDetail&> gen;
-    switch (sort) {
-      case Active:
-        gen = ranked<RankType::Active, ThreadDetail>(
-          txn,
-          cursor,
-          txn.list_threads_new(),
-          txn.list_threads_top(),
-          get_entry,
-          cursor.rank_k(),
-          limit
-        );
-        break;
-      case Hot:
-        gen = ranked<RankType::Hot, ThreadDetail>(
-          txn,
-          cursor,
-          txn.list_threads_new(),
-          txn.list_threads_top(),
-          get_entry,
-          cursor.rank_k(),
-          limit
-        );
-        break;
-      case NewComments:
-        gen = ranked_new_comments<ThreadDetail>(
-          txn,
-          cursor,
-          txn.list_threads_new(new_comments_cursor(cursor)),
-          get_entry,
-          limit
-        );
-        break;
-      case New:
-        gen = iter_gen(txn.list_threads_new(cursor.next_cursor_desc()));
-        break;
-      case Old:
-        gen = iter_gen(txn.list_threads_old(cursor.next_cursor_asc()));
-        break;
-      case MostComments:
-        gen = iter_gen(txn.list_threads_most_comments(cursor.next_cursor_desc()));
-        break;
-      case TopAll:
-      case TopYear:
-      case TopSixMonths:
-      case TopThreeMonths:
-      case TopMonth:
-      case TopWeek:
-      case TopDay:
-      case TopTwelveHour:
-      case TopSixHour:
-      case TopHour:
-        gen = iter_gen(txn.list_threads_top(cursor.next_cursor_desc()));
-        break;
-    }
+    generator<const ThreadDetail&> gen = [&]{
+      using enum SortType;
+      switch (sort) {
+        case Active:
+          return ranked<RankType::Active, ThreadDetail>(
+            txn,
+            cursor,
+            txn.list_threads_new(),
+            txn.list_threads_top(),
+            get_entry,
+            cursor.rank_k(),
+            limit
+          );
+        case Hot:
+          return ranked<RankType::Hot, ThreadDetail>(
+            txn,
+            cursor,
+            txn.list_threads_new(),
+            txn.list_threads_top(),
+            get_entry,
+            cursor.rank_k(),
+            limit
+          );
+        case NewComments:
+          return ranked_new_comments<ThreadDetail>(
+            txn,
+            cursor,
+            txn.list_threads_new(new_comments_cursor(cursor)),
+            get_entry,
+            limit
+          );
+        case New:
+          return iter_gen(txn.list_threads_new(cursor.next_cursor_desc()));
+        case Old:
+          return iter_gen(txn.list_threads_old(cursor.next_cursor_asc()));
+        case MostComments:
+          return iter_gen(txn.list_threads_most_comments(cursor.next_cursor_desc()));
+        case TopAll:
+        case TopYear:
+        case TopSixMonths:
+        case TopThreeMonths:
+        case TopMonth:
+        case TopWeek:
+        case TopDay:
+        case TopTwelveHour:
+        case TopSixHour:
+        case TopHour:
+          return iter_gen(txn.list_threads_top(cursor.next_cursor_desc()));
+      }
+    }();
     for (auto& entry : gen) {
       fetch_card(entry);
       co_yield entry;
@@ -1012,20 +1011,15 @@ namespace Ludwig {
   ) -> generator<const ThreadDetail&> {
     const auto user = txn.get_user(user_id);
     if (!user) throw ApiError("User does not exist", 410);
-    optional<DBIter> iter;
-    switch (sort) {
-      case UserPostSortType::New:
-        iter.emplace(txn.list_threads_of_user_new(user_id, cursor.next_cursor_desc(user_id)));
-        break;
-      case UserPostSortType::Old:
-        iter.emplace(txn.list_threads_of_user_old(user_id, cursor.next_cursor_asc(user_id)));
-        break;
-      case UserPostSortType::Top:
-        iter.emplace(txn.list_threads_of_user_top(user_id, cursor.next_cursor_desc(user_id)));
-        break;
-    }
-    assert(!!iter);
-    for (uint64_t thread_id : *iter) {
+    DBIter iter = [&]{
+      using enum UserPostSortType;
+      switch (sort) {
+        case New: return txn.list_threads_of_user_new(user_id, cursor.next_cursor_desc(user_id));
+        case Old: return txn.list_threads_of_user_old(user_id, cursor.next_cursor_asc(user_id));
+        case Top: return txn.list_threads_of_user_top(user_id, cursor.next_cursor_desc(user_id));
+      }
+    }();
+    for (uint64_t thread_id : iter) {
       try {
         const auto entry = ThreadDetail::get(txn, thread_id, login, user);
         if (!entry.should_show(login)) continue;
@@ -1036,8 +1030,8 @@ namespace Ludwig {
       }
       if (--limit == 0) break;
     }
-    if (iter->is_done()) cursor = {};
-    else cursor = PageCursor(iter->get_cursor()->int_field_1(), **iter);
+    if (iter.is_done()) cursor = {};
+    else cursor = PageCursor(iter.get_cursor()->int_field_1(), *iter);
   }
   auto InstanceController::list_user_comments(
     ReadTxn& txn,
@@ -1047,20 +1041,15 @@ namespace Ludwig {
     Login login,
     uint16_t limit
   ) -> generator<const CommentDetail&> {
-    optional<DBIter> iter;
-    switch (sort) {
-      case UserPostSortType::New:
-        iter.emplace(txn.list_comments_of_user_new(user_id, cursor.next_cursor_desc(user_id)));
-        break;
-      case UserPostSortType::Old:
-        iter.emplace(txn.list_comments_of_user_old(user_id, cursor.next_cursor_asc(user_id)));
-        break;
-      case UserPostSortType::Top:
-        iter.emplace(txn.list_comments_of_user_top(user_id, cursor.next_cursor_desc(user_id)));
-        break;
-    }
-    assert(!!iter);
-    for (uint64_t comment_id : *iter) {
+    DBIter iter = [&]{
+      using enum UserPostSortType;
+      switch (sort) {
+        case New: return txn.list_comments_of_user_new(user_id, cursor.next_cursor_desc(user_id));
+        case Old: return txn.list_comments_of_user_old(user_id, cursor.next_cursor_asc(user_id));
+        case Top: return txn.list_comments_of_user_top(user_id, cursor.next_cursor_desc(user_id));
+      }
+    }();
+    for (uint64_t comment_id : iter) {
       try {
         const auto entry = CommentDetail::get(txn, comment_id, login);
         if (!entry.should_show(login)) continue;
@@ -1070,8 +1059,27 @@ namespace Ludwig {
       }
       if (--limit == 0) break;
     }
-    if (iter->is_done()) cursor = {};
-    else cursor = PageCursor(iter->get_cursor()->int_field_1(), **iter);
+    if (iter.is_done()) cursor = {};
+    else cursor = PageCursor(iter.get_cursor()->int_field_1(), *iter);
+  }
+  auto InstanceController::list_notifications(
+    ReadTxn& txn,
+    PageCursor& cursor,
+    const LocalUserDetail& login,
+    uint16_t limit
+  ) -> generator<const NotificationDetail&> {
+    auto iter = txn.list_notifications(login.id, cursor.next_cursor_desc(login.id));
+    for (uint64_t notification_id : iter) {
+      try {
+        const auto entry = NotificationDetail::get(txn, notification_id, login);
+        co_yield entry;
+      } catch (const ApiError& e) {
+        spdlog::warn("Notification {:x} error: {}", notification_id, e.what());
+      }
+      if (--limit == 0) break;
+    }
+    if (iter.is_done()) cursor = {};
+    else cursor = PageCursor(iter.get_cursor()->int_field_1(), *iter);
   }
 
   auto InstanceController::first_run_setup(WriteTxn txn, FirstRunSetup&& update) -> void {
@@ -1635,7 +1643,7 @@ namespace Ludwig {
     txn.commit();
   }
   auto InstanceController::create_thread_internal(
-    WriteTxn& txn,
+    WriteTxn&& txn,
     uint64_t author,
     uint64_t board,
     optional<string_view> remote_post_url,
@@ -1645,7 +1653,8 @@ namespace Ludwig {
     string_view title,
     optional<string_view> submission_url,
     optional<string_view> text_content_markdown,
-    optional<string_view> content_warning
+    optional<string_view> content_warning,
+    bool self_upvote
   ) -> uint64_t {
     if (submission_url) {
       auto len = submission_url->length();
@@ -1657,6 +1666,15 @@ namespace Ludwig {
     }
     if (!submission_url && !text_content_markdown) {
       throw ApiError("Post must contain either a submission URL or text content", 400);
+    }
+    const auto site = site_detail();
+    if (text_content_markdown) {
+      auto len = text_content_markdown->length();
+      if (len > site->post_max_length) {
+        throw ApiError(format("Post text content cannot be larger than {:d} bytes"_cf, site->post_max_length), 400);
+      } else if (len < 1) {
+        text_content_markdown = {};
+      }
     }
     auto len = title.length();
     if (len > 1024) throw ApiError("Post title cannot be longer than 1024 bytes", 400);
@@ -1673,7 +1691,19 @@ namespace Ludwig {
       remote_activity_url_s = remote_activity_url ? fbb.CreateString(*remote_activity_url) : 0;
     auto [title_blocks_type, title_blocks] = plain_text_with_emojis_to_rich_text(fbb, title);
     RichTextVectors content;
-    if (text_content_markdown) content = markdown_to_rich_text(fbb, *text_content_markdown);
+    phmap::flat_hash_set<uint64_t> to_notify;
+    if (text_content_markdown) {
+      content = markdown_to_rich_text(fbb, *text_content_markdown);
+      const auto& content_type_vec = *get_temporary_pointer(fbb, content.first);
+      const auto& content_vec = *get_temporary_pointer(fbb, content.second);
+      for (unsigned i = 0; i < content_type_vec.size(); i++) {
+        if (content_type_vec[i] != RichText::UserLink) continue;
+        if (const auto id = txn.get_user_id_by_name(content_vec.GetAsString(i)->string_view())) {
+          const auto mentioned = txn.get_user(*id);
+          if (mentioned && !mentioned->get().instance()) to_notify.emplace(*id);
+        }
+      }
+    }
     ThreadBuilder b(fbb);
     b.add_created_at(timestamp_to_uint(created_at));
     if (updated_at) b.add_updated_at(timestamp_to_uint(*updated_at));
@@ -1702,6 +1732,28 @@ namespace Ludwig {
     if (search_engine) {
       (*search_engine)->index(thread_id, *GetRoot<Thread>(fbb.GetBufferPointer()));
     }
+    const auto new_thread = CommentDetail::get(txn, thread_id, {});
+    for (auto it = to_notify.begin(); it != to_notify.end(); ) {
+      const auto user = *it;
+      if (!new_thread.should_show(LocalUserDetail::get(txn, user, {}))) {
+        it = to_notify.erase(it);
+        continue;
+      }
+      fbb.Clear();
+      NotificationBuilder b(fbb);
+      b.add_type(NotificationType::MentionInThread);
+      b.add_user(user);
+      b.add_created_at(timestamp_to_uint(created_at));
+      b.add_subject(thread_id);
+      fbb.Finish(b.Finish());
+      txn.create_notification(fbb.GetBufferSpan());
+    }
+    if (self_upvote) txn.set_vote(author, thread_id, Vote::Upvote);
+    txn.commit();
+
+    event_bus->dispatch(Event::UserStatsUpdate, author);
+    event_bus->dispatch(Event::BoardStatsUpdate, board);
+    for (const auto id : to_notify) event_bus->dispatch(Event::Notification, id);
     return thread_id;
   }
   auto InstanceController::create_thread(
@@ -1717,23 +1769,10 @@ namespace Ludwig {
     optional<string_view> text_content_markdown,
     optional<string_view> content_warning
   ) -> uint64_t {
-    const auto site = site_detail();
-    if (text_content_markdown) {
-      auto len = text_content_markdown->length();
-      if (len > site->remote_post_max_length) {
-        throw ApiError(format("Post text content cannot be larger than {:d} bytes"_cf, site->remote_post_max_length), 400);
-      } else if (len < 1) {
-        text_content_markdown = {};
-      }
-    }
-    uint64_t thread_id = create_thread_internal(
-      txn, author, board, remote_post_url, remote_activity_url, created_at, updated_at,
-      title, submission_url, text_content_markdown, content_warning
+    return create_thread_internal(
+      std::move(txn), author, board, remote_post_url, remote_activity_url, created_at, updated_at,
+      title, submission_url, text_content_markdown, content_warning, false
     );
-    txn.commit();
-    event_bus->dispatch(Event::UserStatsUpdate, author);
-    event_bus->dispatch(Event::BoardStatsUpdate, board);
-    return thread_id;
   }
   auto InstanceController::create_local_thread(
     WriteTxn txn,
@@ -1744,28 +1783,14 @@ namespace Ludwig {
     optional<string_view> text_content_markdown,
     optional<string_view> content_warning
   ) -> uint64_t {
-    const auto site = site_detail();
-    if (text_content_markdown) {
-      auto len = text_content_markdown->length();
-      if (len > site->post_max_length) {
-        throw ApiError(format("Post text content cannot be larger than {:d} bytes"_cf, site->post_max_length), 400);
-      } else if (len < 1) {
-        text_content_markdown = {};
-      }
-    }
     const auto login = LocalUserDetail::get_login(txn, author);
     if (!BoardDetail::get(txn, board, login).can_create_thread(login)) {
       throw ApiError("User cannot create threads in this board", 403);
     }
-    uint64_t thread_id = create_thread_internal(
-      txn, author, board, {}, {}, now_t(), {},
-      title, submission_url, text_content_markdown, content_warning
+    return create_thread_internal(
+      std::move(txn), author, board, {}, {}, now_t(), {},
+      title, submission_url, text_content_markdown, content_warning, true
     );
-    txn.set_vote(author, thread_id, Vote::Upvote);
-    txn.commit();
-    event_bus->dispatch(Event::UserStatsUpdate, author);
-    event_bus->dispatch(Event::BoardStatsUpdate, board);
-    return thread_id;
   }
   auto InstanceController::update_thread(
     WriteTxn txn,
@@ -1795,18 +1820,25 @@ namespace Ludwig {
     txn.commit();
   }
   auto InstanceController::create_comment_internal(
-    WriteTxn& txn,
+    WriteTxn&& txn,
     uint64_t author,
-    uint64_t parent,
-    uint64_t thread,
+    const ThreadDetail& parent_thread,
+    const optional<CommentDetail>& parent_comment,
     optional<string_view> remote_post_url,
     optional<string_view> remote_activity_url,
     Timestamp created_at,
     optional<Timestamp> updated_at,
     string_view text_content_markdown,
-    optional<string_view> content_warning
+    optional<string_view> content_warning,
+    bool self_upvote
   ) -> uint64_t {
-    if (text_content_markdown.empty()) throw ApiError("Comment text content cannot be blank", 400);
+    if (text_content_markdown.empty()) {
+      throw ApiError("Comment text content cannot be blank", 400);
+    }
+    const auto site = site_detail();
+    if (text_content_markdown.length() > site->remote_post_max_length) {
+      throw ApiError(format("Comment text content cannot be larger than {:d} bytes"_cf, site->remote_post_max_length), 400);
+    }
     union { uint8_t bytes[4]; uint32_t n; } salt;
     RAND_pseudo_bytes(salt.bytes, 4);
     auto user = txn.get_user(author);
@@ -1817,12 +1849,34 @@ namespace Ludwig {
       remote_post_url_s = remote_post_url ? fbb.CreateString(*remote_post_url) : 0,
       remote_activity_url_s = remote_activity_url ? fbb.CreateString(*remote_activity_url) : 0;
     const auto [content_type, content] = markdown_to_rich_text(fbb, text_content_markdown);
+
+    phmap::flat_hash_set<pair<uint64_t, NotificationType>> to_notify;
+    uint64_t already_notified = 0;
+    if (parent_comment && !parent_comment->author().instance()) {
+      already_notified = parent_comment->author_id();
+      to_notify.emplace(parent_comment->author_id(), NotificationType::ReplyToComment);
+    }
+    if (!parent_thread.author().instance() && parent_thread.author_id() != already_notified) {
+      to_notify.emplace(parent_thread.author_id(), NotificationType::ReplyToThread);
+    }
+    const auto& content_type_vec = *get_temporary_pointer(fbb, content_type);
+    const auto& content_vec = *get_temporary_pointer(fbb, content);
+    for (unsigned i = 0; i < content_type_vec.size(); i++) {
+      if (content_type_vec[i] != RichText::UserLink) continue;
+      if (const auto id = txn.get_user_id_by_name(content_vec.GetAsString(i)->string_view())) {
+        const auto mentioned = txn.get_user(*id);
+        if (mentioned && !mentioned->get().instance()) {
+          to_notify.emplace(*id, NotificationType::MentionInComment);
+        }
+      }
+    }
+
     CommentBuilder b(fbb);
     b.add_created_at(timestamp_to_uint(created_at));
     if (updated_at) b.add_updated_at(timestamp_to_uint(*updated_at));
     b.add_author(author);
-    b.add_parent(parent);
-    b.add_thread(thread);
+    b.add_parent(parent_comment ? parent_comment->id : parent_thread.id);
+    b.add_thread(parent_thread.id);
     b.add_content_raw(content_raw_s);
     b.add_content_type(content_type);
     b.add_content(content);
@@ -1841,6 +1895,32 @@ namespace Ludwig {
     if (search_engine) {
       (*search_engine)->index(comment_id, *GetRoot<Comment>(fbb.GetBufferPointer()));
     }
+    const auto board_id = parent_thread.thread().board();
+    const auto new_comment = CommentDetail::get(txn, comment_id, {});
+    for (auto it = to_notify.begin(); it != to_notify.end(); ) {
+      const auto [user, type] = *it;
+      if (!new_comment.should_show(LocalUserDetail::get(txn, user, {}))) {
+        it = to_notify.erase(it);
+        continue;
+      }
+      fbb.Clear();
+      NotificationBuilder b(fbb);
+      b.add_type(type);
+      b.add_user(user);
+      b.add_created_at(timestamp_to_uint(created_at));
+      b.add_subject(comment_id);
+      fbb.Finish(b.Finish());
+      txn.create_notification(fbb.GetBufferSpan());
+      it++;
+    }
+    if (self_upvote) txn.set_vote(author, comment_id, Vote::Upvote);
+    txn.commit();
+
+    event_bus->dispatch(Event::UserStatsUpdate, author);
+    event_bus->dispatch(Event::BoardStatsUpdate, board_id);
+    event_bus->dispatch(Event::PostStatsUpdate, parent_thread.id);
+    if (parent_comment) event_bus->dispatch(Event::PostStatsUpdate, parent_comment->id);
+    for (const auto p : to_notify) event_bus->dispatch(Event::Notification, p.first);
     return comment_id;
   }
   auto InstanceController::create_comment(
@@ -1854,28 +1934,18 @@ namespace Ludwig {
     string_view text_content_markdown,
     optional<string_view> content_warning
   ) -> uint64_t {
-    const auto site = site_detail();
-    if (text_content_markdown.length() > site->remote_post_max_length) {
-      throw ApiError(format("Comment text content cannot be larger than {:d} bytes"_cf, site->remote_post_max_length), 400);
-    }
     optional<ThreadDetail> parent_thread;
+    optional<CommentDetail> parent_comment;
     try {
       parent_thread = ThreadDetail::get(txn, parent, {});
     } catch (...) {
-      const auto parent_comment = CommentDetail::get(txn, parent, {});
-      parent_thread = ThreadDetail::get(txn, parent_comment.comment().thread(), {});
+      parent_comment = CommentDetail::get(txn, parent, {});
+      parent_thread = ThreadDetail::get(txn, parent_comment->comment().thread(), {});
     }
-    const auto comment_id = create_comment_internal(
-      txn, author, parent, parent_thread->id, remote_post_url, remote_activity_url,
-      created_at, updated_at, text_content_markdown, content_warning
+    return create_comment_internal(
+      std::move(txn), author, *parent_thread, parent_comment, remote_post_url, remote_activity_url,
+      created_at, updated_at, text_content_markdown, content_warning, false
     );
-    const auto board_id = parent_thread->thread().board();
-    txn.commit();
-    event_bus->dispatch(Event::UserStatsUpdate, author);
-    event_bus->dispatch(Event::BoardStatsUpdate, board_id);
-    event_bus->dispatch(Event::PostStatsUpdate, parent_thread->id);
-    if (parent != parent_thread->id) event_bus->dispatch(Event::PostStatsUpdate, parent);
-    return comment_id;
   }
   auto InstanceController::create_local_comment(
     WriteTxn txn,
@@ -1884,10 +1954,6 @@ namespace Ludwig {
     string_view text_content_markdown,
     optional<string_view> content_warning
   ) -> uint64_t {
-    const auto site = site_detail();
-    if (text_content_markdown.length() > site->post_max_length) {
-      throw ApiError(format("Comment text content cannot be larger than {:d} bytes"_cf, site->post_max_length), 400);
-    }
     const auto login = LocalUserDetail::get_login(txn, author);
     optional<ThreadDetail> parent_thread;
     optional<CommentDetail> parent_comment;
@@ -1900,18 +1966,10 @@ namespace Ludwig {
     if (parent_comment ? !parent_comment->can_reply_to(login) : !parent_thread->can_reply_to(login)) {
       throw ApiError("User cannot reply to this post", 403);
     }
-    const auto comment_id = create_comment_internal(
-      txn, author, parent, parent_thread->id, {}, {}, now_t(), {},
-      text_content_markdown, content_warning
+    return create_comment_internal(
+      std::move(txn), author, *parent_thread, parent_comment, {}, {},
+      now_t(), {}, text_content_markdown, content_warning, true
     );
-    const auto board_id = parent_thread->thread().board();
-    txn.set_vote(author, comment_id, Vote::Upvote);
-    txn.commit();
-    event_bus->dispatch(Event::UserStatsUpdate, author);
-    event_bus->dispatch(Event::BoardStatsUpdate, board_id);
-    event_bus->dispatch(Event::PostStatsUpdate, parent_thread->id);
-    if (parent != parent_thread->id) event_bus->dispatch(Event::PostStatsUpdate, parent);
-    return comment_id;
   }
   auto InstanceController::update_comment(
     WriteTxn txn,
@@ -2013,6 +2071,19 @@ namespace Ludwig {
     if (!txn.get_local_user(user_id)) throw ApiError("User does not exist", 410);
     if (!txn.get_post_stats(board_id)) throw ApiError("Board does not exist", 410);
     txn.set_hide_post(user_id, board_id, hidden);
+    txn.commit();
+  }
+
+  auto InstanceController::mark_notification_read(WriteTxn txn, uint64_t user_id, uint64_t notification_id) -> void {
+    if (!txn.get_local_user(user_id)) throw ApiError("User does not exist", 410);
+    txn.mark_notification_read(user_id, notification_id);
+    txn.commit();
+  }
+  auto InstanceController::mark_all_notifications_read(WriteTxn txn, uint64_t user_id) -> void {
+    if (!txn.get_local_user(user_id)) throw ApiError("User does not exist", 410);
+    vector<uint64_t> unread;
+    for (uint64_t i : txn.list_unread_notifications(user_id)) unread.push_back(i);
+    for (uint64_t i : unread) txn.mark_notification_read(user_id, i);
     txn.commit();
   }
 }

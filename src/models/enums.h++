@@ -1,159 +1,69 @@
 #pragma once
+#include "db.h++"
 #include "models/detail.h++"
 #include "util/web.h++"
 
 namespace Ludwig {
-  constexpr auto to_string(SortType sort) -> std::string_view {
-    switch (sort) {
-      case SortType::Hot: return "Hot";
-      case SortType::Active: return "Active";
-      case SortType::New: return "New";
-      case SortType::Old: return "Old";
-      case SortType::MostComments: return "MostComments";
-      case SortType::NewComments: return "NewComments";
-      case SortType::TopAll: return "TopAll";
-      case SortType::TopYear: return "TopYear";
-      case SortType::TopSixMonths: return "TopSixMonths";
-      case SortType::TopThreeMonths: return "TopThreeMonths";
-      case SortType::TopMonth: return "TopMonth";
-      case SortType::TopWeek: return "TopWeek";
-      case SortType::TopDay: return "TopDay";
-      case SortType::TopTwelveHour: return "TopTwelveHour";
-      case SortType::TopSixHour: return "TopSixHour";
-      case SortType::TopHour: return "TopHour";
-    }
-  }
 
-  static inline auto parse_sort_type(std::string_view str, Login login = {}) -> SortType {
-    if (str.empty()) return login ? login->local_user().default_sort_type() : SortType::Active;
-    if (str == "Hot") return SortType::Hot;
-    if (str == "Active") return SortType::Active;
-    if (str == "New") return SortType::New;
-    if (str == "Old") return SortType::Old;
-    if (str == "MostComments") return SortType::MostComments;
-    if (str == "NewComments") return SortType::NewComments;
-    if (str == "Top" || str == "TopAll") return SortType::TopAll;
-    if (str == "TopYear") return SortType::TopYear;
-    if (str == "TopSixMonths") return SortType::TopSixMonths;
-    if (str == "TopThreeMonths") return SortType::TopThreeMonths;
-    if (str == "TopMonth") return SortType::TopMonth;
-    if (str == "TopWeek") return SortType::TopWeek;
-    if (str == "TopDay") return SortType::TopDay;
-    if (str == "TopTwelveHour") return SortType::TopTwelveHour;
-    if (str == "TopSixHour") return SortType::TopSixHour;
-    if (str == "TopHour") return SortType::TopHour;
-    throw ApiError("Bad sort type", 400);
-  }
+# define X_SORT_TYPE(X) \
+    X(Active, "Active") X(Hot, "Hot") X(New, "New") X(Old, "Old") \
+    X(MostComments, "Most Comments") X(NewComments, "New Comments") \
+    X(TopAll, "Top All") X(TopYear, "Top Year") X(TopSixMonths, "Top Six Months") X(TopThreeMonths, "Top Three Months") \
+    X(TopMonth, "Top Month") X(TopWeek, "Top Week") X(TopDay, "Top Day") \
+    X(TopTwelveHour, "Top Twelve Hour") X(TopSixHour, "Top Six Hour") X(TopHour, "Top Hour")
 
-  constexpr auto to_string(CommentSortType sort) -> std::string_view {
-    switch (sort) {
-      case CommentSortType::Hot: return "Hot";
-      case CommentSortType::New: return "New";
-      case CommentSortType::Old: return "Old";
-      case CommentSortType::Top: return "Top";
-    }
-  }
+# define X_COMMENT_SORT_TYPE(X) X(Hot, "Hot") X(New, "New") X(Old, "Old") X(Top, "Top")
+# define X_USER_POST_SORT_TYPE(X) X(New, "New") X(Old, "Old") X(Top, "Top")
+# define X_USER_SORT_TYPE(X) X(New, "New") X(Old, "Old") X(MostPosts, "Most Posts") X(NewPosts, "New Posts")
+# define X_BOARD_SORT_TYPE(X) X(New, "New") X(Old, "Old") X(MostPosts, "Most Posts") X(NewPosts, "New Posts") X(MostSubscribers, "Most Subscribers")
+# define X_HOME_PAGE_TYPE(X) \
+    X(Subscribed, "Subscribed - Display the user's subscribed boards, or Local boards if not logged in") \
+    X(Local, "Local - Display top content from all boards on this site") \
+    X(All, "All - Display top content from all federated sites") \
+    X(BoardList, "Board List - Display a curated list of boards, like a classic forum") \
+    X(SingleBoard, "Single Board - The site has only one board, which is always the homepage")
 
-  static inline auto parse_comment_sort_type(std::string_view str, Login login = {}) -> CommentSortType {
-    if (str.empty()) return login ? login->local_user().default_comment_sort_type() : CommentSortType::Hot;
-    if (str == "Hot") return CommentSortType::Hot;
-    if (str == "New") return CommentSortType::New;
-    if (str == "Old") return CommentSortType::Old;
-    if (str == "Top") return CommentSortType::Top;
-    throw ApiError("Bad comment sort type", 400);
-  }
+enum class SubscribedType : uint8_t {
+  NotSubscribed,
+  Subscribed,
+  Pending
+};
 
-  constexpr auto to_string(UserPostSortType sort) -> std::string_view {
-    switch (sort) {
-      case UserPostSortType::New: return "New";
-      case UserPostSortType::Old: return "Old";
-      case UserPostSortType::Top: return "Top";
-    }
-  }
+# define X_SUBSCRIBED_TYPE(X) X(Subscribed, "Subscribed") X(NotSubscribed, "Not Subscribed") X(Pending, "Pending")
 
-  static inline auto parse_user_post_sort_type(std::string_view str) -> UserPostSortType {
-    if (str.empty() || str == "New") return UserPostSortType::New;
-    if (str == "Old") return UserPostSortType::Old;
-    if (str == "Top") return UserPostSortType::Top;
-    throw ApiError("Bad post sort type", 400);
+# define DEF_TO_STRING_AND_PARSE_WITH_LOGIN(T, LOWERCASE_NAME, APPLY_TO_ENUM, DEFAULT) \
+  constexpr auto to_string(T sort) -> std::string_view { \
+    using enum T; \
+    switch (sort) { APPLY_TO_ENUM(TO_STRING_CASE) } \
+  } \
+  static inline auto parse_##LOWERCASE_NAME(std::string_view str, Login login = {}) -> T { \
+    using enum T; \
+    if (str.empty()) return login ? login->local_user().default_##LOWERCASE_NAME() : DEFAULT; \
+    APPLY_TO_ENUM(PARSE_CASE) \
+    throw ApiError("Bad " #T, 400); \
   }
-
-  constexpr auto to_string(UserSortType sort) -> std::string_view {
-    switch (sort) {
-      case UserSortType::NewPosts: return "NewPosts";
-      case UserSortType::MostPosts: return "MostPosts";
-      case UserSortType::New: return "New";
-      case UserSortType::Old: return "Old";
-    }
+# define DEF_TO_STRING_AND_PARSE(T, LOWERCASE_NAME, APPLY_TO_ENUM, ...) \
+  constexpr auto to_string(T sort) -> std::string_view { \
+    using enum T; \
+    switch (sort) { APPLY_TO_ENUM(TO_STRING_CASE) } \
+  } \
+  static inline auto parse_##LOWERCASE_NAME(std::string_view str) -> T { \
+    using enum T; \
+    __VA_ARGS__; \
+    APPLY_TO_ENUM(PARSE_CASE) \
+    throw ApiError("Bad " #T, 400); \
   }
+# define TO_STRING_CASE(NAME, UNUSED) case NAME: return #NAME;
+# define PARSE_CASE(NAME, UNUSED) if (str == #NAME) return NAME;
 
-  static inline auto parse_user_sort_type(std::string_view str) -> UserSortType {
-    if (str.empty() || str == "NewPosts") return UserSortType::NewPosts;
-    if (str == "MostPosts") return UserSortType::MostPosts;
-    if (str == "New") return UserSortType::New;
-    if (str == "Old") return UserSortType::Old;
-    throw ApiError("Bad user sort type", 400);
-  }
+  DEF_TO_STRING_AND_PARSE_WITH_LOGIN(SortType, sort_type, X_SORT_TYPE, Active)
+  DEF_TO_STRING_AND_PARSE_WITH_LOGIN(CommentSortType, comment_sort_type, X_COMMENT_SORT_TYPE, Hot)
+  DEF_TO_STRING_AND_PARSE(UserPostSortType, user_post_sort_type, X_USER_POST_SORT_TYPE, if (str.empty()) return New)
+  DEF_TO_STRING_AND_PARSE(UserSortType, user_sort_type, X_USER_SORT_TYPE, if (str.empty()) return NewPosts)
+  DEF_TO_STRING_AND_PARSE(BoardSortType, board_sort_type, X_BOARD_SORT_TYPE, if (str.empty()) return MostSubscribers)
 
-  constexpr auto to_string(BoardSortType sort) -> std::string_view {
-    switch (sort) {
-      case BoardSortType::NewPosts: return "NewPosts";
-      case BoardSortType::MostPosts: return "MostPosts";
-      case BoardSortType::MostSubscribers: return "MostSubscribers";
-      case BoardSortType::New: return "New";
-      case BoardSortType::Old: return "Old";
-    }
-  }
-
-  static inline auto parse_board_sort_type(std::string_view str) -> BoardSortType {
-    if (str.empty() || str == "MostSubscribers") return BoardSortType::MostSubscribers;
-    if (str == "NewPosts") return BoardSortType::NewPosts;
-    if (str == "MostPosts") return BoardSortType::MostPosts;
-    if (str == "MostSubscribers") return BoardSortType::MostSubscribers;
-    if (str == "New") return BoardSortType::New;
-    if (str == "Old") return BoardSortType::Old;
-    throw ApiError("Bad board sort type", 400);
-  }
-
-  constexpr auto to_string(HomePageType type) -> std::string_view {
-    switch (type) {
-      case HomePageType::All: return "All";
-      case HomePageType::Local: return "Local";
-      case HomePageType::Subscribed: return "Subscribed";
-      case HomePageType::BoardList: return "BoardList";
-      case HomePageType::SingleBoard: return "SingleBoard";
-    }
-  }
-
-  static inline auto parse_home_page_type(std::string_view str) -> HomePageType {
-    if (str == "All") return HomePageType::All;
-    if (str == "Local") return HomePageType::Local;
-    if (str == "Subscribed") return HomePageType::Subscribed;
-    if (str == "BoardList") return HomePageType::BoardList;
-    if (str == "SingleBoard") return HomePageType::SingleBoard;
-    throw ApiError("Bad home page type", 400);
-  }
-
-  enum class SubscribedType : uint8_t {
-    NotSubscribed,
-    Subscribed,
-    Pending
-  };
-
-  constexpr auto to_string(SubscribedType type) -> std::string_view {
-    switch (type) {
-      case SubscribedType::NotSubscribed: return "NotSubscribed";
-      case SubscribedType::Subscribed: return "Subscribed";
-      case SubscribedType::Pending: return "Pending";
-    }
-  }
-
-  static inline auto parse_subscribed_type(std::string_view str) -> SubscribedType {
-    if (str == "NotSubscribed") return SubscribedType::NotSubscribed;
-    if (str == "Subscribed") return SubscribedType::Subscribed;
-    if (str == "Pending") return SubscribedType::Pending;
-    throw ApiError("Bad SubscribedType", 400);
-  }
+  DEF_TO_STRING_AND_PARSE(HomePageType, home_page_type, X_HOME_PAGE_TYPE)
+  DEF_TO_STRING_AND_PARSE(SubscribedType, subscribed_type, X_SUBSCRIBED_TYPE)
 
   namespace Lemmy {
     enum class ListingType : uint8_t {
@@ -163,22 +73,8 @@ namespace Ludwig {
       ModeratorView
     };
 
-    constexpr auto to_string(ListingType type) -> std::string_view {
-      switch (type) {
-        case ListingType::All: return "All";
-        case ListingType::Local: return "Local";
-        case ListingType::Subscribed: return "Subscribed";
-        case ListingType::ModeratorView: return "ModeratorView";
-      }
-    }
-
-    static inline auto parse_listing_type(std::string_view str) -> ListingType {
-      if (str == "All") return ListingType::All;
-      if (str == "Local") return ListingType::Local;
-      if (str == "Subscribed") return ListingType::Subscribed;
-      if (str == "ModeratorView") return ListingType::ModeratorView;
-      throw ApiError("Bad ListingType", 400);
-    }
+#   define X_LEMMY_LISTING_TYPE(X) X(All, "All") X(Local, "Local") X(Subscribed, "Subscribed") X(ModeratorView, "Moderator View")
+    DEF_TO_STRING_AND_PARSE(ListingType, listing_type, X_LEMMY_LISTING_TYPE)
 
     enum class RegistrationMode : uint8_t {
       Closed,
@@ -186,20 +82,8 @@ namespace Ludwig {
       Open
     };
 
-    constexpr auto to_string(RegistrationMode type) -> std::string_view {
-      switch (type) {
-        case RegistrationMode::Closed: return "Closed";
-        case RegistrationMode::RequireApplication: return "RequireApplication";
-        case RegistrationMode::Open: return "Open";
-      }
-    }
-
-    static inline auto parse_registration_mode(std::string_view str) -> RegistrationMode {
-      if (str == "Closed") return RegistrationMode::Closed;
-      if (str == "RequireApplication") return RegistrationMode::RequireApplication;
-      if (str == "Open") return RegistrationMode::Open;
-      throw ApiError("Bad RegistrationMode", 400);
-    }
+#   define X_LEMMY_REGISTRATION_MODE(X) X(Closed, "Closed") X(RequireApplication, "Application Required") X(Open, "Open")
+    DEF_TO_STRING_AND_PARSE(RegistrationMode, registration_mode, X_LEMMY_REGISTRATION_MODE)
 
     enum class SearchType : uint8_t {
       All,
@@ -210,25 +94,12 @@ namespace Ludwig {
       Url
     };
 
-    constexpr auto to_string(SearchType type) -> std::string_view {
-      switch (type) {
-        case SearchType::All: return "All";
-        case SearchType::Comments: return "Comments";
-        case SearchType::Posts: return "Posts";
-        case SearchType::Communities: return "Communities";
-        case SearchType::Users: return "Users";
-        case SearchType::Url: return "Url";
-      }
-    }
-
-    static inline auto parse_search_type(std::string_view str) -> SearchType {
-      if (str == "All") return SearchType::All;
-      if (str == "Comments") return SearchType::Comments;
-      if (str == "Posts") return SearchType::Posts;
-      if (str == "Communities") return SearchType::Communities;
-      if (str == "Users") return SearchType::Users;
-      if (str == "Url") return SearchType::Url;
-      throw ApiError("Bad SearchType", 400);
-    }
+#   define X_LEMMY_SEARCH_TYPE(X) X(All, "All") X(Comments, "Comments") X(Posts, "Posts") X(Communities, "Boards") X(Users, "Users") X(Url, "URL")
+    DEF_TO_STRING_AND_PARSE(SearchType, search_type, X_LEMMY_SEARCH_TYPE)
   }
+
+# undef PARSE_CASE
+# undef TO_STRING_CASE
+# undef DEF_TO_STRING_AND_PARSE
+# undef DEF_TO_STRING_AND_PARSE_WITH_LOGIN
 }

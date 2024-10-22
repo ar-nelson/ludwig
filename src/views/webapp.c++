@@ -20,8 +20,9 @@
 #include <xxhash.h>
 
 using std::make_shared, std::match_results, std::monostate, std::nullopt, std::optional,
-    std::regex, std::regex_search, std::shared_ptr, std::stoull, std::string,
-    std::string_view, std::thread, std::variant, std::visit, fmt::format, fmt::format_to,
+    std::pair, std::regex, std::regex_search, std::shared_ptr, std::stoull, std::string,
+    std::string_view, std::thread, std::tuple, std::variant, std::vector, std::visit,
+    fmt::format, fmt::format_to,
     fmt::operator""_cf; // NOLINT
 
 using namespace std::placeholders;
@@ -228,7 +229,7 @@ namespace Ludwig {
         return chrono::duration_cast<chrono::microseconds>(end - start).count();
       }
 
-      auto get_auth_cookie(Request req, const std::string& ip) -> std::pair<optional<LoginResponse>, optional<string>> {
+      auto get_auth_cookie(Request req, const string& ip) -> pair<optional<LoginResponse>, optional<string>> {
         const auto cookies = req->getHeader("cookie");
         match_results<string_view::const_iterator> match;
         if (!regex_search(cookies.begin(), cookies.end(), match, cookie_regex)) return {{}, {}};
@@ -412,10 +413,12 @@ namespace Ludwig {
           write_fmt(
             R"(</ul><ul>)"
             R"(<li id="topbar-user"><a href="/u/{}">{}</a> ({:d}))"
-            R"(<li><a href="/settings">Settings</a>{}<li><a href="/logout">Logout</a></ul></nav>)"_cf,
+            R"(<li><a href="/notifications">Notifications ({:d})</a><li><a href="/settings">Settings</a>)"
+            R"({}<li><a href="/logout">Logout</a></ul></nav>)"_cf,
             Escape(c.login->user().name()),
             display_name_as_html(c.login->user()),
             c.login->stats().thread_karma() + c.login->stats().comment_karma(),
+            c.login->local_user_stats().unread_notification_count(),
             InstanceController::can_change_site_settings(c.login) ? R"(<li><a href="/site_admin">Site admin</a>)" : ""
           );
         } else if (c.site->registration_enabled) {
@@ -522,7 +525,7 @@ namespace Ludwig {
           );
         } else {
           visit(overload{
-            [&](std::monostate) {
+            [&](monostate) {
               if (controller.can_create_board(login)) {
                 write(
                   R"(<section id="actions-section"><h2>Actions</h2>)"
@@ -554,7 +557,7 @@ namespace Ludwig {
         }
 
         visit(overload{
-          [&](std::monostate) {
+          [&](monostate) {
             write_fmt(R"(<section id="site-sidebar"><h2>{}</h2>)"_cf, Escape{site->name});
             if (site->banner_url) {
               write_fmt(
@@ -723,18 +726,6 @@ namespace Ludwig {
 #     define OPTION_HTML(ENUM, NAME) R"(<option value=")" #ENUM R"("{}>)" NAME
 #     define OPTION_SELECTED(ENUM, NAME) select(value, ENUM),
 
-#     define X_SORT_TYPE(X) \
-        X(Active, "Active") X(Hot, "Hot") X(New, "New") X(Old, "Old") \
-        X(MostComments, "Most Comments") X(NewComments, "New Comments") \
-        X(TopAll, "Top All") X(TopYear, "Top Year") X(TopSixMonths, "Top Six Months") X(TopThreeMonths, "Top Three Months") \
-        X(TopMonth, "Top Month") X(TopWeek, "Top Week") X(TopDay, "Top Day") \
-        X(TopTwelveHour, "Top Twelve Hour") X(TopSixHour, "Top Six Hour") X(TopHour, "Top Hour")
-
-#     define X_COMMENT_SORT_TYPE(X) X(Hot, "Hot") X(New, "New") X(Old, "Old") X(Top, "Top")
-#     define X_USER_POST_SORT_TYPE(X) X(New, "New") X(Old, "Old") X(Top, "Top")
-#     define X_USER_SORT_TYPE(X) X(New, "New") X(Old, "Old") X(MostPosts, "Most Posts") X(NewPosts, "New Posts")
-#     define X_BOARD_SORT_TYPE(X) X(New, "New") X(Old, "Old") X(MostPosts, "Most Posts") X(NewPosts, "New Posts") X(MostSubscribers, "Most Subscribers")
-
       DEF_SORT_SELECT(SortType, X_SORT_TYPE)
       DEF_SORT_SELECT(CommentSortType, X_COMMENT_SORT_TYPE)
       DEF_SORT_SELECT(UserPostSortType, X_USER_POST_SORT_TYPE)
@@ -864,7 +855,7 @@ namespace Ludwig {
       }
 
       static inline auto admin_submenu(ModState state) ->
-        std::tuple<SubmenuAction, string_view, SubmenuAction, string_view, SubmenuAction, string_view> {
+        tuple<SubmenuAction, string_view, SubmenuAction, string_view, SubmenuAction, string_view> {
         using enum ModState;
         using enum SubmenuAction;
         switch (state) {
@@ -937,8 +928,8 @@ namespace Ludwig {
         return write(R"(</select></label><button class="no-js" type="submit">Apply</button></form>)");
       }
 
-      template<class T> static auto mod_state_prefix_suffix(ModStateSubject s) noexcept -> std::pair<string_view, string_view>;
-      template<> static inline auto mod_state_prefix_suffix<ThreadDetail>(ModStateSubject s) noexcept -> std::pair<string_view, string_view> {
+      template<class T> static auto mod_state_prefix_suffix(ModStateSubject s) noexcept -> pair<string_view, string_view>;
+      template<> static inline auto mod_state_prefix_suffix<ThreadDetail>(ModStateSubject s) noexcept -> pair<string_view, string_view> {
         switch (s) {
           case ModStateSubject::Instance: return {"Instance ", ""};
           case ModStateSubject::Board: return {"Board ", ""};
@@ -950,7 +941,7 @@ namespace Ludwig {
           case ModStateSubject::CommentInBoard: return {"", " by Moderator"};
         }
       }
-      template<> static inline auto mod_state_prefix_suffix<CommentDetail>(ModStateSubject s) noexcept -> std::pair<string_view, string_view> {
+      template<> static inline auto mod_state_prefix_suffix<CommentDetail>(ModStateSubject s) noexcept -> pair<string_view, string_view> {
         switch (s) {
           case ModStateSubject::Instance: return {"Instance ", ""};
           case ModStateSubject::Board: return {"Board ", ""};
@@ -1173,7 +1164,7 @@ namespace Ludwig {
       }
 
       auto write_search_result_list(
-        std::vector<SearchResultDetail> list,
+        vector<SearchResultDetail> list,
         const SiteDetail* site,
         Login login,
         bool include_ol
@@ -1294,6 +1285,83 @@ namespace Ludwig {
           R"(<p class="tag tag-cw content-warning"><strong class="{}-warning-label">{}{}<span class="a11y">:</span></strong> {}</p>)"_cf,
           is_mod ? "mod" : "content", prefix, label, Escape{content}
         );
+      }
+
+      auto write_notification(const NotificationDetail& detail, const LocalUserDetail& login) noexcept -> ResponseWriter& {
+        using enum NotificationType;
+        const auto& notification = detail.notification.get();
+        write_fmt(
+          R"(<li class="notification{}" id="notification-{:x}"><div class="notification-body">)"_cf,
+          notification.read_at() ? "" : " unread-notification",
+          detail.id
+        );
+        try {
+          switch (notification.type()) {
+            case MentionInThread: {
+              const auto& thread = std::get<ThreadDetail>(detail.subject);
+              write_user_link(thread.author(), false, login, thread.thread().board());
+              write_fmt(
+                R"( mentioned you in <strong><a href="/thread/{:x}">{}</a></strong></div>)"
+                R"(<div class="notification-summary">{}</div>)"_cf,
+                thread.id,
+                rich_text_to_html_emojis_only(thread.thread().title_type(), thread.thread().title()),
+                rich_text_to_html(thread.thread().content_text_type(), thread.thread().content_text())
+              );
+              break;
+            }
+            case MentionInComment: {
+              const auto& comment = std::get<CommentDetail>(detail.subject);
+              write_user_link(comment.author(), false, login, comment.thread().board());
+              write_fmt(
+                R"( mentioned you in <a href="/comment/{:x}">a reply</a> to <strong><a href="/thread/{:x}">{}</a></strong></div>)"
+                R"(<div class="notification-summary">{}</div>)"_cf,
+                comment.id,
+                comment.comment().thread(),
+                rich_text_to_html_emojis_only(comment.thread().title_type(), comment.thread().title()),
+                rich_text_to_html(comment.comment().content_type(), comment.comment().content())
+              );
+              break;
+            }
+            case ReplyToThread: {
+              const auto& comment = std::get<CommentDetail>(detail.subject);
+              write_user_link(comment.author(), false, login, comment.thread().board());
+              write_fmt(
+                R"( posted <a href="/comment/{:x}">a comment</a> on your thread <strong><a href="/thread/{:x}">{}</a></strong></div>)"
+                R"(<div class="notification-summary">{}</div>)"_cf,
+                comment.id,
+                comment.comment().thread(),
+                rich_text_to_html_emojis_only(comment.thread().title_type(), comment.thread().title()),
+                rich_text_to_html(comment.comment().content_type(), comment.comment().content())
+              );
+              break;
+            }
+            case ReplyToComment: {
+              const auto& comment = std::get<CommentDetail>(detail.subject);
+              write_user_link(comment.author(), false, login, comment.thread().board());
+              write_fmt(
+                R"( posted <a href="/comment/{:x}">a comment</a> on your thread <strong><a href="/thread/{:x}">{}</a></strong></div>)"
+                R"(<div class="notification-summary">{}</div>)"_cf,
+                comment.id,
+                comment.comment().thread(),
+                rich_text_to_html_emojis_only(comment.thread().title_type(), comment.thread().title()),
+                rich_text_to_html(comment.comment().content_type(), comment.comment().content())
+              );
+              break;
+            }
+            default:
+              write("This notification type is not yet implemented.</div>");
+          }
+        } catch (...) {
+          write("Error displaying notification.</div>");
+        }
+        if (!notification.read_at()) {
+          return write_fmt(
+            R"(<form class="notification-buttons" action="/notifications/{0:x}/read" method="post" hx-post="/notifications/{0:x}/read" hx-target="notification-{0:x}">)"
+            R"(<button type="submit">Mark as read</button></form></li>)"_cf,
+            detail.id
+          );
+        }
+        return write("</li>");
       }
 
       template <class T> auto write_reply_form(const T& parent) noexcept -> ResponseWriter& {
@@ -2223,6 +2291,35 @@ namespace Ludwig {
         if (!c.is_htmx) r.write("</main></div>").write_html_footer(c);
         r.finish();
       });
+      r.get("/notifications", [self](auto* rsp, auto* req, Context& c) {
+        auto txn = self->controller->open_read_txn();
+        const auto& login = c.require_login(txn);
+        auto r = self->writer(rsp);
+        if (c.is_htmx) {
+          rsp->writeHeader("Content-Type", TYPE_HTML);
+        } else {
+          r.write_html_header(c, {
+            .canonical_path = "/notifications",
+            .banner_link = "/notifications",
+            .banner_title = "Notifications",
+          }).write(
+            R"(<div><form action="/notifications/all_read" method="post" hx-action="/notifications/all_read" hx-target="#top-level-list">)"
+            R"(<button type="submit">Mark all as read</button></form><main>)"
+          );
+        }
+        r.write(R"(<ol class="notification-list" id="top-level-list">)");
+        const auto from = req->getQuery("from");
+        PageCursor cursor(from);
+        bool any_entries = false;
+        for (const auto& n : self->controller->list_notifications(txn, cursor, login)) {
+          r.write_notification(n, login);
+          any_entries = true;
+        }
+        if (!c.is_htmx && !any_entries) r.write(R"(<li class="no-entries">There's nothing here.)");
+        r.write("</ol>").write_pagination("/notifications", from.empty(), cursor);
+        if (!c.is_htmx) r.write("</main></div>").write_html_footer(c);
+        r.finish();
+      });
       r.get("/c/:name", [self](auto* rsp, auto* req, Context& c) {
         // Compatibility alias for Lemmy community URLs
         // Needed because some Lemmy apps expect URLs in exactly this format
@@ -2761,7 +2858,7 @@ namespace Ludwig {
       r.post_form("/thread/:id/action", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         const auto [id, referer] = co_await _c.with_request([](Request req) {
-          return std::pair(hex_id_param(req, 0), string(req->getHeader("referer")));
+          return pair(hex_id_param(req, 0), string(req->getHeader("referer")));
         });
         auto user = c.require_login();
         auto form = co_await body;
@@ -2788,7 +2885,7 @@ namespace Ludwig {
       r.post_form("/comment/:id/action", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         const auto [id, referer] = co_await _c.with_request([](Request req) {
-          return std::pair(hex_id_param(req, 0), string(req->getHeader("referer")));
+          return pair(hex_id_param(req, 0), string(req->getHeader("referer")));
         });
         auto user = c.require_login();
         auto form = co_await body;
@@ -2815,7 +2912,7 @@ namespace Ludwig {
       r.post_form("/thread/:id/vote", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         const auto [post_id, referer] = co_await _c.with_request([](Request req) {
-          return std::pair(hex_id_param(req, 0), string(req->getHeader("referer")));
+          return pair(hex_id_param(req, 0), string(req->getHeader("referer")));
         });
         auto user = c.require_login();
         auto form = co_await body;
@@ -2834,7 +2931,7 @@ namespace Ludwig {
       r.post_form("/comment/:id/vote", [self](auto* rsp, auto _c, auto body) -> Coro {
         auto& c = co_await _c;
         const auto [post_id, referer] = co_await _c.with_request([](Request req) {
-          return std::pair(hex_id_param(req, 0), string(req->getHeader("referer")));
+          return pair(hex_id_param(req, 0), string(req->getHeader("referer")));
         });
         auto user = c.require_login();
         auto form = co_await body;
@@ -2854,7 +2951,7 @@ namespace Ludwig {
         auto& c = co_await _c;
         const auto [name, board_id, referer] = co_await _c.with_request([&](Request req) {
           auto txn = self->controller->open_read_txn();
-          return std::tuple(string(req->getParameter(0)), board_name_param(txn, req, 0), string(req->getHeader("referer")));
+          return tuple(string(req->getParameter(0)), board_name_param(txn, req, 0), string(req->getHeader("referer")));
         });
         auto user = c.require_login();
         auto form = co_await body;
@@ -2862,6 +2959,42 @@ namespace Ludwig {
         if (c.is_htmx) {
           rsp->writeHeader("Content-Type", TYPE_HTML);
           self->writer(rsp).write_subscribe_button(name, !form.optional_bool("unsubscribe")).finish();
+        } else {
+          write_redirect_back(rsp, referer);
+        }
+      });
+      r.post("/notifications/:id/read", [self](auto* rsp, auto _c, auto body) -> Coro {
+        auto& c = co_await _c;
+        const auto [id, referer] = co_await _c.with_request([](Request req) {
+          return pair(hex_id_param(req, 0), string(req->getHeader("referer")));
+        });
+        const auto user = c.require_login();
+        self->controller->mark_notification_read(WRITE_TXN, user, id);
+        if (c.is_htmx) {
+          auto txn = self->controller->open_read_txn();
+          c.populate(txn);
+          rsp->writeHeader("Content-Type", TYPE_HTML);
+          PageCursor cur;
+          self->writer(rsp).write_notification(NotificationDetail::get(txn, id, *c.login), *c.login).finish();
+        } else {
+          write_redirect_back(rsp, referer);
+        }
+      });
+      r.post("/notifications/all_read", [self](auto* rsp, auto _c, auto body) -> Coro {
+        auto& c = co_await _c;
+        const auto referer = co_await _c.with_request([](Request req) { return string(req->getHeader("referer")); });
+        const auto user = c.require_login();
+        self->controller->mark_all_notifications_read(WRITE_TXN, user);
+        if (c.is_htmx) {
+          auto txn = self->controller->open_read_txn();
+          c.populate(txn);
+          rsp->writeHeader("Content-Type", TYPE_HTML);
+          auto r = self->writer(rsp);
+          PageCursor cursor;
+          for (const auto& n : self->controller->list_notifications(txn, cursor, *c.login)) {
+            r.write_notification(n, *c.login);
+          }
+          r.finish();
         } else {
           write_redirect_back(rsp, referer);
         }
@@ -2970,7 +3103,7 @@ namespace Ludwig {
           if (req->getParameter(0) == "approve") is_approve = true;
           else if (req->getParameter(0) == "reject") is_approve = false;
           else die(404, "Page not found");
-          return std::pair(is_approve, hex_id_param(req, 1));
+          return pair(is_approve, hex_id_param(req, 1));
         });
         auto& c = co_await _c;
         require_admin(self, c);

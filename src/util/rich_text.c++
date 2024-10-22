@@ -25,7 +25,7 @@ namespace Ludwig {
     html_regex(R"(<[^>]*>|[&](\w+);)"); // beware of zalgo
 
 
-  static phmap::flat_hash_map<std::string_view, std::string_view> shortcode_to_emoji;
+  static phmap::flat_hash_map<string_view, string_view> shortcode_to_emoji;
 
   static_block {
     const auto emoji_table = flatbuffers::GetRoot<EmojiTable>(emoji_table_fb);
@@ -315,8 +315,8 @@ namespace Ludwig {
   }
 
   auto plain_text_with_emojis_to_rich_text(
-    flatbuffers::FlatBufferBuilder& fbb,
-    std::string_view text
+    FlatBufferBuilder& fbb,
+    string_view text
   ) noexcept -> RichTextVectors {
     vector<RichText> types;
     vector<Offset<void>> chunks;
@@ -349,10 +349,10 @@ namespace Ludwig {
   }
 
   auto rich_text_to_html(
-    const flatbuffers::Vector<RichText>* types,
-    const flatbuffers::Vector<flatbuffers::Offset<void>>* values,
+    const Vector<RichText>* types,
+    const Vector<Offset<void>>* values,
     const ToHtmlOptions& opts
-  ) noexcept -> std::string {
+  ) noexcept -> string {
     if (!types || !values) return "";
     string out;
     for (unsigned i = 0; i < min(types->size(), values->size()); i++) {

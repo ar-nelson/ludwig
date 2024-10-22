@@ -217,7 +217,7 @@ namespace Ludwig {
       std::optional<uint64_t> invite
     ) -> uint64_t;
     auto create_thread_internal(
-      WriteTxn& txn,
+      WriteTxn&& txn,
       uint64_t author,
       uint64_t board,
       std::optional<std::string_view> remote_post_url,
@@ -227,19 +227,21 @@ namespace Ludwig {
       std::string_view title,
       std::optional<std::string_view> submission_url,
       std::optional<std::string_view> text_content_markdown,
-      std::optional<std::string_view> content_warning = {}
+      std::optional<std::string_view> content_warning,
+      bool self_upvote
     ) -> uint64_t;
     auto create_comment_internal(
-      WriteTxn& txn,
+      WriteTxn&& txn,
       uint64_t author,
-      uint64_t parent,
-      uint64_t thread,
+      const ThreadDetail& parent_thread,
+      const std::optional<CommentDetail>& parent_comment,
       std::optional<std::string_view> remote_post_url,
       std::optional<std::string_view> remote_activity_url,
       Timestamp created_at,
       std::optional<Timestamp> updated_at,
       std::string_view text_content_markdown,
-      std::optional<std::string_view> content_warning = {}
+      std::optional<std::string_view> content_warning,
+      bool self_upvote
     ) -> uint64_t;
     auto fetch_card(const ThreadDetail& thread) -> void {
       if (thread.should_fetch_card()) event_bus->dispatch(Event::ThreadFetchLinkCard, thread.id);
@@ -399,6 +401,12 @@ namespace Ludwig {
       Login login = {},
       uint16_t limit = ITEMS_PER_PAGE
     ) -> std::generator<const CommentDetail&>;
+    auto list_notifications(
+      ReadTxn& txn,
+      PageCursor& from,
+      const LocalUserDetail& login,
+      uint16_t limit = ITEMS_PER_PAGE
+    ) -> std::generator<const NotificationDetail&>;
     template <IsRequestContext Ctx>
     auto search(const Ctx& ctx, SearchQuery query, Login login) -> RouterAwaiter<std::vector<SearchResultDetail>, Ctx>;
     auto first_run_setup_options(ReadTxn& txn) -> FirstRunSetupOptions;
@@ -563,6 +571,9 @@ namespace Ludwig {
       uint64_t board_id,
       bool hidden = true
     ) -> void;
+
+    auto mark_notification_read(WriteTxn txn, uint64_t user_id, uint64_t notification_id) -> void;
+    auto mark_all_notifications_read(WriteTxn txn, uint64_t user_id) -> void;
 
     friend class SearchHandler;
   };

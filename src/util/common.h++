@@ -56,6 +56,12 @@ namespace Ludwig {
     return timestamp_to_uint(now_t());
   }
 
+  static inline auto random_uint64() -> uint64_t {
+    uint64_t n;
+    RAND_pseudo_bytes((uint8_t*)&n, sizeof(uint64_t));
+    return n;
+  }
+
   struct SecretString {
     std::string data;
     SecretString(std::string&& from) { std::swap(data, from); }

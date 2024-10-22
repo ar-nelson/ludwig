@@ -128,6 +128,37 @@ table LocalUser {
   default_comment_sort_type: CommentSortType = Hot;
 }
 
+table LocalUserStats {
+  unread_reply_count: uint32 = 0;
+  unread_mention_count: uint32 = 0;
+  unread_dm_count: uint32 = 0;
+  unread_notification_count: uint32 = 0;
+}
+
+enum NotificationType : ubyte {
+  ReplyToThread,
+  ReplyToComment,
+  MentionInThread,
+  MentionInComment,
+  BoostThread,
+  BoostComment,
+  Follow,
+  ApproveSubscription,
+  BecomeMod,
+  FollowedUserRemoved,
+  FollowedUserDefererated,
+  SubscribedBoardRemoved,
+  SubscribedBoardDefederated
+}
+
+table Notification {
+  type: NotificationType;
+  user: uint64;
+  created_at: uint64;
+  read_at: uint64 = null;
+  subject: uint64 = null;
+}
+
 table Application {
   text: string (required);
   ip: string;
@@ -226,10 +257,24 @@ table Comment {
   content_raw: string;
   content: [RichText] (required);
   content_warning: string;
+  distinguished: bool = false;
   mod_state: ModState = Normal;
   mod_reason: string;
   board_mod_state: ModState = Normal;
   board_mod_reason: string;
+}
+
+table DirectMessage {
+  author: uint64;
+  recipient: uint64;
+  created_at: uint64;
+  updated_at: uint64 = null;
+  read_at: uint64 = null;
+  deleted_at: uint64 = null;
+  original_post_url: string;
+  activity_url: string;
+  content_raw: string;
+  content: [RichText] (required);
 }
 
 table LinkCard {
@@ -327,6 +372,8 @@ enum DumpType : ubyte {
   LocalBoard,
   Thread,
   Comment,
+  Notification,
+  DirectMessage,
   Application,
   Invite,
   SettingRecord,

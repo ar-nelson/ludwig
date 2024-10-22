@@ -1,10 +1,14 @@
 #include "detail.h++"
+#include "db.h++"
 #include "util/web.h++"
+#include "util/rich_text.h++"
 #include <flatbuffers/flatbuffers.h>
 #include <static_block.hpp>
 
-using flatbuffers::FlatBufferBuilder, flatbuffers::Offset,
-    std::nullopt, std::optional, std::string, std::string_view, std::vector;
+using flatbuffers::FlatBufferBuilder, flatbuffers::Offset, std::monostate,
+    std::nullopt, std::optional, std::pair, std::reference_wrapper, std::string,
+    std::string_view, std::tuple, std::vector, std::visit,
+    fmt::operator""_cf; // NOLINT
 namespace chrono = std::chrono;
 using namespace std::literals;
 
@@ -21,6 +25,7 @@ namespace Ludwig {
     Offset<User> null_user, temp_admin_user;
     Offset<LocalUser> temp_admin_local_user;
     Offset<UserStats> temp_admin_stats;
+    Offset<LocalUserStats> temp_admin_local_stats;
 
     PlaceholderFlatbuffers() {
       fbb.ForceDefaults(true);
@@ -62,6 +67,10 @@ namespace Ludwig {
         UserStatsBuilder stats(fbb);
         temp_admin_stats = stats.Finish();
       }
+      {
+        LocalUserStatsBuilder stats(fbb);
+        temp_admin_local_stats = stats.Finish();
+      }
     }
   } placeholders;
 
@@ -75,6 +84,7 @@ namespace Ludwig {
   const auto LocalUserDetail::temp_admin_user = get_temporary_pointer(placeholders.fbb, placeholders.temp_admin_user);
   const auto LocalUserDetail::temp_admin_local_user = get_temporary_pointer(placeholders.fbb, placeholders.temp_admin_local_user);
   const auto LocalUserDetail::temp_admin_stats = get_temporary_pointer(placeholders.fbb, placeholders.temp_admin_stats);
+  const auto LocalUserDetail::temp_admin_local_stats = get_temporary_pointer(placeholders.fbb, placeholders.temp_admin_local_stats);
 
   auto ThreadDetail::can_view(Login login) const noexcept -> bool {
     if (mod_state().state >= ModState::Unapproved) {
@@ -276,8 +286,9 @@ namespace Ludwig {
 
   auto LocalUserDetail::get(ReadTxn& txn, uint64_t id, Login login) -> LocalUserDetail {
     const auto detail = UserDetail::get(txn, id, login);
-    if (!detail.maybe_local_user()) throw ApiError("Local user does not exist", 410);
-    return { std::move(detail) };
+    const auto stats = txn.get_local_user_stats(id);
+    if (!detail.maybe_local_user() || !stats) throw ApiError("Local user does not exist", 410);
+    return { std::move(detail), *stats };
   }
 
   auto LocalUserDetail::get_login(ReadTxn& txn, uint64_t id) -> LocalUserDetail {
@@ -414,6 +425,49 @@ namespace Ludwig {
       ._board = board,
       .path = path
     };
+  }
+
+  auto NotificationDetail::get(
+    ReadTxn& txn,
+    uint64_t notification_id,
+    const LocalUserDetail& login
+  ) -> NotificationDetail {
+    const auto notification = txn.get_notification(notification_id);
+    if (!notification || notification->get().user() != login.id) {
+      throw ApiError("Notification does not exist", 410);
+    }
+    NotificationDetail detail { .id = notification_id, .notification = *notification };
+    auto subject = notification->get().subject();
+    switch (notification->get().type()) {
+      case NotificationType::MentionInThread:
+      case NotificationType::BoostThread:
+        detail.subject = ThreadDetail::get(txn, subject.value(), login);
+        break;
+      case NotificationType::MentionInComment:
+      case NotificationType::ReplyToThread:
+      case NotificationType::ReplyToComment:
+      case NotificationType::BoostComment:
+        detail.subject = CommentDetail::get(txn, subject.value(), login);
+        break;
+      case NotificationType::ApproveSubscription:
+      case NotificationType::BecomeMod:
+      case NotificationType::SubscribedBoardRemoved:
+      case NotificationType::SubscribedBoardDefederated:
+        if (subject) {
+          if (auto board = txn.get_board(*subject)) {
+            detail.subject = *board;
+          }
+        }
+        break;
+      case NotificationType::Follow:
+      case NotificationType::FollowedUserRemoved:
+      case NotificationType::FollowedUserDefererated:
+        if (auto user = txn.get_user(subject.value())) {
+          detail.subject = *user;
+        }
+        break;
+    }
+    return detail;
   }
 
   auto ThreadDetail::mod_state(PostContext context) const noexcept -> ModStateDetail {

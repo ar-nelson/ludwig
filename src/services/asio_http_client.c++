@@ -38,8 +38,8 @@ namespace Ludwig {
   ) : io(io),
       ssl(ssl::context::sslv23),
       rate_limiter((double)req_per_5min / 300.0, req_per_5min),
-      safe_https(unsafe_https == SAFE_HTTPS),
-      safe_local_requests(unsafe_local_requests == SAFE_LOCAL_REQUESTS) {
+      safe_https(unsafe_https == UnsafeHttps::SAFE),
+      safe_local_requests(unsafe_local_requests == UnsafeLocalRequests::SAFE) {
     if (safe_https) {
       ssl.set_verify_mode(ssl::verify_peer | ssl::context::verify_fail_if_no_peer_cert);
       ssl.set_default_verify_paths();
@@ -60,11 +60,6 @@ namespace Ludwig {
 
   class AsioHttpClientResponse : public HttpClientResponse {
     static inline constexpr size_t MAX_RESPONSE_BYTES = 64 * MiB;
-    static inline auto random_uint64() -> uint64_t {
-      uint64_t n;
-      RAND_pseudo_bytes((uint8_t*)&n, sizeof(uint64_t));
-      return n;
-    }
     // This is random to ensure that servers cannot break this client by spoofing this header
     static const inline string response_header_key = fmt::format("x-{:016x}", random_uint64());
     uint16_t _status = 0;
