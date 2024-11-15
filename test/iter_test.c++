@@ -1,11 +1,11 @@
 #include "test_common.h++"
-#include "util/iter.h++"
+#include "db/iter.h++"
 
-static inline auto db_put(MDB_txn* txn, MDB_dbi dbi, string_view k, string_view v) -> void {
-  MDB_val kval { k.length(), const_cast<char*>(k.data()) };
-  MDB_val vval { v.length(), const_cast<char*>(v.data()) };
-  mdb_put(txn, dbi, &kval, &vval, 0);
-}
+//static inline auto db_put(MDB_txn* txn, MDB_dbi dbi, string_view k, string_view v) -> void {
+//  MDB_val kval { k.length(), const_cast<char*>(k.data()) };
+//  MDB_val vval { v.length(), const_cast<char*>(v.data()) };
+//  mdb_put(txn, dbi, &kval, &vval, 0);
+//}
 
 static inline auto db_put(MDB_txn* txn, MDB_dbi dbi, string_view k, uint64_t v) -> void {
   MDB_val kval { k.length(), const_cast<char*>(k.data()) };

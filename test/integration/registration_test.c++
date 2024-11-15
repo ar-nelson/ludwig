@@ -1,5 +1,4 @@
 #include "integration_common.h++"
-#include "models/detail.h++"
 
 SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") {
   FirstRunSetup setup {
@@ -12,7 +11,7 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
     setup.registration_enabled = true;
     setup.registration_application_required = false;
     setup.registration_invite_required = false;
-    instance->first_run_setup(db->open_write_txn_sync(), std::move(setup));
+    first_run->first_run_setup(db->open_write_txn_sync(), std::move(setup));
 
     WHEN("a user visits the home page") {
       auto rsp = http.get(base_url).dispatch_and_wait();
@@ -147,7 +146,7 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
     setup.registration_application_required = true;
     setup.application_question = "Who goes there?";
     setup.registration_invite_required = false;
-    instance->first_run_setup(db->open_write_txn_sync(), std::move(setup));
+    first_run->first_run_setup(db->open_write_txn_sync(), std::move(setup));
 
     WHEN("a user visits the Register page") {
       auto rsp = http.get(base_url + "/register").dispatch_and_wait();
@@ -236,10 +235,10 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
           AND_WHEN("the admin approves the application") {
             uint64_t id = 0;
             {
-              auto txn = instance->open_read_txn();
+              auto txn = db->open_read_txn();
               optional<uint64_t> cur;
               optional<LocalUserDetail> login;
-              for (auto p : instance->list_applications(txn, cur, login, 1)) {
+              for (auto p : sessions->list_applications(txn, cur, login)) {
                 id = p.second.id; 
               }
             }
@@ -281,7 +280,7 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
     setup.registration_application_required = false;
     setup.registration_invite_required = true;
     setup.invite_admin_only = true;
-    instance->first_run_setup(db->open_write_txn_sync(), std::move(setup));
+    first_run->first_run_setup(db->open_write_txn_sync(), std::move(setup));
 
     WHEN("a user visits the Register page") {
       auto rsp = http.get(base_url + "/register").dispatch_and_wait();
@@ -390,17 +389,21 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
     setup.registration_application_required = false;
     setup.registration_invite_required = true;
     setup.invite_admin_only = false;
-    instance->first_run_setup(db->open_write_txn_sync(), std::move(setup));
-    instance->create_local_user(
-      db->open_write_txn_sync(), 
-      "inviter",
-      "inviter@foo.test",
-      "mypassword",
-      false,
-      {},
-      IsApproved::Yes,
-      IsAdmin::No
-    );
+    {
+      first_run->first_run_setup(db->open_write_txn_sync(), std::move(setup));
+      auto txn = db->open_write_txn_sync();
+      users->create_local_user(
+        txn,
+        "inviter",
+        "inviter@foo.test",
+        "mypassword",
+        false,
+        {},
+        IsApproved::Yes,
+        IsAdmin::No
+      );
+      txn.commit();
+    }
 
     WHEN("a user visits the Register page") {
       auto rsp = http.get(base_url + "/register").dispatch_and_wait();
@@ -508,7 +511,7 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
     setup.registration_enabled = false;
     setup.registration_application_required = false;
     setup.registration_invite_required = false;
-    instance->first_run_setup(db->open_write_txn_sync(), std::move(setup));
+    first_run->first_run_setup(db->open_write_txn_sync(), std::move(setup));
 
     WHEN("a user visits the home page") {
       auto rsp = http.get(base_url).dispatch_and_wait();

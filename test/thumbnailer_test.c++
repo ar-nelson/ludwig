@@ -1,12 +1,12 @@
 #include "test_common.h++"
-#include "util/thumbnailer.h++"
+#include "services/thumbnail_cache.h++"
 
 using namespace Ludwig;
 
 static inline void thumbnail(std::string extension, bool should_pass = true) {
   auto src = load_file(test_root() / "images" / ("test." + extension));
   REQUIRE(!src.empty());
-  auto thumbnail = generate_thumbnail("image/" + extension, src, 256);
+  auto thumbnail = ThumbnailCache::generate_thumbnail("image/" + extension, src, 256);
   REQUIRE(!!thumbnail == should_pass);
   if (should_pass) {
     std::ofstream output(test_root() / "images" / ("thumbnail_" + extension + ".webp"));

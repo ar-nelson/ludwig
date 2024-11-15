@@ -158,10 +158,12 @@ SCENARIO_METHOD(IntegrationTest, "first-run setup", "[integration][first_run]") 
   }
 
   GIVEN("an unconfigured database with some existing users") {
+    auto txn = db->open_write_txn_sync();
     const auto admin_id =
-      instance->create_local_user(db->open_write_txn_sync(), "myadmin", "myadmin@myserver.test", "myadminpassword", false);
-    instance->create_local_user(db->open_write_txn_sync(), "myuser", "myuser@myserver.test", "myuserpassword", false);
-    instance->update_local_user(db->open_write_txn_sync(), admin_id, nullopt, { .admin = IsAdmin::Yes });
+      users->create_local_user(txn, "myadmin", "myadmin@myserver.test", "myadminpassword", false);
+    users->create_local_user(txn, "myuser", "myuser@myserver.test", "myuserpassword", false);
+    users->update_local_user(txn, admin_id, nullopt, { .admin = IsAdmin::Yes });
+    txn.commit();
 
     WHEN("user visits the home page") {
       auto rsp = http.get(base_url).dispatch_and_wait();

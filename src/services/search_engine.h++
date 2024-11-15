@@ -1,6 +1,6 @@
 #pragma once
 #include "util/common.h++"
-#include "models/db.h++"
+#include "fbs/records.h++"
 
 namespace Ludwig {
   enum class SearchResultType : uint8_t {

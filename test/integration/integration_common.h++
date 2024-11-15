@@ -3,13 +3,20 @@
 #include "util/rich_text.h++"
 #include "services/asio_http_client.h++"
 #include "services/asio_event_bus.h++"
-#include "services/db.h++"
-#include "controllers/instance.h++"
-#include "controllers/remote_media.h++"
-#include "controllers/lemmy_api.h++"
-#include "views/webapp.h++"
-#include "views/media.h++"
-#include "views/lemmy_api.h++"
+#include "db/db.h++"
+#include "controllers/board_controller.h++"
+#include "controllers/dump_controller.h++"
+#include "controllers/first_run_controller.h++"
+#include "controllers/lemmy_api_controller.h++"
+#include "controllers/post_controller.h++"
+#include "controllers/remote_media_controller.h++"
+#include "controllers/search_controller.h++"
+#include "controllers/session_controller.h++"
+#include "controllers/site_controller.h++"
+#include "controllers/user_controller.h++"
+#include "views/webapp/routes.h++"
+#include "views/media_routes.h++"
+#include "views/lemmy_api_routes.h++"
 
 using std::promise, std::unique_ptr;
 
@@ -22,41 +29,60 @@ class IntegrationTest {
   shared_ptr<LibXmlContext> xml;
 
 public:
-  static constexpr inline string_view first_run_admin_password = "first-run";
+  static constexpr inline char first_run_admin_password[] = "first-run";
   string base_url;
   AsioHttpClient http;
   shared_ptr<MockHttpClient> outer_http;
   shared_ptr<DB> db;
-  shared_ptr<InstanceController> instance;
+  shared_ptr<SiteController> site;
+  shared_ptr<UserController> users;
+  shared_ptr<SessionController> sessions;
+  shared_ptr<BoardController> boards;
+  shared_ptr<PostController> posts;
+  shared_ptr<SearchController> search;
+  shared_ptr<FirstRunController> first_run;
   IntegrationTest() :
     pool(1),
     xml(make_shared<LibXmlContext>()),
     http(pool.io, 100000, UnsafeHttps::UNSAFE, UnsafeLocalRequests::UNSAFE),
     outer_http(make_shared<MockHttpClient>())
   {
-    pair<Hash, Salt> first_run_hash;
-    RAND_pseudo_bytes(const_cast<uint8_t*>(first_run_hash.second.bytes()->Data()), first_run_hash.second.bytes()->size());
-    InstanceController::hash_password(
-      string(first_run_admin_password),
-      first_run_hash.second.bytes()->Data(),
-      const_cast<uint8_t*>(first_run_hash.first.bytes()->Data())
-    );
     db = make_shared<DB>(dbfile.name, 100, true);
     auto rate_limiter = make_shared<KeyedRateLimiter>(10, 3000);
     auto event_bus = make_shared<AsioEventBus>(pool.io);
-    instance = make_shared<InstanceController>(db, outer_http, event_bus, nullopt, first_run_hash);
-    auto api_c = make_shared<Lemmy::ApiController>(instance);
+    auto xml_ctx = make_shared<LibXmlContext>();
+    site = make_shared<SiteController>(db, event_bus);
+    boards = make_shared<BoardController>(site, event_bus);
+    users = make_shared<UserController>(site, event_bus);
+    posts = make_shared<PostController>(site, event_bus);
+    search = make_shared<SearchController>(db, nullptr, event_bus);
+    sessions = make_shared<SessionController>(db, site, users, SecretString(first_run_admin_password));
+    first_run = make_shared<FirstRunController>(users, boards, site);
+    auto dump_c = make_shared<DumpController>();
+    auto api_c = make_shared<Lemmy::ApiController>(site, users, sessions, boards, posts, search, first_run);
     auto remote_media_c = make_shared<RemoteMediaController>(
-      pool.io, db, outer_http, xml, event_bus,
+      pool.io, db, outer_http, xml_ctx, event_bus,
       [&](auto f) { pool.post(std::move(f)); }
     );
     promise<uint16_t> port_promise;
     auto port_future = port_promise.get_future();
     std::thread server_thread([&]{
       uWS::App app;
-      media_routes(app, remote_media_c);
-      webapp_routes(app, instance, rate_limiter);
-      Lemmy::api_routes(app, api_c, rate_limiter);
+      define_media_routes(app, remote_media_c);
+      define_webapp_routes(
+        app,
+        db,
+        site,
+        sessions,
+        posts,
+        boards,
+        users,
+        search,
+        first_run,
+        dump_c,
+        rate_limiter
+      );
+      Lemmy::define_api_routes(app, db, api_c, rate_limiter);
       app.listen(0, [&](auto *listen_socket) {
         if (listen_socket) {
           int port = us_socket_local_port(false, (us_socket_t*)listen_socket);

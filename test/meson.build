@@ -1,7 +1,7 @@
 test_sources = [
   'asio_http_client_test.c++',
   'db_test.c++',
-  'instance_test.c++',
+  'users_and_sessions_test.c++',
   'iter_test.c++',
   'jwt_test.c++',
   'remote_media_test.c++',
@@ -24,15 +24,16 @@ if not get_option('buildtype').startswith('release')
     test_sources,
     dependencies: [libs, catch2_dep],
     include_directories: inc_dir,
-    cpp_args: ['-DLUDWIG_TEST_ROOT="' + meson.current_source_dir() + '"'],
+    cpp_args: ['-DLUDWIG_TEST_ROOT="' + meson.current_source_dir() + '"']
   )
 
-  test('http_client', test_exe, args: ['[http_client]'])
+  test('http_client', test_exe, args: '[http_client]')
   test('db', test_exe, args: '[db]', timeout: 60)
-  test('instance', test_exe, args: '[instance]')
   test('iter', test_exe, args: '[iter]')
   test('jwt', test_exe, args: '[jwt]')
-  test('remote_media', test_exe, args: '[remote_media]')
+  test('remote_media_controller', test_exe, args: '[remote_media_controller]')
+  test('user_controller', test_exe, args: '[user_controller]')
+  test('session_controller', test_exe, args: '[session_controller]')
   test('rich_text', test_exe, args: '[rich_text]')
   test('thumbnailer', test_exe, args: '[thumbnailer]')
   test('first_run', test_exe, args: '[first_run]', timeout: 120)

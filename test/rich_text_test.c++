@@ -1,6 +1,7 @@
 #include "test_common.h++"
 #include "util/common.h++"
 #include "util/rich_text.h++"
+#include "views/webapp/html/html_rich_text.h++"
 
 using std::string_view, flatbuffers::FlatBufferBuilder, flatbuffers::Vector,
     flatbuffers::Offset;

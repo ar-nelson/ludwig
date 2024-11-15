@@ -1,5 +1,5 @@
 #include "test_common.h++"
-#include "services/db.h++"
+#include "db/db.h++"
 #include "util/rich_text.h++"
 #include <algorithm>
 #include <random>

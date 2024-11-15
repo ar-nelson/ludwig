@@ -196,5 +196,5 @@ executable(
   fbs_gen,
   static_gen,
   dependencies: libs,
-  include_directories: inc_dir,
+  include_directories: inc_dir
 )

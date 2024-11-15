@@ -1,7 +1,7 @@
 #pragma once
-#include "db.h++"
-#include "models/detail.h++"
-#include "util/web.h++"
+#include "fbs/records.h++"
+#include "models/enums_pre.h++"
+#include "models/local_user.h++"
 
 namespace Ludwig {
 
@@ -23,13 +23,32 @@ namespace Ludwig {
     X(BoardList, "Board List - Display a curated list of boards, like a classic forum") \
     X(SingleBoard, "Single Board - The site has only one board, which is always the homepage")
 
-enum class SubscribedType : uint8_t {
-  NotSubscribed,
-  Subscribed,
-  Pending
-};
+  enum class SubscribedType : uint8_t {
+    NotSubscribed,
+    Subscribed,
+    Pending
+  };
 
 # define X_SUBSCRIBED_TYPE(X) X(Subscribed, "Subscribed") X(NotSubscribed, "Not Subscribed") X(Pending, "Pending")
+
+  enum class PostContext : uint8_t {
+    Feed,
+    User,
+    Board,
+    View,
+    Reply
+  };
+
+  enum class ContentWarningSubject : uint8_t {
+    Board,
+    Thread,
+    Comment
+  };
+
+  struct ContentWarningDetail {
+    ContentWarningSubject subject = ContentWarningSubject::Board;
+    std::string_view content_warning = "NSFW";
+  };
 
 # define DEF_TO_STRING_AND_PARSE_WITH_LOGIN(T, LOWERCASE_NAME, APPLY_TO_ENUM, DEFAULT) \
   constexpr auto to_string(T sort) -> std::string_view { \

@@ -1,6 +1,6 @@
 #include "test_common.h++"
-#include "services/db.h++"
-#include "controllers/remote_media.h++"
+#include "db/db.h++"
+#include "controllers/remote_media_controller.h++"
 #include <future>
 #include <thread>
 
@@ -9,7 +9,7 @@ using flatbuffers::FlatBufferBuilder;
 static const auto xml_ctx = make_shared<LibXmlContext>();
 static const string WIKI_URL = "https://wikipedia.test/Red_Panda";
 
-TEST_CASE("fetch Wikipedia link card", "[remote_media]") {
+TEST_CASE("fetch Wikipedia link card", "[remote_media_controller]") {
   TempFile db_file;
   auto db = make_shared<DB>(db_file.name);
   auto io = std::make_shared<asio::io_context>();

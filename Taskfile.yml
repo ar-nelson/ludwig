@@ -75,7 +75,7 @@ tasks:
     deps:
       - build
     cmds:
-      - ./build/ludwig --log-level debug
+      - ./build/ludwig
   run-release:
     desc: ▶️ Run the release build of Ludwig, with default settings
     deps:

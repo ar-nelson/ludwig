@@ -23,38 +23,42 @@ static void expect_thread_numbers(const unique_ptr<const HttpClientResponse>& rs
 }
 
 SCENARIO_METHOD(IntegrationTest, "post listings", "[integration][post_listings]") {
-  instance->first_run_setup(db->open_write_txn_sync(), {
+  first_run->first_run_setup(db->open_write_txn_sync(), {
     .default_board_name = "main",
     .admin_name = "admin",
     .admin_password = "password"
   });
-  spdlog::set_level(spdlog::level::info);
-  uint64_t user_id = instance->create_local_user(db->open_write_txn_sync(), "myuser", {}, "mypassword", false, {}, IsApproved::Yes),
-    board_id;
+  uint64_t user_id, board_id;
   {
-    auto txn = instance->open_read_txn();
+    auto txn = db->open_write_txn_sync();
+    spdlog::set_level(spdlog::level::info);
+    user_id = users->create_local_user(txn, "myuser", {}, "mypassword", false, {}, IsApproved::Yes);
     board_id = txn.get_board_id_by_name("main").value();
   }
 
   GIVEN("30 threads by 10 users in one board, each two hours apart") {
     uint64_t user_ids[10] = {user_id}, thread_ids[30];
-    for (size_t i = 1; i < 10; i++) {
-      user_ids[i] = instance->create_local_user(db->open_write_txn_sync(), fmt::format("user{:d}", i), {}, "mypassword", false, {}, IsApproved::Yes);
-    }
-    const auto start_time = now_t() - 60h;
-    for (size_t i = 0; i < 30; i++) {
-      thread_ids[i] = instance->create_thread(
-        db->open_write_txn_sync(), 
-        user_ids[i % 10],
-        board_id,
-        {},
-        {},
-        start_time + 2h * i,
-        {},
-        fmt::format("This is thread #{:d}", i),
-        {},
-        "This is `some` _sample_ [text](http://link.test)."
-      );
+    {
+      auto txn = db->open_write_txn_sync();
+      for (size_t i = 1; i < 10; i++) {
+        user_ids[i] = users->create_local_user(txn, fmt::format("user{:d}", i), {}, "mypassword", false, {}, IsApproved::Yes);
+      }
+      const auto start_time = now_t() - 60h;
+      for (size_t i = 0; i < 30; i++) {
+        thread_ids[i] = posts->create_thread(
+          txn, 
+          user_ids[i % 10],
+          board_id,
+          {},
+          {},
+          start_time + 2h * i,
+          {},
+          fmt::format("This is thread #{:d}", i),
+          {},
+          "This is `some` _sample_ [text](http://link.test)."
+        );
+      }
+      txn.commit();
     }
     spdlog::set_level(spdlog::level::debug);
 
@@ -113,8 +117,12 @@ SCENARIO_METHOD(IntegrationTest, "post listings", "[integration][post_listings]"
     }
 
     AND_GIVEN("10 upvotes on the second-newest thread") {
-      for (size_t i = 1; i < 10; i++) {
-        instance->vote(db->open_write_txn_sync(), user_ids[i], thread_ids[28], Vote::Upvote);
+      {
+        auto txn = db->open_write_txn_sync();
+        for (size_t i = 1; i < 10; i++) {
+          posts->vote(txn, user_ids[i], thread_ids[28], Vote::Upvote);
+        }
+        txn.commit();
       }
 
       WHEN("a user views the board with the Active sort order") {

@@ -2,17 +2,23 @@
 #include "spdlog/common.h"
 #include "util/common.h++"
 #include "util/rich_text.h++"
-#include "util/zstd_db_dump.h++"
-#include "services/db.h++"
+#include "db/db.h++"
 #include "services/asio_http_client.h++"
 #include "services/asio_event_bus.h++"
 #include "services/lmdb_search_engine.h++"
-#include "controllers/instance.h++"
-#include "controllers/remote_media.h++"
-#include "controllers/lemmy_api.h++"
-#include "views/webapp.h++"
-#include "views/media.h++"
-#include "views/lemmy_api.h++"
+#include "controllers/board_controller.h++"
+#include "controllers/dump_controller.h++"
+#include "controllers/first_run_controller.h++"
+#include "controllers/lemmy_api_controller.h++"
+#include "controllers/post_controller.h++"
+#include "controllers/remote_media_controller.h++"
+#include "controllers/search_controller.h++"
+#include "controllers/session_controller.h++"
+#include "controllers/site_controller.h++"
+#include "controllers/user_controller.h++"
+#include "views/webapp/routes.h++"
+#include "views/media_routes.h++"
+#include "views/lemmy_api_routes.h++"
 #include "vips/vips.h"
 #include <uWebSockets/App.h>
 #include <asio.hpp>
@@ -33,9 +39,6 @@ namespace Ludwig {
     lock_guard<mutex> lock(on_close_mutex);
     for (auto& f : on_close) f();
   }
-
-  // defined in util/setup.c++
-  auto interactive_setup(bool admin_exists, bool default_board_exists) -> FirstRunSetup;
 }
 
 int main(int argc, char** argv) {
@@ -111,7 +114,7 @@ int main(int argc, char** argv) {
   const auto log_level = options["log_level"];
   spdlog::set_level(spdlog::level::from_str(log_level));
 
-  optional<shared_ptr<SearchEngine>> search_engine;
+  shared_ptr<SearchEngine> search_engine = nullptr;
   if (options["search"].starts_with("lmdb:")) {
     const auto filename = options["search"].substr(5);
     search_engine = make_shared<LmdbSearchEngine>(filename, map_size);
@@ -140,7 +143,7 @@ int main(int argc, char** argv) {
     }
     try {
       spdlog::info("Importing database dump from {}", importfile);
-      zstd_db_dump_import(dbfile, f.get(), file_size, search_engine, map_size);
+      DumpController::import_dump(dbfile, f.get(), file_size, search_engine, map_size);
       spdlog::info("Import complete. You can now start Ludwig without --import.");
       return EXIT_SUCCESS;
     } catch (const runtime_error& e) {
@@ -150,6 +153,7 @@ int main(int argc, char** argv) {
   }
 
   auto db = make_shared<DB>(dbfile, map_size);
+  auto dump_controller = make_shared<DumpController>();
   if (options.is_set_by_user("export")) {
     const auto exportfile = options["export"];
     unique_ptr<FILE, int(*)(FILE*)> f(fopen(exportfile.c_str(), "wb"), &fclose);
@@ -160,7 +164,7 @@ int main(int argc, char** argv) {
     try {
       spdlog::info("Exporting database dump to {}", exportfile);
       auto txn = db->open_read_txn();
-      for (auto chunk : zstd_db_dump_export(txn)) {
+      for (auto chunk : dump_controller->export_dump(txn)) {
         fwrite(chunk.data(), 1, chunk.size(), f.get());
       };
       spdlog::info("Export complete.");
@@ -184,9 +188,13 @@ int main(int argc, char** argv) {
       spdlog::critical("This server is already configured; cannot run interactive setup.");
       return EXIT_FAILURE;
     }
-    auto setup = interactive_setup(admin_exists, default_board_exists);
-    auto instance = make_shared<InstanceController>(db, nullptr, make_shared<DummyEventBus>(), search_engine);
-    instance->first_run_setup(db->open_write_txn_sync(), std::move(setup));
+    auto site = make_shared<SiteController>(db);
+    auto boards = make_shared<BoardController>(site);
+    auto users = make_shared<UserController>(site);
+    FirstRunController(users, boards, site).first_run_setup(
+      db->open_write_txn_sync(),
+      FirstRunController::interactive_setup(admin_exists, default_board_exists)
+    );
     puts("\nFirst-run setup complete. You can now start Ludwig without --setup.");
     return EXIT_SUCCESS;
   }
@@ -197,22 +205,17 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  optional<pair<Hash, Salt>> first_run_admin_password = {};
+  optional<SecretString> first_run_admin_password = {};
   if (first_run) {
     if (admin_exists) {
       spdlog::warn("The server is not yet configured, but an admin user exists.");
       spdlog::warn("Log in as an admin user to complete first-run setup, or CTRL-C and re-run with --setup.");
     } else {
-      SecretString admin_password = generate_password();
+      first_run_admin_password = generate_password();
       spdlog::critical("The server is not yet configured, and no users exist yet.");
       spdlog::critical("A temporary admin user has been generated.");
       spdlog::critical("USERNAME: {}", FIRST_RUN_ADMIN_USERNAME);
-      spdlog::critical("PASSWORD: {}", admin_password.data);
-      Hash hash;
-      Salt salt;
-      RAND_bytes((uint8_t*)salt.bytes()->Data(), 16);
-      InstanceController::hash_password(std::move(admin_password), salt.bytes()->Data(), (uint8_t*)hash.bytes()->Data());
-      first_run_admin_password = pair(hash, salt);
+      spdlog::critical("PASSWORD: {}", first_run_admin_password->data);
       spdlog::critical(
         "Go to http://localhost:{} and log in as this user to complete first-run setup, or CTRL-C and re-run with --setup.",
         port
@@ -233,12 +236,18 @@ int main(int argc, char** argv) {
   );
   auto event_bus = make_shared<AsioEventBus>(pool.io);
   auto xml_ctx = make_shared<LibXmlContext>();
-  auto instance_c = make_shared<InstanceController>(db, http_client, event_bus, search_engine, first_run_admin_password);
-  auto api_c = make_shared<Lemmy::ApiController>(instance_c);
+  auto site_c = make_shared<SiteController>(db, event_bus);
+  auto board_c = make_shared<BoardController>(site_c, event_bus);
+  auto user_c = make_shared<UserController>(site_c, event_bus);
+  auto post_c = make_shared<PostController>(site_c, event_bus);
+  auto search_c = make_shared<SearchController>(db, search_engine, event_bus);
+  auto session_c = make_shared<SessionController>(db, site_c, user_c, std::move(first_run_admin_password));
+  auto first_run_c = make_shared<FirstRunController>(user_c, board_c, site_c);
+  auto dump_c = make_shared<DumpController>();
+  auto api_c = make_shared<Lemmy::ApiController>(site_c, user_c, session_c, board_c, post_c, search_c, first_run_c);
   auto remote_media_c = make_shared<RemoteMediaController>(
     pool.io, db, http_client, xml_ctx, event_bus,
-    [&pool](auto f) { pool.post(std::move(f)); },
-    search_engine
+    [&pool](auto f) { pool.post(std::move(f)); }
   );
 
   struct sigaction sigint_handler { .sa_flags = 0 }, sigterm_handler { .sa_flags = 0 };
@@ -253,9 +262,21 @@ int main(int argc, char** argv) {
   vector<thread> running_threads(threads - 1);
   auto run = [&] {
     uWS::App app;
-    media_routes(app, remote_media_c);
-    webapp_routes(app, instance_c, rate_limiter);
-    Lemmy::api_routes(app, api_c, rate_limiter);
+    define_media_routes(app, remote_media_c);
+    define_webapp_routes(
+      app,
+      db,
+      site_c,
+      session_c,
+      post_c,
+      board_c,
+      user_c,
+      search_c,
+      first_run_c,
+      dump_c,
+      rate_limiter
+    );
+    Lemmy::define_api_routes(app, db, api_c, rate_limiter);
     app.listen(port, [port, app = &app](auto *listen_socket) {
       if (listen_socket) {
         lock_guard<mutex> lock(on_close_mutex);
