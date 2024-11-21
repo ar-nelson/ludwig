@@ -69,8 +69,7 @@ auto ThreadDetail::should_show_votes(Login, const SiteDetail* site) const noexce
 
 auto ThreadDetail::should_fetch_card() const noexcept -> bool {
   if (!thread().content_url()) return false;
-  const auto url = Url::parse(thread().content_url()->str());
-  if (!url || !url->is_http_s()) return false;
+  if (!is_https(ada::parse(thread().content_url()->str()))) return false;
   const auto& card = link_card();
   return !card.fetch_complete() &&
     card.fetch_tries() < FETCH_MAX_TRIES &&

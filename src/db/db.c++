@@ -11,6 +11,7 @@
 #include <lmdb.h>
 #include <simdjson.h>
 #include <uWebSockets/MoveOnlyFunction.h>
+#include "ada.h"
 #include "util/base64.h++"
 
 using std::function, std::lock_guard, std::min, std::mutex, std::nullopt, std::runtime_error, std::optional,
@@ -1509,7 +1510,9 @@ namespace Ludwig {
     const auto& thread = get_fb<Thread>(span);
     FlatBufferBuilder fbb;
     const auto author_id = thread.author(), board_id = thread.board(), created_at = thread.created_at(), instance = thread.instance();
-    const auto url = opt_str(thread.content_url()).and_then(Url::parse);
+    const auto url = opt_str(thread.content_url()).and_then([](auto u) {
+      return ada::parse(u).transform(λx(optional(x))).value_or(nullopt);
+    });
     if (const auto old_thread_opt = sequential ? nullopt : get_thread(id)) {
       spdlog::debug("Updating top-level post {:x} (board {:x}, author {:x})", id, board_id, author_id);
       const auto stats_opt = get_post_stats(id);
@@ -1518,15 +1521,15 @@ namespace Ludwig {
       const auto& old_thread = old_thread_opt->get();
       assert_fmt(author_id == old_thread.author(), "set_thread: cannot change author of thread {:x}", id);
       assert_fmt(created_at == old_thread.created_at(), "set_thread: cannot change created_at of thread {:x}", id);
-      const auto old_url = old_thread.content_url() ? Url::parse(old_thread.content_url()->str()) : nullopt;
-      const auto old_domain = old_url.transform(λx(to_ascii_lowercase(x.host))),
-        new_domain = url.transform(λx(to_ascii_lowercase(x.host)));
+      const auto old_url = old_thread.content_url() ? ada::parse(old_thread.content_url()->str()) : ada::result<ada::url_aggregator>();
+      const auto old_domain = old_url.transform(λx(optional(to_ascii_lowercase(x.get_host())))).value_or(nullopt),
+        new_domain = url.transform(λx(to_ascii_lowercase(x.get_host())));
       if (old_domain != new_domain) {
         spdlog::debug("Changing link domain of thread {:x} from {} to {}",
           id, old_domain.value_or("<none>"), new_domain.value_or("<none>")
         );
-        if (old_domain && old_url->is_http_s()) db_del(txn, db.dbis[ThreadsByDomain_Domain], *old_domain, id);
-        if (new_domain && url->is_http_s()) db_put(txn, db.dbis[ThreadsByDomain_Domain], *new_domain, id);
+        if (old_domain && is_https(old_url)) db_del(txn, db.dbis[ThreadsByDomain_Domain], *old_domain, id);
+        if (new_domain && url && is_https(*url)) db_put(txn, db.dbis[ThreadsByDomain_Domain], *new_domain, id);
       }
       const auto old_board_id = old_thread.board();
       if (board_id != old_board_id) {
@@ -1555,7 +1558,7 @@ namespace Ludwig {
       db_put(txn, db.dbis[ThreadsNew_BoardTime], Cursor(board_id, created_at), id);
       db_put(txn, db.dbis[ThreadsTop_BoardKarma], Cursor(board_id, karma_uint(0)), id);
       db_put(txn, db.dbis[ThreadsMostComments_BoardComments], Cursor(board_id, 0), id);
-      if (url && url->is_http_s()) db_put(txn, db.dbis[ThreadsByDomain_Domain], to_ascii_lowercase(url->host), id);
+      if (url && is_https(*url)) db_put(txn, db.dbis[ThreadsByDomain_Domain], to_ascii_lowercase(url->get_host()), id);
       fbb.ForceDefaults(true);
       fbb.Finish(CreatePostStats(fbb, created_at));
       db_put(txn, db.dbis[PostStats_Post], id, fbb.GetBufferSpan(), sequential ? MDB_APPEND : 0);
@@ -1745,8 +1748,12 @@ namespace Ludwig {
     );
     delete_range(txn, db.dbis[ChildrenTop_PostKarma], Cursor(id, 0), Cursor(id, ID_MAX));
 
-    auto url = thread.content_url() ? Url::parse(thread.content_url()->str()) : nullopt;
-    if (url && url->is_http_s()) db_del(txn, db.dbis[ThreadsByDomain_Domain], to_ascii_lowercase(url->host), id);
+    const auto url = thread.content_url()
+      ? ada::parse(thread.content_url()->str()).transform(λx(optional(x))).value_or(nullopt)
+      : nullopt;
+    if (url && is_https(*url)) {
+      db_del(txn, db.dbis[ThreadsByDomain_Domain], to_ascii_lowercase(url->get_host()), id);
+    }
 
     db_del(txn, db.dbis[ThreadsNew_Time], created_at, id);
     db_del(txn, db.dbis[ThreadsTop_Karma], karma_uint(karma), id);

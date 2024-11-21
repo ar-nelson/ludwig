@@ -1,5 +1,7 @@
 #pragma once
 #include "util/asio_common.h++"
+#include "util/common.h++"
+#include <ada.h>
 #include <future>
 
 namespace Ludwig {
@@ -28,31 +30,31 @@ namespace Ludwig {
   using HttpResponseCallback = uWS::MoveOnlyFunction<void (std::unique_ptr<const HttpClientResponse>&&)>;
 
   struct HttpClientRequest {
-    Url url;
+    ada::url_aggregator url;
     std::string method, request;
     bool has_body = false;
 
     HttpClientRequest(std::string url_str, std::string method)
-      : url(*Url::parse(url_str).or_else([&url_str] -> std::optional<Url> {
+      : url(*ada::parse(url_str).or_else([&url_str] (auto) -> ada::result<ada::url_aggregator> {
           throw std::runtime_error("Invalid HTTP URL: " + url_str);
         })),
         method(method)
     {
-      if (!url.is_http_s()) throw std::runtime_error("Not an HTTP(S) URL: " + url_str);
+      if (!is_https(url)) throw std::runtime_error("Not an HTTP(S) URL: " + url_str);
       fmt::format_to(
-        std::back_inserter(request), "{} {}{} HTTP/1.1\r\nHost: {}{}\r\nConnection: close\r\nUser-Agent: ludwig",
-        method, url.path.empty() ? "/" : url.path, url.query, url.host, url.port.empty() ? "" : ":" + url.port
+        std::back_inserter(request), "{} {}{} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nUser-Agent: ludwig",
+        method, url.get_pathname().empty() ? "/" : url.get_pathname(), url.get_search(), url.get_host()
       );
     }
 
     auto redirect(std::string new_url) -> void {
       if (new_url.starts_with("/")) {
-        url.path = new_url;
+        url.set_pathname(new_url);
       } else {
-        url = *Url::parse(new_url).or_else([&] -> std::optional<Url> {
+        url = *ada::parse(new_url).or_else([&] (auto) -> ada::result<ada::url_aggregator> {
           throw std::runtime_error("Redirect to invalid HTTP URL: " + new_url);
         });
-        if (!url.is_http_s()) {
+        if (!is_https(url)) {
           throw std::runtime_error("Redirect to non-HTTP(S) URL: " + new_url);
         }
       }
@@ -60,7 +62,7 @@ namespace Ludwig {
       request.clear();
       fmt::format_to(
         std::back_inserter(request), "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nUser-Agent: ludwig",
-        method, url.path.empty() ? "/" : url.path, url.host
+        method, url.get_pathname_length() == 0 ? "/" : url.get_pathname(), url.get_host()
       );
       request.append(request_suffix);
     }
@@ -103,7 +105,7 @@ namespace Ludwig {
     }
 
     auto dispatch_and_wait(std::chrono::duration<uint64_t> timeout = std::chrono::seconds(15)) && {
-      auto url = req.url.to_string();
+      auto url = req.url.get_href();
       auto future = std::move(*this).dispatch_future();
       if (future.wait_for(timeout) != std::future_status::ready) {
         throw std::runtime_error(

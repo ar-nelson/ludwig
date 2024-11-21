@@ -126,12 +126,12 @@ struct PrioritizedLinkCardBuilder {
       // Skip images with extensions we know we can't handle
       if (regex_match(str, bad_extensions)) return;
       // Fix relative URLs
+      auto base_url = ada::parse(url);
+      if (!base_url) return;
       if (str.starts_with("/")) {
-        auto base_url = Url::parse(url);
-        if (!base_url) return;
-        if (str.starts_with("//")) str = fmt::format("{}:{}", base_url->scheme, str);
-        else str = fmt::format("{}://{}{}", base_url->scheme, base_url->host, str);
-      } else if (!Url::parse(str)) return;
+        if (str.starts_with("//")) str = fmt::format("{}{}", base_url->get_protocol(), str);
+        else str = fmt::format("{}{}", base_url->get_origin(), str);
+      }
       image_url = str;
       priority_image_url = priority;
     }

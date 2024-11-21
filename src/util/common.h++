@@ -18,6 +18,7 @@
 #include <openssl/rand.h>
 #include <flatbuffers/flatbuffers.h>
 #include <flatbuffers/string.h>
+#include <ada.h>
 
 namespace Ludwig {
 
@@ -28,12 +29,12 @@ constexpr uint64_t ID_MAX = std::numeric_limits<uint64_t>::max();
 constexpr size_t MiB = 1024 * 1024;
 
 #define USERNAME_REGEX_SRC R"([a-zA-Z][a-zA-Z0-9_]{0,63})"
-const std::regex username_regex(USERNAME_REGEX_SRC);
-
 #define INVITE_CODE_REGEX_SRC R"(([0-9A-F]{5})-([0-9A-F]{3})-([0-9A-F]{3})-([0-9A-F]{5}))"
-const std::regex invite_code_regex(INVITE_CODE_REGEX_SRC);
 
 const std::regex
+  username_regex(USERNAME_REGEX_SRC),
+  invite_code_regex(INVITE_CODE_REGEX_SRC),
+  https_regex("https?:"),
   email_regex(
     R"((?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|")"
     R"((?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@)"
@@ -70,6 +71,14 @@ static inline auto now_t() -> Timestamp {
 static inline auto now_s() -> uint64_t {
   return timestamp_to_uint(now_t());
 }
+static inline auto is_https(const ada::url_aggregator& url) -> bool {
+  const auto protocol = url.get_protocol();
+  return std::regex_match(protocol.cbegin(), protocol.cend(), https_regex);
+}
+static inline auto is_https(const ada::result<ada::url_aggregator>& url) -> bool {
+  if (!url) return false;
+  return is_https(*url);
+}
 
 static inline auto random_uint64() -> uint64_t {
   uint64_t n;
@@ -101,57 +110,6 @@ struct SecretString {
   ~SecretString() { if (data.length()) OPENSSL_cleanse(data.data(), data.capacity()); }
 
   operator std::string_view() { return data; }
-};
-
-// Based on https://stackoverflow.com/a/53526139/548027
-struct Url {
-private:
-  static constexpr inline char
-    SCHEME_REGEX[]   = "(?:([a-z0-9-]+)://)", // mandatory, match protocol before the ://
-    USER_REGEX[]     = "(?:([^@/:\\s]+)@)?",  // match anything other than @ / : or whitespace before the ending @
-    HOST_REGEX[]     = "([^@/:\\s]+)",        // mandatory. match anything other than @ / : or whitespace
-    PORT_REGEX[]     = "(?::([0-9]{1,5}))?",  // after the : match 1 to 5 digits
-    PATH_REGEX[]     = "(/[^:#?\\s]*)?",      // after the / match anything other than : # ? or whitespace
-    QUERY_REGEX[]    = "(\\?(?:(?:[^?;&#=]+(?:=[^?;&#=]*)?)(?:[;|&](?:[^?;&#=]+(?:=[^?;&#=]*)?))*))?", // after the ? match any number of x=y pairs, seperated by & or ;
-    FRAGMENT_REGEX[] = "(?:#([^#\\s]*))?";    // after the # match anything other than # or whitespace
-  static const inline auto regex = std::regex(std::string("^")
-    + SCHEME_REGEX + USER_REGEX
-    + HOST_REGEX + PORT_REGEX
-    + PATH_REGEX + QUERY_REGEX
-    + FRAGMENT_REGEX + "$",
-    std::regex::icase | std::regex::optimize
-  );
-public:
-  std::string scheme, user, host, port, path, query, fragment;
-
-  static auto parse(std::string str) noexcept -> std::optional<Url> {
-    std::smatch match;
-    if (!std::regex_match(str, match, regex)) return {};
-    return {{
-      match[1].str(), match[2].str(), match[3].str(), match[4].str(),
-      match[5].str(), match[6].str(), match[7].str()
-    }};
-  }
-
-  inline auto is_http_s() const noexcept -> bool {
-    return scheme == "http" || scheme == "https";
-  }
-
-  inline auto to_string() const noexcept -> std::string {
-    using fmt::operator""_cf;
-    return fmt::format("{}://{}{}{}{}{}{}{}{}"_cf,
-      scheme,
-      user.empty() ? "" : user,
-      user.empty() ? "" : "@",
-      host,
-      port.empty() ? "" : ":",
-      port.empty() ? "" : port,
-      path,
-      query,
-      fragment.empty() ? "" : "#",
-      fragment.empty() ? "" : fragment
-    );
-  }
 };
 
 // Common base class for custom formatters

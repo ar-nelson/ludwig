@@ -10,5 +10,6 @@ vendor_sources = files(
   'src/mdb.c',
   'src/midl.c',
   'src/md4c.c',
-  'src/rate_limiter.cpp'
+  'src/rate_limiter.cpp',
+  'src/ada.cpp'
 )

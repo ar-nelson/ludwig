@@ -76,13 +76,13 @@ auto SiteController::update_site(WriteTxn txn, const SiteUpdate& update, optiona
 
 auto SiteUpdate::validate() const -> void {
   if (icon_url && *icon_url) {
-    if (const auto url = Url::parse(string(**icon_url))) {
-      if (!url->is_http_s()) throw ApiError("Icon URL must be HTTP(S)", 400);
+    if (const auto url = ada::parse(string(**icon_url))) {
+      if (!is_https(url)) throw ApiError("Icon URL must be HTTP(S)", 400);
     } else throw ApiError("Icon URL is not a valid URL", 400);
   }
   if (banner_url && *banner_url) {
-    if (const auto url = Url::parse(string(**banner_url))) {
-      if (!url->is_http_s()) throw ApiError("Banner URL must be HTTP(S)", 400);
+    if (const auto url = ada::parse(string(**banner_url))) {
+      if (!is_https(url)) throw ApiError("Banner URL must be HTTP(S)", 400);
     } else throw ApiError("Banner URL is not a valid URL", 400);
   }
   if (post_max_length && *post_max_length < 512) {

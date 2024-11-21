@@ -4,6 +4,7 @@
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/rand.h>
+#include <ada.h>
 
 using std::optional, std::string, std::string_view, std::unique_ptr,
   flatbuffers::FlatBufferBuilder;
@@ -61,9 +62,14 @@ auto FirstRunController::first_run_setup(WriteTxn txn, FirstRunSetup&& update, u
     txn.set_setting(SettingsKey::private_key, string_view{(const char*)bio_data, bio_len});
 
     string url_str(update.base_url.value_or("http://localhost:2023"));
-    if (auto url = Url::parse(url_str)) {
-      if (!url->is_http_s()) throw ApiError("Base URL must start with http:// or https://", 400);
-      txn.set_setting(SettingsKey::base_url, url->to_string());
+    if (auto url = ada::parse(url_str)) {
+      if (!is_https(*url)) {
+        throw ApiError("Base URL must start with http:// or https://", 400);
+      }
+      if ((url->get_pathname_length() != 0 && url->get_pathname() != "/") || url->has_search() || url->has_credentials()) {
+        throw ApiError("Base URL must be just a domain; cannot have a path or query parameters", 400);
+      }
+      txn.set_setting(SettingsKey::base_url, url->get_origin());
     } else throw ApiError("Base URL is not a valid URL (must start with http:// or https://)", 400);
 
     txn.set_setting(SettingsKey::media_upload_enabled, 0);
@@ -188,11 +194,10 @@ auto FirstRunController::interactive_setup(bool admin_exists, bool default_board
   puts("* <NOTE> Include https:// (or http:// if not using SSL for some reason)");
   puts("* <IMPORTANT> This cannot be changed later!");
   while (!setup.base_url) {
-    if (auto url = Url::parse(input_string())) {
-      if (url->is_http_s()) {
-        setup.base_url = base_url = url->to_string();
+    if (auto url = ada::parse(input_string())) {
+      if (is_https(*url)) {
+        setup.base_url = base_url = url->get_origin();
       }
-      else puts("* ERROR: Not an http(s) URL");
     } else puts("* ERROR: Invalid URL");
   }
 

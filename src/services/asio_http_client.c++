@@ -1,8 +1,4 @@
 #include "asio_http_client.h++"
-#include "asio/ip/address_v4.hpp"
-#include "asio/ip/basic_resolver_results.hpp"
-#include "asio/ssl/host_name_verification.hpp"
-#include "spdlog/spdlog.h"
 #include "views/router_common.h++"
 #include <filesystem>
 #include <stdexcept>
@@ -156,11 +152,14 @@ namespace Ludwig {
     }
   };
 
-  auto AsioHttpClient::check_for_unsafe_local_requests(const asio::ip::basic_resolver_results<tcp>& endpoint_iterator, const Url& url) -> void {
+  auto AsioHttpClient::check_for_unsafe_local_requests(
+    const asio::ip::basic_resolver_results<tcp>& endpoint_iterator,
+    const ada::url_aggregator& url
+  ) -> void {
     if (!safe_local_requests) return;
     for (const auto& endpoint : endpoint_iterator) {
       if (!is_safe_address(endpoint.endpoint().address())) {
-        throw runtime_error("Host " + url.host + " resolves to an unsafe local network address (use --unsafe-local-requests to allow this)");
+        throw runtime_error(fmt::format("Host {} resolves to an unsafe local network address (use --unsafe-local-requests to allow this)", url.get_hostname()));
       }
     }
   }
@@ -170,20 +169,21 @@ namespace Ludwig {
     auto response = make_unique<AsioHttpClientResponse>();
     AsioFetchCtx<SslSocket> c(*io, *io, ssl);
     auto endpoint_iterator = co_await c.resolver.async_resolve(
-      string_view(req.url.host),
-      req.url.port.empty() ? "https" : req.url.port,
+      req.url.get_hostname(),
+      req.url.has_port() ? req.url.get_port() : "https",
       redirect_error(deferred, ec)
     );
+    const string host(req.url.get_hostname());
     check_ec(ec, "resolving address");
     check_for_unsafe_local_requests(endpoint_iterator, req.url);
     c.socket.set_verify_mode(ssl::verify_peer);
-    c.socket.set_verify_callback(asio::ssl::host_name_verification(req.url.host));
+    c.socket.set_verify_callback(asio::ssl::host_name_verification(host));
     co_await asio::async_connect(c.socket.lowest_layer(), endpoint_iterator, redirect_error(deferred, ec));
     check_ec(ec, "connecting");
 
     // SNI - This is barely documented, but it's necessary to connect to some HTTPS sites without a handshake error!
     // Based on https://stackoverflow.com/a/59225060/548027
-    if (!SSL_set_tlsext_host_name(c.socket.native_handle(), req.url.host.c_str())) {
+    if (!SSL_set_tlsext_host_name(c.socket.native_handle(), host.c_str())) {
       check_ec({static_cast<int>(::ERR_get_error()), asio::error::get_ssl_category()}, "setting TLS host name");
     }
 
@@ -198,8 +198,8 @@ namespace Ludwig {
     auto response = make_unique<AsioHttpClientResponse>();
     AsioFetchCtx<TcpSocket> c(*io, *io);
     auto endpoint_iterator = co_await c.resolver.async_resolve(
-      string_view(req.url.host),
-      req.url.port.empty() ? "http" : req.url.port,
+      req.url.get_hostname(),
+      req.url.has_port() ? req.url.get_port() : "http",
       redirect_error(deferred, ec)
     );
     check_ec(ec, "resolving address");
@@ -211,15 +211,15 @@ namespace Ludwig {
   }
 
   auto AsioHttpClient::fetch(HttpClientRequest&& req) -> Async<unique_ptr<const HttpClientResponse>> {
-    spdlog::debug("CLIENT HTTP {} {}", req.method, req.url.to_string());
+    spdlog::debug("CLIENT HTTP {} {}", req.method, req.url.get_href());
     for (uint8_t redirects = 0; redirects < 10; redirects++) {
-      if (!co_await rate_limiter.try_acquire_or_asio_await(req.url.host, 30s)) {
+      if (!co_await rate_limiter.try_acquire_or_asio_await(string(req.url.get_origin()), 30s)) {
         throw runtime_error("HTTP client rate limited (too many requests to the same host)");
       }
       asio::steady_timer timeout(*io, 30s);
       auto [order, ec, ex, rsp_ptr] = co_await asio::experimental::make_parallel_group(
         timeout.async_wait(deferred),
-        asio::co_spawn(*io, req.url.scheme == "https" ? https_fetch(req) : http_fetch(req), deferred)
+        asio::co_spawn(*io, req.url.get_protocol() == "https:" ? https_fetch(req) : http_fetch(req), deferred)
       ).async_wait(
         asio::experimental::wait_for_one(),
         deferred

@@ -83,7 +83,6 @@ struct Context : public RequestContext<SSL, std::shared_ptr<WebappState>>, publi
 
   void pre_request(Response rsp, Request req, std::shared_ptr<WebappState> app) override {
     using namespace std::chrono;
-    spdlog::info("url={} is_htmx={:d}", this->url, is_htmx);
     this->rsp = rsp;
     this->app = app.get();
     ip = get_ip(rsp, req);

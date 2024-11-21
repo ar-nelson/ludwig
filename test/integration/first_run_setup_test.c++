@@ -220,6 +220,7 @@ SCENARIO_METHOD(IntegrationTest, "first-run setup", "[integration][first_run]") 
           auto rsp = http.get(base_url).dispatch_and_wait();
 
           THEN("the home page is normal and shows the options from setup") {
+            spdlog::info("base_url: {}", site->site_detail()->base_url);
             CHECK(rsp->error().value_or("") == "");
             auto page = html(rsp);
             CHECK(page.xpath_exists(R"(//ol[@class="thread-list"])"));
