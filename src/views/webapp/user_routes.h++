@@ -81,7 +81,7 @@ void define_user_routes(
     try {
       // Logins have low priority because anyone can initiate them.
       // This prevents login spam from DOS'ing other actions.
-      auto txn = co_await open_write_txn<Context<SSL>>(c.app->db, WritePriority::Low);
+      auto txn = co_await c.app->db->open_write_txn(WritePriority::Low);
       auto login = c.app->session_controller->login(
         txn,
         form.required_string("actual_username"),
@@ -160,7 +160,7 @@ void define_user_routes(
       }
       // Registrations have low priority because anyone can initiate them.
       // This prevents registration spam from DOS'ing other actions.
-      auto txn = co_await open_write_txn<Context<SSL>>(c.app->db, WritePriority::Low);
+      auto txn = co_await c.app->db->open_write_txn(WritePriority::Low);
       c.app->session_controller->register_local_user(
         txn,
         form.required_string("actual_username"),
@@ -221,7 +221,7 @@ void define_user_routes(
       return std::pair(hex_id_param(req, 0), std::string(req->getHeader("referer")));
     });
     const auto user = c.require_login();
-    auto txn = co_await open_write_txn<Context<SSL>>(c.app->db);
+    auto txn = co_await c.app->db->open_write_txn();
     c.app->session_controller->mark_notification_read(txn, user, id);
     if (c.is_htmx) {
       c.populate(txn);
@@ -239,7 +239,7 @@ void define_user_routes(
     auto& c = co_await _c;
     const auto referer = co_await _c.with_request([](auto* req) { return std::string(req->getHeader("referer")); });
     const auto user = c.require_login();
-    auto txn = co_await open_write_txn<Context<SSL>>(c.app->db);
+    auto txn = co_await c.app->db->open_write_txn();
     c.app->session_controller->mark_all_notifications_read(txn, user);
     if (c.is_htmx) {
       c.populate(txn);
@@ -288,7 +288,7 @@ void define_user_routes(
     if (!c.site->registration_invite_required || c.site->invite_admin_only) {
       die(403, "Users cannot generate invite codes on this server");
     }
-    auto txn = co_await open_write_txn<Context<SSL>>(c.app->db);
+    auto txn = co_await c.app->db->open_write_txn();
     const auto login = c.require_login(txn);
     if (login.mod_state().state >= ModState::Locked) {
       die(403, "User does not have permission to create an invite code");

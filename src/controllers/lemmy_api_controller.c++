@@ -1018,14 +1018,13 @@ namespace Ludwig::Lemmy {
     return { SecretString(jwt.data), false, false };
   }
 
-  template <IsRequestContext Ctx>
-  auto ApiController::search(ReadTxn& txn, const Ctx& ctx, Search& form, optional<SecretString>&& auth) -> RouterAwaiter<std::vector<SearchResultDetail>, Ctx> {
+  auto ApiController::search(ReadTxn& txn, Search& form, std::optional<SecretString>&& auth) -> std::shared_ptr<CompletableOnce<std::vector<SearchResultDetail>>> {
     // TODO: Most fields (this uses very few fields)
     uint16_t limit = form.limit.value_or(20);
     if (limit > 256) throw ApiError("search requires 0 < limit <= 256", 400);
     const auto user_id = optional_auth(txn, form, std::move(auth));
     const auto login = LocalUserDetail::get_login(txn, user_id);
-    return search_controller->search(ctx, {
+    return search_controller->search({
       .query = form.q,
       .board_id = form.community_id.value_or(0),
       .offset = (size_t)((form.page.value_or(1) - 1) * limit),

@@ -28,65 +28,56 @@ RemoteMediaController::RemoteMediaController(
   assert(xml_ctx != nullptr);
 }
 
-auto RemoteMediaController::user_avatar(string_view user_name, ThumbnailCache::Callback&& cb) -> shared_ptr<Cancelable> {
+auto RemoteMediaController::user_avatar(string_view user_name) -> std::shared_ptr<CompletableOnce<ImageRef>> {
   auto txn = db->open_read_txn();
   const auto user =
     txn.get_user_id_by_name(user_name).and_then([&](auto id){return txn.get_user(id);});
   if (user && user->get().avatar_url()) {
-    return small_cache.thumbnail(user->get().avatar_url()->str(), std::move(cb));
-  } else {
-    cb({});
-    return nullptr;
+    return small_cache.thumbnail(user->get().avatar_url()->str());
   }
+  return std::make_shared<CompletableOnce<ImageRef>>(ImageRef{});
 }
 
-auto RemoteMediaController::user_banner(string_view user_name, ThumbnailCache::Callback&& cb) -> shared_ptr<Cancelable> {
+auto RemoteMediaController::user_banner(string_view user_name) -> std::shared_ptr<CompletableOnce<ImageRef>> {
   auto txn = db->open_read_txn();
   const auto user =
     txn.get_user_id_by_name(user_name).and_then([&](auto id){return txn.get_user(id);});
   if (user && user->get().banner_url()) {
-    return banner_cache.thumbnail(user->get().banner_url()->str(), std::move(cb));
-  } else {
-    cb({});
-    return nullptr;
+    return banner_cache.thumbnail(user->get().banner_url()->str());
   }
+  return std::make_shared<CompletableOnce<ImageRef>>(ImageRef{});
 }
 
-auto RemoteMediaController::board_icon(string_view board_name, ThumbnailCache::Callback&& cb) -> shared_ptr<Cancelable> {
+auto RemoteMediaController::board_icon(string_view board_name) -> std::shared_ptr<CompletableOnce<ImageRef>> {
   auto txn = db->open_read_txn();
   const auto board =
     txn.get_board_id_by_name(board_name).and_then([&](auto id){return txn.get_board(id);});
   if (board && board->get().icon_url()) {
-    return small_cache.thumbnail(board->get().icon_url()->str(), std::move(cb));
-  } else {
-    cb({});
-    return nullptr;
+    return small_cache.thumbnail(board->get().icon_url()->str());
   }
+  return std::make_shared<CompletableOnce<ImageRef>>(ImageRef{});
 }
 
-auto RemoteMediaController::board_banner(string_view board_name, ThumbnailCache::Callback&& cb) -> shared_ptr<Cancelable> {
+auto RemoteMediaController::board_banner(string_view board_name) -> std::shared_ptr<CompletableOnce<ImageRef>> {
   auto txn = db->open_read_txn();
   const auto board =
     txn.get_board_id_by_name(board_name).and_then([&](auto id){return txn.get_board(id);});
   if (board && board->get().banner_url()) {
-    return banner_cache.thumbnail(board->get().banner_url()->str(), std::move(cb));
-  } else {
-    cb({});
-    return nullptr;
+    return banner_cache.thumbnail(board->get().banner_url()->str());
   }
+  return std::make_shared<CompletableOnce<ImageRef>>(ImageRef{});
 }
 
-auto RemoteMediaController::thread_link_card_image(uint64_t thread_id, ThumbnailCache::Callback&& cb) -> shared_ptr<Cancelable> {
+auto RemoteMediaController::thread_link_card_image(uint64_t thread_id) -> std::shared_ptr<CompletableOnce<ImageRef>> {
   auto txn = db->open_read_txn();
   const auto thread = txn.get_thread(thread_id);
   if (thread && thread->get().content_url()) {
     const auto card = txn.get_link_card(thread->get().content_url()->string_view());
     if (card && card->get().image_url()) {
-      return small_cache.thumbnail(card->get().image_url()->str(), std::move(cb));
+      return small_cache.thumbnail(card->get().image_url()->str());
     }
   }
-  cb({});
-  return nullptr;
+  return std::make_shared<CompletableOnce<ImageRef>>(ImageRef{});
 }
 
 static inline auto str_eq(const char* lhs, const xmlChar* rhs) noexcept -> bool {
@@ -213,7 +204,7 @@ auto RemoteMediaController::fetch_link_card_for_thread(uint64_t thread_id) noexc
   string url;
   try {
     {
-      auto txn = co_await open_write_txn_async_asio(*db, WritePriority::Low);
+      auto txn = co_await asio_completable(db->open_write_txn(WritePriority::Low));
       const auto thread = ThreadDetail::get(txn, thread_id, {});
       if (!thread.should_fetch_card()) co_return;
       url = thread.thread().content_url()->str();
@@ -249,7 +240,7 @@ auto RemoteMediaController::fetch_link_card_for_thread(uint64_t thread_id) noexc
       thread_id, url, card.title.value_or(""), card.description.value_or(""), card.image_url.value_or("")
     );
     {
-      auto txn = co_await open_write_txn_async_asio(*db, WritePriority::Low);
+      auto txn = co_await asio_completable(db->open_write_txn(WritePriority::Low));
       card.save(txn);
       txn.commit();
     }

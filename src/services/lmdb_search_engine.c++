@@ -1,9 +1,10 @@
 #include "lmdb_search_engine.h++"
+#include "services/search_engine.h++"
 #include "util/rich_text.h++"
 #include "static/en.wiki.bpe.vs200000.model.h++"
 
-using std::inserter, std::optional, std::pair, std::runtime_error,
-    std::string, std::string_view, phmap::flat_hash_set;
+using std::inserter, std::make_shared, std::make_unique, std::optional, std::pair,
+    std::runtime_error, std::string, std::string_view, std::vector, phmap::flat_hash_set;
 
 namespace Ludwig {
   static inline auto int_val(uint64_t* i) -> MDB_val {
@@ -205,7 +206,7 @@ namespace Ludwig {
     }
   }
 
-  auto LmdbSearchEngine::search(SearchQuery query, Callback&& callback) -> std::shared_ptr<Cancelable> {
+  auto LmdbSearchEngine::search(SearchQuery query) -> std::shared_ptr<CompletableOnce<vector<SearchResult>>> {
     using enum SearchResultType;
     flat_hash_set<int> tokens;
     MatchMap matches;
@@ -222,24 +223,22 @@ namespace Ludwig {
       if (query.include_comments) into_match_map(matches, Comment, txn.get_all(Token_Comments, (uint64_t)token));
     }
     if (matches.size() <= query.offset) {
-      std::move(callback)({});
-      return nullptr;
+      return make_shared<CompletableOnce<vector<SearchResult>>>(vector<SearchResult>{});
     }
 
     // TODO: Filter and sort
 
-    auto buf = std::make_unique<pair<uint64_t, pair<SearchResultType, uint64_t>>[]>(query.offset + query.limit);
+    auto buf = make_unique<pair<uint64_t, pair<SearchResultType, uint64_t>>[]>(query.offset + query.limit);
     std::partial_sort_copy(matches.begin(), matches.end(), buf.get(), buf.get() + query.offset + query.limit, [](auto a, auto b) {
       return a.second.second > b.second.second;
     });
     const auto n = std::min(matches.size() - query.offset, query.limit);
-    std::vector<SearchResult> results;
+    vector<SearchResult> results;
     results.reserve(n);
     for (size_t i = 0; i < n; i++) {
       results.emplace_back(buf[query.offset + i].second.first, buf[query.offset + i].first);
     }
 
-    std::move(callback)(results);
-    return nullptr;
+    return make_shared<CompletableOnce<vector<SearchResult>>>(std::move(results));
   }
 }

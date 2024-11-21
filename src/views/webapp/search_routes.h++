@@ -28,7 +28,7 @@ void define_search_routes(
       auto txn = c.app->db->open_read_txn();
       c.populate(txn);
     }
-    auto results = co_await search->search(c, query, c.login);
+    auto results = co_await search->search(query, c.login);
     rsp->writeHeader("Content-Type", TYPE_HTML);
     html_site_header(c, {
       .canonical_path = "/search",

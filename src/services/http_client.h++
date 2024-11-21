@@ -120,9 +120,9 @@ namespace Ludwig {
   protected:
     virtual auto fetch(HttpClientRequest&& req, HttpResponseCallback&& callback) -> void = 0;
     virtual auto fetch(HttpClientRequest&& req) -> Async<std::unique_ptr<const HttpClientResponse>> {
-      return asio_callback_awaiter<std::unique_ptr<const HttpClientResponse>>([&](auto&& cb) {
-        fetch(std::move(req), std::move(cb));
-      });
+      auto completable = std::make_shared<CompletableOnce<std::unique_ptr<const HttpClientResponse>>>();
+      fetch(std::move(req), [completable](auto rsp) { completable->complete(std::move(rsp)); });
+      return asio_completable(completable);
     }
   public:
     virtual ~HttpClient() {};

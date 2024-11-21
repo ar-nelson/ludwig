@@ -22,6 +22,6 @@ namespace Ludwig {
     auto index(uint64_t id, const Thread& thread, std::optional<std::reference_wrapper<const LinkCard>> card_opt) -> void;
     auto index(uint64_t id, const Comment& comment) -> void;
     auto unindex(uint64_t id, SearchResultType type) -> void;
-    auto search(SearchQuery query, Callback&& callback) -> std::shared_ptr<Cancelable>;
+    auto search(SearchQuery query) -> std::shared_ptr<CompletableOnce<std::vector<SearchResult>>>;
   };
 }

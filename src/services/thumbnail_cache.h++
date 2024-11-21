@@ -1,6 +1,5 @@
 #pragma once
 #include "services/http_client.h++"
-#include <atomic>
 #include <concurrent_lru_cache.h>
 #include <variant>
 #include <vips/vips8>
@@ -62,18 +61,7 @@ public:
   using Callback = uWS::MoveOnlyFunction<void (ImageRef)>;
   using Dispatcher = std::function<void (uWS::MoveOnlyFunction<void()>)>;
 private:
-  struct CancelableCallback : public Cancelable {
-    Callback callback;
-    std::atomic<bool> canceled = false;
-    CancelableCallback(Callback&& cb) : callback(std::move(cb)) {}
-    void operator()(ImageRef img) {
-      if (!canceled.load(std::memory_order_acquire)) callback(img);
-    }
-    void cancel() noexcept override {
-      canceled.store(true, std::memory_order_release);
-    }
-  };
-  using Promise = std::list<std::shared_ptr<CancelableCallback>>;
+  using Promise = std::list<std::shared_ptr<CompletableOnce<ImageRef>>>;
   using Entry = std::variant<Promise, ImageRef>;
   auto fetch_thumbnail(std::string url, Entry& entry_cell) -> Entry&;
   tbb::concurrent_lru_cache<std::string, Entry, Entry(*)(const std::string&)> cache;
@@ -94,7 +82,7 @@ public:
     uint16_t thumbnail_size,
     Dispatcher dispatcher = [](auto f) { f(); }
   ) : ThumbnailCache(http_client, cache_size, thumbnail_size, thumbnail_size, dispatcher) {}
-  auto thumbnail(std::string url, Callback&& callback) -> std::shared_ptr<Cancelable>;
+  auto thumbnail(std::string url) -> std::shared_ptr<CompletableOnce<ImageRef>>;
   auto set_thumbnail(std::string url, std::string_view mimetype, std::string_view data) -> bool;
   static auto generate_thumbnail(
     std::optional<std::string_view> mimetype,

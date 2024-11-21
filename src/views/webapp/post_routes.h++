@@ -31,7 +31,7 @@ namespace Internal {
       const auto post_id = co_await _c.with_request([](auto* req){ return hex_id_param(req, 0); });
       auto user = c.require_login();
       auto form = co_await body;
-      auto txn = co_await open_write_txn<Context<SSL>>(c.app->db);
+      auto txn = co_await c.app->db->open_write_txn();
       const auto id = posts->create_local_comment(
         txn,
         user,
@@ -62,7 +62,7 @@ namespace Internal {
       });
       auto user = c.require_login();
       auto form = co_await body;
-      auto txn = co_await open_write_txn<Context<SSL>>(c.app->db);
+      auto txn = co_await c.app->db->open_write_txn();
       const auto action = static_cast<SubmenuAction>(form.required_int("action"));
       const auto redirect = action_menu_action<Detail>(txn, users, action, user, id);
       if (redirect) {
@@ -88,7 +88,7 @@ namespace Internal {
       });
       auto user = c.require_login();
       auto form = co_await body;
-      auto txn = co_await open_write_txn<Context<SSL>>(c.app->db);
+      auto txn = co_await c.app->db->open_write_txn();
       const auto vote = form.required_vote("vote");
       posts->vote(txn, user, post_id, vote);
       if (c.is_htmx) {
@@ -195,7 +195,7 @@ void define_post_routes(
       return board_name_param(txn, req, 0);
     });
     auto form = co_await body;
-    auto txn = co_await open_write_txn<Context<SSL>>(c.app->db);
+    auto txn = co_await c.app->db->open_write_txn();
     const auto id = posts->create_local_thread(
       txn,
       user,

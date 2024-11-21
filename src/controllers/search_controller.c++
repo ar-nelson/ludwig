@@ -138,4 +138,9 @@ auto SearchController::index_all() -> void {
   }
 }
 
+auto SearchController::search(SearchQuery query, Login login) -> std::shared_ptr<CompletableSearch> {
+  if (!search_engine) throw ApiError("Search is not enabled on this server", 403);
+  return std::make_shared<CompletableSearch>(*this, query, login);
+}
+
 }

@@ -1,4 +1,5 @@
 #include "thumbnail_cache.h++"
+#include "util/common.h++"
 #include <vips/conversion.h>
 
 using std::make_shared, std::nullopt, std::optional,
@@ -40,56 +41,46 @@ auto ThumbnailCache::fetch_thumbnail(string url, Entry& entry_cell) -> Entry& {
           // exist; overwrite it so that the ::thumbnail callback will work.
           spdlog::debug("Got synchronous response for image {}", url);
           entry_cell.emplace<ImageRef>(img);
-        } else {
-          Promise callbacks;
-          {
-            auto handle = cache[url];
-            auto& value = handle.value();
-            visit(overload{
-              [&](Promise p) { callbacks = std::move(p); },
-              [&](ImageRef&) {
-                spdlog::warn("Overwrote cached thumbnail for {}, this is probably a race condition and shouldn't happen!", url);
-              }
-            }, value);
-            value.emplace<ImageRef>(img);
-          }
-          spdlog::debug("Got thumbnail for {}, dispatching {:d} callbacks", url, callbacks.size());
-          for (auto& cb : callbacks) (*cb)(img);
+          return;
         }
+        Promise completables;
+        {
+          auto handle = cache[url];
+          auto& value = handle.value();
+          visit(overload{
+            [&](Promise p) { std::swap(p, completables); },
+            [&](ImageRef&) {
+              spdlog::warn("Overwrote cached thumbnail for {}, this is probably a race condition and shouldn't happen!", url);
+            }
+          }, value);
+          value.emplace<ImageRef>(img);
+        }
+        spdlog::debug("Got thumbnail for {}, dispatching {:d} callbacks", url, completables.size());
+        for (auto& c : completables) c->complete(img);
       });
     });
   return entry_cell;
 }
 
-auto ThumbnailCache::thumbnail(string url, Callback&& callback) -> shared_ptr<Cancelable> {
+auto ThumbnailCache::thumbnail(string url) -> shared_ptr<CompletableOnce<ImageRef>> {
   auto handle = cache[url];
   auto& value = handle.value();
-  return visit(overload{
+  auto c = make_shared<CompletableOnce<ImageRef>>();
+  visit(overload{
     [&](Promise& p) {
       if (p.empty()) {
-        return visit(overload{
-          [&callback](Promise& p) {
-            auto sp = make_shared<CancelableCallback>(std::move(callback));
-            p.push_back(sp);
-            return sp;
-          },
-          [&callback](ImageRef i) -> shared_ptr<CancelableCallback> {
-            callback(i);
-            return nullptr;
-          }
+        visit(overload{
+          [&](Promise& p) { p.push_back(c); },
+          [&](ImageRef i) { c->complete(i); }
         }, fetch_thumbnail(url, value));
       } else {
         spdlog::debug("Adding callback to in-flight thumbnail request for {}", url);
-        auto sp = make_shared<CancelableCallback>(std::move(callback));
-        p.push_back(sp);
-        return sp;
+        p.push_back(c);
       }
     },
-    [&callback](ImageRef i) -> shared_ptr<CancelableCallback> {
-      callback(i);
-      return nullptr;
-    }
+    [&](ImageRef i) { c->complete(i); }
   }, value);
+  return c;
 }
 
 auto ThumbnailCache::set_thumbnail(string url, string_view mimetype, string_view data) -> bool {

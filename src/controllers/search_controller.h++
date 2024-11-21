@@ -6,13 +6,15 @@
 #include "models/thread.h++"
 #include "models/comment.h++"
 #include "models/board.h++"
-#include "views/router_common.h++"
+#include <atomic>
 
 namespace Ludwig {
 
 using SearchResultDetail = std::variant<UserDetail, BoardDetail, ThreadDetail, CommentDetail>;
 
 auto search_result_detail(ReadTxn& txn, const SearchResult& result, Login login = {}) -> std::optional<SearchResultDetail>;
+
+class CompletableSearch;
 
 class SearchController {
 private:
@@ -32,71 +34,66 @@ public:
   
   auto index_all() -> void;
 
-  template <IsRequestContext Ctx>
-  auto search(const Ctx& ctx, SearchQuery query, Login login) -> RouterAwaiter<std::vector<SearchResultDetail>, Ctx>;
+  auto search(SearchQuery query, Login login) -> std::shared_ptr<CompletableSearch>;
 
-  friend class SearchHandler;
+  friend class CompletableSearch;
 };
 
-class SearchHandler : public std::enable_shared_from_this<SearchHandler> {
+class CompletableSearch : public CompletableOnce<std::vector<SearchResultDetail>>, public std::enable_shared_from_this<CompletableSearch> {
 private:
   SearchController& controller;
   SearchQuery query;
   Login login;
+  std::atomic<std::shared_ptr<CompletableOnce<std::vector<SearchResult>>>> last_page;
   std::vector<SearchResultDetail> results;
 
-  template <IsRequestContext Ctx>
-  auto search_callback(RouterAwaiter<std::vector<SearchResultDetail>, Ctx>* awaiter) -> SearchEngine::Callback {
-    return [awaiter, self = this->shared_from_this()](std::vector<SearchResult> page) {
-      if (page.empty()) {
-        spdlog::info("Got nothing!");
-        awaiter->set_value(std::move(self->results));
-        return;
-      }
-      spdlog::info("Got page of {:d} results", page.size());
-      {
-        auto txn = self->controller.db->open_read_txn();
-        for (auto& r : page) {
-          try {
-            if (auto d = search_result_detail(txn, r, self->login)) {
-              spdlog::info("+ Accepted result");
-              self->results.push_back(*d);
-            } else {
-              spdlog::info("- Rejected result");
-            }
-          } catch (const std::exception& e) {
-            spdlog::warn("Error in search result: {}", e.what());
+  void on_page(std::vector<SearchResult> page) {
+    if (page.empty()) {
+      spdlog::info("Got nothing!");
+      complete(std::move(results));
+      return;
+    }
+    spdlog::info("Got page of {:d} results", page.size());
+    {
+      auto txn = controller.db->open_read_txn();
+      for (auto& r : page) {
+        try {
+          if (auto d = search_result_detail(txn, r, login)) {
+            spdlog::info("+ Accepted result");
+            results.push_back(*d);
+          } else {
+            spdlog::info("- Rejected result");
           }
-          if (self->results.size() >= self->query.limit) {
-            spdlog::info("Done, got {:d} total results", self->results.size());
-            awaiter->set_value(std::move(self->results));
-            return;
-          }
+        } catch (const std::exception& e) {
+          spdlog::warn("Error in search result: {}", e.what());
+        }
+        if (results.size() >= query.limit) {
+          spdlog::info("Done, got {:d} total results", results.size());
+          complete(std::move(results));
+          return;
         }
       }
-      self->query.offset += self->query.limit;
-      spdlog::info("Repeating with offset {:d}", self->query.offset);
-      auto se = self->controller.search_engine;
-      awaiter->replace_canceler(se->search(self->query, self->search_callback(awaiter)));
-    };
-  }
-public:
-  SearchHandler(SearchController& controller, SearchQuery query, Login login) :
-    controller(controller), query(query), login(login) {}
-
-  template <IsRequestContext Ctx>
-  auto awaiter(const Ctx&) {
-    return RouterAwaiter<std::vector<SearchResultDetail>, Ctx>([&, se = controller.search_engine](auto* a) {
-      return se->search(query, search_callback(a));
+    }
+    if (is_canceled()) return;
+    query.offset += query.limit;
+    spdlog::info("Repeating with offset {:d}", query.offset);
+    last_page.store(controller.search_engine->search(query), std::memory_order_release);
+    last_page.load(std::memory_order_acquire)->on_complete([self = this->shared_from_this()](auto v){
+      self->on_page(v);
     });
   }
-};
+public:
+  CompletableSearch(SearchController& controller, SearchQuery query, Login login) :
+    controller(controller), query(query), login(login), last_page(controller.search_engine->search(query)) {
+    last_page.load(std::memory_order_acquire)->on_complete([self = this->shared_from_this()](auto v){
+      self->on_page(v);
+    });
+  }
 
-template <IsRequestContext Ctx>
-auto SearchController::search(const Ctx& ctx, SearchQuery query, Login login) -> RouterAwaiter<std::vector<SearchResultDetail>, Ctx> {
-  if (!search_engine) throw ApiError("Search is not enabled on this server", 403);
-  auto handler = std::make_shared<SearchHandler>(*this, query, login);
-  return handler->awaiter(ctx);
-}
+  void cancel() noexcept override {
+    CompletableOnce<std::vector<SearchResultDetail>>::cancel();
+    last_page.load(std::memory_order_acquire)->cancel();
+  }
+};
 
 }

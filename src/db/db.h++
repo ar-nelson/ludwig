@@ -89,12 +89,6 @@ namespace Ludwig {
   class ReadTxnImpl;
   class WriteTxn;
 
-  template <typename Fn>
-  concept DbWriteCallback = requires (Fn&& fn, WriteTxn&& txn, bool async) {
-    std::invocable<Fn, WriteTxn, bool>;
-    { fn(std::move(txn), async) } -> std::same_as<void>;
-  };
-
   class DBError : public std::runtime_error {
   public:
     DBError(std::string message, int mdb_error) :
@@ -102,10 +96,12 @@ namespace Ludwig {
   };
 
   class DB {
+  public:
+    class PendingWriteTxn;
+    using PendingWriteTxnPtr = std::shared_ptr<PendingWriteTxn>;
+    using WriteTxnCallback = uWS::MoveOnlyFunction<void (WriteTxn)>;
   private:
-    using WriteQueueFn = std::shared_ptr<uWS::MoveOnlyFunction<void (WriteTxn, bool)>>;
-    struct WriteQueueEntry;
-    static auto write_queue_cmp(const WriteQueueEntry& a, const WriteQueueEntry& b) -> bool;
+    static auto write_queue_cmp(PendingWriteTxnPtr a, PendingWriteTxnPtr b) -> bool;
 
     size_t map_size;
     MDB_env* env;
@@ -114,8 +110,8 @@ namespace Ludwig {
     std::atomic<uint64_t> next_write_queue_id;
     std::binary_semaphore write_lock;
     std::mutex write_queue_lock;
-    std::vector<WriteQueueEntry> write_queue_vec;
-    std::priority_queue<WriteQueueEntry, std::vector<WriteQueueEntry>, decltype(write_queue_cmp)*> write_queue;
+    std::vector<PendingWriteTxnPtr> write_queue_vec;
+    std::priority_queue<PendingWriteTxnPtr, std::vector<PendingWriteTxnPtr>, decltype(write_queue_cmp)*> write_queue;
     auto init_env(const char* filename, MDB_txn** txn, bool fast) -> int;
     auto next_write() noexcept -> void;
   public:
@@ -136,18 +132,9 @@ namespace Ludwig {
       size_t map_size_mb = 1024
     ) -> std::shared_ptr<DB>;
 
-    class WriteCancel : public Cancelable {
-      DB* db;
-      uint64_t id;
-    public:
-      WriteCancel(DB* db, uint64_t id) : db(db), id(id) {}
-      void cancel() noexcept override;
-    };
-
     auto open_read_txn() -> ReadTxnImpl;
     auto open_write_txn_sync() -> WriteTxn;
-    template <DbWriteCallback Fn>
-    auto open_write_txn_async(Fn callback, WritePriority priority = WritePriority::Medium) -> std::shared_ptr<WriteCancel>;
+    auto open_write_txn(WritePriority priority = WritePriority::Medium) -> PendingWriteTxnPtr;
     auto debug_print_settings() -> void;
 
     friend class ReadTxn;
@@ -383,10 +370,13 @@ namespace Ludwig {
     friend class DB;
   };
 
-  struct DB::WriteQueueEntry {
-    WritePriority priority;
+  class DB::PendingWriteTxn : public CompletableOnce<WriteTxn> {
     uint64_t id;
-    WriteQueueFn callback;
+    WritePriority priority;
+  public:
+    PendingWriteTxn(uint64_t id, WritePriority priority) : id(id), priority(priority) {}
+    PendingWriteTxn(WriteTxn&& txn) : CompletableOnce<WriteTxn>(std::move(txn)) {}
+    friend class DB;
   };
 
   inline auto DB::open_read_txn() -> ReadTxnImpl {
@@ -397,15 +387,14 @@ namespace Ludwig {
     return WriteTxn(*this, false);
   }
 
-  template <DbWriteCallback Fn>
-  inline auto DB::open_write_txn_async(Fn fn, WritePriority priority) -> std::shared_ptr<WriteCancel> {
+  inline auto DB::open_write_txn(WritePriority priority) -> PendingWriteTxnPtr {
     if (write_lock.try_acquire()) {
-      fn(WriteTxn(*this, true), false);
-      return {};
+      return std::make_shared<PendingWriteTxn>(WriteTxn(*this, true));
     }
     std::lock_guard<std::mutex> g(write_queue_lock);
     auto id = next_write_queue_id.fetch_add(1, std::memory_order_acq_rel);
-    write_queue.emplace(priority, id, std::make_shared<uWS::MoveOnlyFunction<void (WriteTxn, bool)>>(fn));
-    return std::make_shared<WriteCancel>(this, id);
+    auto pending = std::make_shared<PendingWriteTxn>(id, priority);
+    write_queue.push(pending);
+    return pending;
   }
 }

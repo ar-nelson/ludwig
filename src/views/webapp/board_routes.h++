@@ -86,7 +86,7 @@ void define_board_routes(
     auto user = c.require_login();
     auto form = co_await body;
     const auto name = form.required_string("name");
-    auto txn = co_await open_write_txn<Context<SSL>>(c.app->db);
+    auto txn = co_await c.app->db->open_write_txn();
     boards->create_local_board(
       txn,
       user,
@@ -140,7 +140,7 @@ void define_board_routes(
     });
     auto user = c.require_login();
     auto form = co_await body;
-    auto txn = co_await open_write_txn<Context<SSL>>(c.app->db);
+    auto txn = co_await c.app->db->open_write_txn();
     boards->subscribe(txn, user, board_id, !form.optional_bool("unsubscribe"));
     txn.commit();
     if (c.is_htmx) {

@@ -1,4 +1,5 @@
 #pragma once
+#include <mutex>
 #include <stdint.h>
 #include <stdlib.h>
 #include <algorithm>
@@ -214,6 +215,61 @@ struct Defer {
 struct Cancelable {
   virtual void cancel() noexcept {};
   virtual ~Cancelable() {}
+};
+
+template <typename T>
+class CompletableOnce : public Cancelable {
+public:
+  using Callback = uWS::MoveOnlyFunction<void (T)>;
+  using completion_type = T;
+protected:
+  enum class State0 : uint8_t { Waiting, Canceled, Done };
+  std::mutex mutex;
+  std::variant<State0, Callback, T> state{State0::Waiting};
+public:
+  CompletableOnce() : state(State0::Waiting) {}
+  CompletableOnce(T&& t) : state(std::move(t)) {}
+
+  void complete(T t) {
+    std::lock_guard lock(mutex);
+    std::visit(overload(
+      [&](State0 s0) {
+        if (s0 == State0::Waiting) {
+          state.template emplace<2>(std::move(t));
+        }
+      },
+      [&](Callback& cb) {
+        cb(std::move(t));
+        state.template emplace<0>(State0::Done);
+      },
+      [](T&) { assert(false); }
+    ), state);
+  }
+
+  void on_complete(Callback&& cb) {
+    std::lock_guard lock(mutex);
+    std::visit(overload(
+      [&](State0 s0) {
+        assert(s0 == State0::Waiting);
+        state.template emplace<1>(std::move(cb));
+      },
+      [](Callback&) { assert(false); },
+      [&](T& t) {
+        cb(std::move(t));
+        state.template emplace<0>(State0::Done);
+      }
+    ), state);
+  }
+
+  virtual void cancel() noexcept override {
+    std::lock_guard lock(mutex);
+    state.template emplace<0>(State0::Canceled);
+  }
+
+  bool is_canceled() noexcept {
+    std::lock_guard lock(mutex);
+    return state.index() == 0 && std::get<State0>(state) == State0::Canceled;
+  }
 };
 
 }

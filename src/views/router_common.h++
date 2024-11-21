@@ -163,6 +163,16 @@ concept IsRequestContext = requires (T ctx, std::exception_ptr err) {
   ctx.log();
 };
 
+template <IsRequestContext Ctx>
+struct RouterPromise;
+
+template <typename A, typename Ctx>
+concept IsRouterAwaiter = requires (A awaiter, std::coroutine_handle<RouterPromise<Ctx>> handle) {
+  { awaiter.await_ready() } -> std::same_as<bool>;
+  { awaiter.await_suspend(handle) } -> std::same_as<bool>;
+  awaiter.await_resume();
+};
+
 template <bool SSL, typename AppContext>
 class RequestContext {
 private:
@@ -266,7 +276,7 @@ public:
   }
 
   template <IsRequestContext Ctx>
-  friend class RouterPromise;
+  friend struct RouterPromise;
 
   template <typename T, IsRequestContext Ctx>
   friend class RouterAwaiter;
@@ -276,56 +286,6 @@ public:
 
   template <IsRequestContext Ctx>
   friend struct ContextAwaiter;
-};
-
-template <IsRequestContext Ctx>
-struct RouterPromise;
-
-template <IsRequestContext Ctx>
-struct RouterCoroutine {
-  using promise_type = RouterPromise<Ctx>;
-  using handle_type = std::coroutine_handle<promise_type>;
-
-  handle_type handle;
-
-  RouterCoroutine(handle_type h) : handle(h) {}
-};
-
-template <IsRequestContext Ctx>
-struct RouterPromise {
-  Ctx ctx;
-  static inline uint64_t next_id = 0;
-  uint64_t id = next_id++;
-
-  RouterCoroutine<Ctx> get_return_object() {
-    return RouterCoroutine(std::coroutine_handle<RouterPromise<Ctx>>::from_promise(*this));
-  }
-
-  auto unhandled_exception() noexcept {
-    ctx.handle_error(std::current_exception());
-  }
-  void return_void() noexcept {
-    if (!ctx.done.exchange(true, std::memory_order_acq_rel)) {
-      ctx.log();
-    } else {
-      spdlog::debug("Reached end of coroutine on already completed request");
-    }
-  }
-
-  std::suspend_always initial_suspend() noexcept { return {}; }
-  std::suspend_never final_suspend() noexcept {
-    if (ctx.current_awaiter) ctx.current_awaiter->cancel();
-    return {};
-  }
-};
-
-template <typename T>
-struct SyncAwaiter {
-  T value;
-  SyncAwaiter(T value) : value(value) {}
-  auto await_ready() const noexcept -> bool { return true; }
-  auto await_resume() const noexcept -> T { return value; }
-  auto await_suspend(std::coroutine_handle<>) noexcept -> void {}
 };
 
 template <typename T, IsRequestContext Ctx>
@@ -388,15 +348,55 @@ public:
 };
 
 template <IsRequestContext Ctx>
-class WriteTxnAwaiter : public RouterAwaiter<WriteTxn, Ctx> {
-  std::optional<DB::WriteCancel> canceler;
-public:
-  WriteTxnAwaiter(DB& db, WritePriority priority = WritePriority::Medium) : canceler(
-  ) {}
+struct RouterCoroutine {
+  using promise_type = RouterPromise<Ctx>;
+  using handle_type = std::coroutine_handle<promise_type>;
 
-  void cancel() noexcept override {
-    if (canceler) canceler->cancel();
-    RouterAwaiter<WriteTxn, Ctx>::cancel();
+  handle_type handle;
+
+  RouterCoroutine(handle_type h) : handle(h) {}
+};
+
+template <IsRequestContext Ctx>
+struct RouterPromise {
+  Ctx ctx;
+  static inline uint64_t next_id = 0;
+  uint64_t id = next_id++;
+
+  RouterCoroutine<Ctx> get_return_object() {
+    return RouterCoroutine(std::coroutine_handle<RouterPromise<Ctx>>::from_promise(*this));
+  }
+
+  auto unhandled_exception() noexcept {
+    ctx.handle_error(std::current_exception());
+  }
+  void return_void() noexcept {
+    if (!ctx.done.exchange(true, std::memory_order_acq_rel)) {
+      ctx.log();
+    } else {
+      spdlog::debug("Reached end of coroutine on already completed request");
+    }
+  }
+
+  std::suspend_always initial_suspend() noexcept { return {}; }
+  std::suspend_never final_suspend() noexcept {
+    if (ctx.current_awaiter) ctx.current_awaiter->cancel();
+    return {};
+  }
+
+  template <IsRouterAwaiter<Ctx> A>
+  auto await_transform(A& awaiter) const noexcept -> A& { return awaiter; }
+
+  template <IsRouterAwaiter<Ctx> A>
+  auto await_transform(A&& awaiter) const noexcept -> A&& { return awaiter; }
+
+  template <typename C>
+  auto await_transform(std::shared_ptr<C> completable) const {
+    return RouterAwaiter<typename C::completion_type, Ctx>([completable](auto* self) {
+      completable->on_complete([self](typename C::completion_type t) { self->set_value(std::move(t)); });
+      if constexpr (std::is_base_of<Cancelable, C>()) return completable;
+      else return nullptr;
+    });
   }
 };
 
@@ -734,18 +734,6 @@ public:
     return std::move(*this);
   }
 };
-
-template <IsRequestContext Ctx>
-static inline auto open_write_txn(
-  const std::shared_ptr<DB>& db,
-  WritePriority priority = WritePriority::Medium
-) -> RouterAwaiter<WriteTxn, Ctx> {
-  return RouterAwaiter<WriteTxn, Ctx>([&](auto* self) {
-    return db->open_write_txn_async([self](auto txn, bool) noexcept {
-      self->set_value(std::move(txn));
-    }, priority);
-  });
-}
 
 static inline auto user_name_param(ReadTxn& txn, uWS::HttpRequest* req, uint16_t param) {
   const auto name = req->getParameter(param);

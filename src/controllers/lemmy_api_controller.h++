@@ -9,7 +9,6 @@
 #include "board_controller.h++"
 #include "search_controller.h++"
 #include "first_run_controller.h++"
-#include "views/router_common.h++"
 
 namespace Ludwig::Lemmy {
   struct GetPost {
@@ -337,8 +336,7 @@ namespace Ludwig::Lemmy {
 
     auto save_user_settings(WriteTxn& txn, SaveUserSettings& form, std::optional<SecretString>&& auth) -> LoginResponse;
 
-    template <IsRequestContext Ctx>
-    auto search(ReadTxn& txn, const Ctx& ctx, Search& form, std::optional<SecretString>&& auth) -> RouterAwaiter<std::vector<SearchResultDetail>, Ctx>;
+    auto search(ReadTxn& txn, Search& form, std::optional<SecretString>&& auth) -> std::shared_ptr<CompletableOnce<std::vector<SearchResultDetail>>>;
 
     auto search_results(ReadTxn& txn, const std::vector<SearchResultDetail>& results) -> SearchResponse;
 

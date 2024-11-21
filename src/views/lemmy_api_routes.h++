@@ -1,6 +1,7 @@
 #pragma once
 #include "controllers/lemmy_api_controller.h++"
 #include "util/rate_limiter.h++"
+#include "views/router_common.h++"
 
 namespace Ludwig::Lemmy {
 

@@ -1,6 +1,5 @@
 #pragma once
-#include "asio/this_coro.hpp"
-#include "db/db.h++"
+#include "util/common.h++"
 #include <asio.hpp>
 #include <asio/ssl.hpp>
 #include <asio/experimental/channel.hpp>
@@ -57,24 +56,12 @@ namespace Ludwig {
     }
   };
   
-  template <typename T, typename Fn>
-  static inline auto asio_callback_awaiter(Fn fn) -> Async<T> {
-    ConcurrentChan<T> chan(co_await asio::this_coro::executor);
-    fn([&](T&& t) {
-      chan.async_send(asio::error_code(), std::move(t), asio::detached);
+  template <typename C>
+  static inline auto asio_completable(std::shared_ptr<C> c) -> Async<typename C::completion_type> {
+    ConcurrentChan<std::optional<typename C::completion_type>> chan(co_await asio::this_coro::executor);
+    c->on_complete([&](typename C::completion_type t) {
+      chan.async_send(asio::error_code(), {std::move(t)}, asio::detached);
     });
-    co_return co_await chan.async_receive(asio::deferred);
-  }
-
-  static inline auto open_write_txn_async_asio(DB& db, WritePriority priority = WritePriority::Medium) -> Async<WriteTxn> {
-    std::optional<WriteTxn> txn;
-    ConcurrentChan<> chan(co_await asio::this_coro::executor);
-    if (db.open_write_txn_async([&](WriteTxn _txn, bool async) {
-        txn.emplace(std::move(_txn));
-        if (async) chan.async_send(asio::error_code(), asio::detached);
-      }, priority)) {
-      co_await chan.async_receive(asio::deferred);
-    }
-    co_return std::move(txn.value());
+    co_return *co_await chan.async_receive(asio::deferred);
   }
 }

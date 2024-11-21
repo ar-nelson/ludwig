@@ -6,6 +6,7 @@
 #include "html/html_site_admin_forms.h++"
 #include "html/html_first_run_setup_form.h++"
 #include "html/html_user_settings_forms.h++"
+#include <memory>
 
 namespace Ludwig {
 
@@ -57,7 +58,7 @@ void define_admin_routes(
     auto form = co_await body;
     try {
       c.app->site_controller->update_site(
-        co_await open_write_txn<Context<SSL>>(c.app->db),
+        co_await c.app->db->open_write_txn(),
         form_to_site_update(form),
         c.logged_in_user_id
       );
@@ -76,7 +77,7 @@ void define_admin_routes(
     require_admin(c);
     auto form = co_await body;
     try {
-      first_run->first_run_setup(co_await open_write_txn<Context<SSL>>(c.app->db), {
+      first_run->first_run_setup(co_await c.app->db->open_write_txn(), {
         form_to_site_update(form),
         form.optional_string("base_url"),
         form.optional_string("default_board_name"),
@@ -106,38 +107,30 @@ void define_admin_routes(
         "Content-Disposition",
         format(R"(attachment; filename="ludwig-{:%F-%H%M%S}.dbdump.zst")"_cf, now_t())
       );
-    struct Canceler : public Cancelable {
-      std::atomic<bool> canceled = false;
-      void cancel() noexcept override {
-        canceled.store(true, std::memory_order_release);
-      }
-    };
-    co_await RouterAwaiter<std::monostate, Context<SSL>>([&](auto* awaiter) {
-      auto canceler = std::make_shared<Canceler>();
-      std::thread([awaiter, canceler, &c, &dump] mutable {
-        spdlog::info("Beginning database dump");
-        std::binary_semaphore lock(0);
-        try {
-          auto txn = c.app->db->open_read_txn();
-          for (auto chunk : dump->export_dump(txn)) {
-            if (canceler->canceled.load(std::memory_order_acquire)) return;
-            c.on_response_thread([&](auto* rsp) {
-              if (!canceler->canceled.load(std::memory_order_acquire)) {
-                rsp->write(std::string_view{(const char*)chunk.data(), chunk.size()});
-              }
-              lock.release();
-            });
-            lock.acquire();
-          }
-          spdlog::info("Database dump completed successfully");
-          awaiter->set_value({});
-        } catch (const std::exception& e) {
-          spdlog::error("Database dump failed: {}", e.what());
-          awaiter->cancel();
+    auto done = std::make_shared<CompletableOnce<std::monostate>>();
+    std::thread([&, done] {
+      spdlog::info("Beginning database dump");
+      std::binary_semaphore lock(0);
+      try {
+        auto txn = c.app->db->open_read_txn();
+        for (auto chunk : dump->export_dump(txn)) {
+          if (done->is_canceled()) return;
+          c.on_response_thread([&](auto* rsp) {
+            if (!done->is_canceled()) {
+              rsp->write(std::string_view{(const char*)chunk.data(), chunk.size()});
+            }
+            lock.release();
+          });
+          lock.acquire();
         }
-      }).detach();
-      return canceler;
-    });
+        spdlog::info("Database dump completed successfully");
+        done->complete({});
+      } catch (const std::exception& e) {
+        spdlog::error("Database dump failed: {}", e.what());
+        done->cancel();
+      }
+    }).detach();
+    co_await done;
     rsp->end();
   });
 
@@ -151,7 +144,7 @@ void define_admin_routes(
     });
     auto& c = co_await _c;
     require_admin(c);
-    auto txn = co_await open_write_txn<Context<SSL>>(c.app->db);
+    auto txn = co_await c.app->db->open_write_txn();
     try {
       if (is_approve) {
         c.app->session_controller->approve_local_user_application(txn, id, c.logged_in_user_id);
@@ -169,7 +162,7 @@ void define_admin_routes(
   r.post("/site_admin/invites/new", [](auto* rsp, auto _c, auto) -> Coro {
     auto& c = co_await _c;
     require_admin(c);
-    auto txn = co_await open_write_txn<Context<SSL>>(c.app->db);
+    auto txn = co_await c.app->db->open_write_txn();
     c.app->session_controller->create_site_invite(txn, c.logged_in_user_id);
     txn.commit();
     write_redirect_back(rsp, "/site_admin/invites");

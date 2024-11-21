@@ -61,40 +61,44 @@ TEST_CASE("create and get user", "[db]") {
 TEST_CASE("priority ordering of async write transactions", "[db][write_txn_async]") {
   TempFile file;
   DB db(file.name, 100, true);
-  uint64_t id1;
-  db.open_write_txn_async([&](auto txn, bool async) {
-    CHECK(async == false);
-    db.open_write_txn_async([&](auto txn, bool async) {
-      CHECK(async == true);
-      CHECK(create_user(txn, "user3", "User 3") == id1 + 2);
+  db.open_write_txn(WritePriority::High)->on_complete([&](auto txn) {
+    db.open_write_txn(WritePriority::Low)->on_complete([](auto txn) {
+      create_user(txn, "user3", "User 3");
       txn.commit();
-    }, WritePriority::Low);
-    db.open_write_txn_async([&](auto txn, bool async) {
-      CHECK(async == true);
-      CHECK(create_user(txn, "user4", "User 4") == id1 + 3);
+    });
+    db.open_write_txn(WritePriority::Low)->on_complete([](auto txn) {
+      create_user(txn, "user4", "User 4");
       txn.commit();
-    }, WritePriority::Low);
-    db.open_write_txn_async([&](auto txn, bool async) {
-      CHECK(async == true);
-      CHECK(create_user(txn, "user5", "User 5") == id1 + 4);
+    });
+    db.open_write_txn(WritePriority::Low)->on_complete([](auto txn) {
+      create_user(txn, "user5", "User 5");
       txn.commit();
-    }, WritePriority::Low);
-    db.open_write_txn_async([&](auto txn, bool async) {
-      CHECK(async == true);
-      CHECK(create_user(txn, "user2", "User 2") == id1 + 1);
+    });
+    db.open_write_txn(WritePriority::High)->on_complete([](auto txn) {
+      create_user(txn, "user2", "User 2");
       txn.commit();
-    }, WritePriority::High);
+    });
 
-    id1 = create_user(txn, "user1", "User 1");
+    create_user(txn, "user1", "User 1");
     txn.commit();
   });
 
   auto txn = db.open_read_txn();
-  for (uint8_t i = 0; i < 5; i++) {
-    auto user = txn.get_user(id1 + i);
-    REQUIRE(!!user);
-    CHECK(user->get().name()->str() == fmt::format("user{:d}", i + 1));
-  }
+  auto id1 = txn.get_user_id_by_name("user1"),
+    id2 = txn.get_user_id_by_name("user2"),
+    id3 = txn.get_user_id_by_name("user3"),
+    id4 = txn.get_user_id_by_name("user4"),
+    id5 = txn.get_user_id_by_name("user5");
+  CHECK(id1);
+  CHECK(id2);
+  CHECK(id3);
+  CHECK(id4);
+  CHECK(id5);
+  REQUIRE((id1 && id2 && id3 && id4 && id5));
+  CHECK(*id1 < *id2);
+  CHECK(*id2 < *id3);
+  CHECK(*id3 < *id4);
+  CHECK(*id4 < *id5);
 }
 
 static inline auto create_users(DB& db, uint64_t ids[3]) {

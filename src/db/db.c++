@@ -14,8 +14,8 @@
 #include "ada.h"
 #include "util/base64.h++"
 
-using std::function, std::lock_guard, std::min, std::mutex, std::nullopt, std::runtime_error, std::optional,
-    std::pair, std::shared_ptr, std::string, std::string_view, std::unique_ptr,
+using std::function, std::lock_guard, std::min, std::mutex, std::nullopt, std::runtime_error,
+    std::optional, std::pair, std::shared_ptr, std::string, std::string_view, std::unique_ptr,
     std::vector, flatbuffers::FlatBufferBuilder, flatbuffers::span,
     flatbuffers::Verifier, flatbuffers::GetRoot;
 
@@ -466,30 +466,33 @@ namespace Ludwig {
     mdb_cursor_close(cur);
   }
 
-  auto DB::write_queue_cmp(const WriteQueueEntry& a, const WriteQueueEntry& b) -> bool {
-    if (a.priority != b.priority) return a.priority < b.priority;
-    return a.id > b.id;
+  auto DB::write_queue_cmp(PendingWriteTxnPtr a, PendingWriteTxnPtr b) -> bool {
+    if (a->priority != b->priority) return a->priority < b->priority;
+    return a->id > b->id;
   }
 
   auto DB::next_write() noexcept -> void {
-    WriteQueueFn callback = nullptr;
+    PendingWriteTxnPtr next = nullptr;
     {
       lock_guard<mutex> g(write_queue_lock);
       if (!write_queue.empty()) {
-        callback = write_queue.top().callback;
+        next = write_queue.top();
         write_queue.pop();
       }
     }
-    if (callback) {
-      (*callback)(WriteTxn(*this, true), true);
+    if (next) {
+      if (auto* callback = std::get_if<1>(&next->state)) {
+        (*callback)(WriteTxn(*this, true));
+      } else {
+        spdlog::error(
+          "Skipping write transaction queue entry #{:d}: no callback. This is probably an error, and may deadlock!",
+          next->id
+        );
+        next_write();
+      }
     } else {
       write_lock.release();
     }
-  }
-
-  auto DB::WriteCancel::cancel() noexcept -> void {
-    lock_guard<mutex> g(db->write_queue_lock);
-    std::erase_if(db->write_queue_vec, [id = id](const auto& e) { return e.id == id; });
   }
 
   auto ReadTxn::get_setting_str(string_view key) -> string_view {

@@ -73,7 +73,7 @@ struct JsonRequestBuilder {
     router.template post_json<In>(pattern, parser, [db = db, handler = std::move(handler)](auto* rsp, auto c, auto body) -> RouterCoroutine<Context<SSL>> {
       auto& ctx = co_await c;
       auto form = co_await body;
-      auto txn = co_await open_write_txn<Context<SSL>>(db);
+      auto txn = co_await db->open_write_txn();
       write_json<SSL, Out>(rsp, handler(form, ctx, txn));
       txn.commit();
     }, max_size);
@@ -84,7 +84,7 @@ struct JsonRequestBuilder {
     router.template put_json<In>(pattern, parser, [db = db, handler = std::move(handler)](auto* rsp, auto c, auto body) -> RouterCoroutine<Context<SSL>> {
       auto& ctx = co_await c;
       auto form = co_await body;
-      auto txn = co_await open_write_txn<Context<SSL>>(db);
+      auto txn = co_await db->open_write_txn();
       write_json<SSL, Out>(rsp, handler(form, ctx, txn));
       txn.commit();
     }, max_size);
@@ -116,12 +116,12 @@ void define_api_routes(
   router.template post_json<CreateSite>("/api/v3/site", parser, [db, controller](auto* rsp, auto c, auto body) -> Coro {
     auto& ctx = co_await c;
     auto form = co_await body;
-    write_json<SSL, SiteResponse>(rsp, controller->create_site(co_await open_write_txn<Context<SSL>>(db), form, std::move(ctx.auth)));
+    write_json<SSL, SiteResponse>(rsp, controller->create_site(co_await db->open_write_txn(), form, std::move(ctx.auth)));
   });
   router.template put_json<EditSite>("/api/v3/site", parser, [db, controller](auto* rsp, auto c, auto body) -> Coro {
     auto& ctx = co_await c;
     auto form = co_await body;
-    write_json<SSL, SiteResponse>(rsp, controller->edit_site(co_await open_write_txn<Context<SSL>>(db), form, std::move(ctx.auth)));
+    write_json<SSL, SiteResponse>(rsp, controller->edit_site(co_await db->open_write_txn(), form, std::move(ctx.auth)));
   });
   // TODO: /api/v3/site/block
 
@@ -304,7 +304,7 @@ void define_api_routes(
       .username_or_email = form.username,
       .password = SecretString(form.password.data)
     };
-    auto txn = co_await open_write_txn<Context<SSL>>(db);
+    auto txn = co_await db->open_write_txn();
     controller->register_account(txn, form, ctx.ip, ctx.user_agent);
     write_json<SSL, LoginResponse>(rsp, controller->login(txn, login, ctx.ip, ctx.user_agent));
     txn.commit();
@@ -345,19 +345,19 @@ void define_api_routes(
   });
   router.template post_json<DeleteAccount>("/api/v3/user/delete_account", parser, [db, controller](auto* rsp, auto ctx, auto body) -> Coro {
     auto form = co_await body;
-    auto txn = co_await open_write_txn<Context<SSL>>(db);
+    auto txn = co_await db->open_write_txn();
     controller->delete_account(txn, form, std::move((co_await ctx).auth));
     txn.commit();
     write_no_content(rsp);
   }).template post_json<PasswordReset>("/api/v3/user/password_reset", parser, [db, controller](auto* rsp, auto, auto body) -> Coro {
     auto form = co_await body;
-    auto txn = co_await open_write_txn<Context<SSL>>(db);
+    auto txn = co_await db->open_write_txn();
     controller->password_reset(txn, form);
     txn.commit();
     write_no_content(rsp);
   }).template post_json<PasswordChangeAfterReset>("/api/v3/user/password_change", parser, [db, controller](auto* rsp, auto, auto body) -> Coro {
     auto form = co_await body;
-    auto txn = co_await open_write_txn<Context<SSL>>(db);
+    auto txn = co_await db->open_write_txn();
     controller->password_change_after_reset(txn, form);
     txn.commit();
     write_no_content(rsp);
@@ -381,7 +381,7 @@ void define_api_routes(
   });
   router.template post_json<VerifyEmail>("/api/v3/user/verify_email", parser, [db, controller](auto* rsp, auto, auto body) -> Coro {
     auto form = co_await body;
-    auto txn = co_await open_write_txn<Context<SSL>>(db);
+    auto txn = co_await db->open_write_txn();
     controller->verify_email(txn, form);
     txn.commit();
     write_no_content(rsp);
@@ -399,7 +399,7 @@ void define_api_routes(
   }).post("/api/v3/user/logout", [db, controller](auto* rsp, auto _ctx, auto body) -> Coro {
     auto& ctx = co_await _ctx;
     co_await body;
-    auto txn = co_await open_write_txn<Context<SSL>>(db);
+    auto txn = co_await db->open_write_txn();
     if (ctx.auth) controller->logout(txn, std::move(*ctx.auth));
     txn.commit();
     write_no_content(rsp);
