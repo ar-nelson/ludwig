@@ -1,5 +1,6 @@
 #pragma once
 #include "views/router_common.h++"
+#include "views/webapp/paths.h++"
 #include "webapp_common.h++"
 #include "controllers/first_run_controller.h++"
 #include "controllers/dump_controller.h++"
@@ -47,12 +48,37 @@ void define_admin_routes(
     } \
     ADMIN_PAGE(PATH, TAB, CONTENT) \
   });
-  ADMIN_ROUTE("/site_admin", Settings, html_site_admin_form(c, c.site))
-  ADMIN_ROUTE("/site_admin/import_export", ImportExport, html_site_admin_import_export_form(c))
-  ADMIN_ROUTE("/site_admin/applications", Applications, html_site_admin_applications_list(c, *c.app->session_controller, txn, c.login))
-  ADMIN_ROUTE("/site_admin/invites", Invites, html_invites_list(c, *c.app->session_controller, txn, login, ""))
+  ADMIN_ROUTE(PATH_ADMIN_admin, Settings, html_site_admin_form(c, c.site))
+  ADMIN_ROUTE(PATH_ADMIN_import_export, ImportExport, html_site_admin_import_export_form(c))
+  ADMIN_ROUTE(PATH_ADMIN_applications, Applications, html_site_admin_applications_list(c, *c.app->session_controller, txn, c.login))
+  ADMIN_ROUTE(PATH_ADMIN_invites, Invites, html_admin_invites_list(c, *c.app->session_controller, txn, login, ""))
 
-  r.post_form("/site_admin", [](auto* rsp, auto _c, auto body) -> Coro {
+  r.get(PATH_ADMIN_new_invite, [](auto* rsp, auto*, auto& c) {
+    auto txn = c.app->db->open_read_txn();
+    const auto login = c.require_login(txn);
+    if (!SiteController::can_change_site_settings(login)) {
+      die(403, "Admin login required to view this page");
+    }
+    rsp->writeHeader("Content-Type", TYPE_HTML);
+    html_site_header(c, {
+      .canonical_path = PATH_ADMIN_new_invite,
+      .banner_title = "Create Invite",
+    });
+    c.write("<main><form method=\"post\" action=\"" PATH_ADMIN_new_invite "\"><input type=\"submit\" value=\"Create New Invite Code\"></form></main>");
+    html_site_footer(c);
+    c.finish_write();
+  });
+
+  r.post(PATH_ADMIN_new_invite, [](auto* rsp, auto _c, auto) -> Coro {
+    auto& c = co_await _c;
+    require_admin(c);
+    auto txn = co_await c.app->db->open_write_txn();
+    c.app->session_controller->create_site_invite(txn, c.logged_in_user_id);
+    txn.commit();
+    write_redirect_back(rsp, PATH_ADMIN_invites);
+  });
+
+  r.post_form(PATH_ADMIN_admin, [](auto* rsp, auto _c, auto body) -> Coro {
     auto& c = co_await _c;
     require_admin(c);
     auto form = co_await body;
@@ -62,14 +88,14 @@ void define_admin_routes(
         form_to_site_update(form),
         c.logged_in_user_id
       );
-      write_redirect_back(rsp, "/site_admin");
+      write_redirect_back(rsp, PATH_ADMIN_admin);
     } catch (const ApiError& e) {
       rsp->writeStatus(http_status(e.http_status));
-      ADMIN_PAGE("/site_admin", Settings, html_site_admin_form(c, c.site, {e.message}))
+      ADMIN_PAGE(PATH_ADMIN_admin, Settings, html_site_admin_form(c, c.site, {e.message}))
     }
   });
 
-  r.post_form("/site_admin/first_run_setup", [first_run](auto* rsp, auto _c, auto body) -> Coro {
+  r.post_form(PATH_ADMIN_first_run_setup, [first_run](auto* rsp, auto _c, auto body) -> Coro {
     auto& c = co_await _c;
     if (c.site->setup_done) {
       die(403, "First-run setup is already complete");
@@ -99,7 +125,7 @@ void define_admin_routes(
     }
   });
 
-  r.post("/site_admin/export", [dump](auto* rsp, auto _c, auto) -> Coro {
+  r.post(PATH_ADMIN_export, [dump](auto* rsp, auto _c, auto) -> Coro {
     auto& c = co_await _c;
     require_admin(c);
     rsp->writeHeader("Content-Type", "application/zstd")
@@ -134,13 +160,13 @@ void define_admin_routes(
     rsp->end();
   });
 
-  r.post("/site_admin/applications/:action/:id", [](auto* rsp, auto _c, auto) -> Coro {
+  r.post(PATH_ADMIN_applications_action(":id", ":action"), [](auto* rsp, auto _c, auto) -> Coro {
     auto [is_approve, id] = co_await _c.with_request([](auto* req) {
       bool is_approve;
-      if (req->getParameter(0) == "approve") is_approve = true;
-      else if (req->getParameter(0) == "reject") is_approve = false;
+      if (req->getParameter(1) == "approve") is_approve = true;
+      else if (req->getParameter(1) == "reject") is_approve = false;
       else die(404, "Page not found");
-      return std::pair(is_approve, hex_id_param(req, 1));
+      return std::pair(is_approve, hex_id_param(req, 0));
     });
     auto& c = co_await _c;
     require_admin(c);
@@ -152,21 +178,14 @@ void define_admin_routes(
         c.app->session_controller->reject_local_user_application(txn, id, c.logged_in_user_id);
       }
       txn.commit();
-      write_redirect_back(rsp, "/site_admin/applications");
+      write_redirect_back(rsp, PATH_ADMIN_applications);
     } catch (const ApiError& e) {
       rsp->writeStatus(http_status(e.http_status));
-      ADMIN_PAGE("/site_admin/applications", Applications, html_site_admin_applications_list(c, *c.app->session_controller, txn, c.login, {}, e.message))
+      ADMIN_PAGE(PATH_ADMIN_applications, Applications, html_site_admin_applications_list(c, *c.app->session_controller, txn, c.login, {}, e.message))
     }
   });
 
-  r.post("/site_admin/invites/new", [](auto* rsp, auto _c, auto) -> Coro {
-    auto& c = co_await _c;
-    require_admin(c);
-    auto txn = co_await c.app->db->open_write_txn();
-    c.app->session_controller->create_site_invite(txn, c.logged_in_user_id);
-    txn.commit();
-    write_redirect_back(rsp, "/site_admin/invites");
-  });
+
 }
 
 }

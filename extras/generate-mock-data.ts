@@ -48,12 +48,9 @@ function randomModState(fbb: flatbuffers.Builder): [ModState, number] {
 
 function genImageUrl(
   width: number,
-  height: number = width,
-  word = faker.word.noun(),
+  height: number = width
 ): string {
-  return `https://loremflickr.com/${width}/${height}/${
-    faker.helpers.slugify(word)
-  }?lock=${faker.number.int(100)}`;
+  return `https://static.photos/${width}x${height}/`;
 }
 
 function genWikipediaLink(): { url: string; title: string } {
@@ -93,14 +90,13 @@ function genUser(
         genImageUrl(
           faker.number.int({ min: 32, max: 512 }),
           undefined,
-          faker.word.noun(),
         ),
       { probability: 0.75 },
     ),
     banner = faker.helpers.maybe(() => {
       const w = faker.number.int({ min: 320, max: 1920 }),
         h = faker.number.int({ min: 100, max: Math.min(w, 720) });
-      return genImageUrl(w, h, faker.word.noun());
+      return genImageUrl(w, h);
     }, { probability: 0.5 });
   fbb.finish(
     User.createUser(
@@ -192,14 +188,13 @@ function genBoard(
         genImageUrl(
           faker.number.int({ min: 32, max: 512 }),
           undefined,
-          baseName,
         ),
       { probability: 0.75 },
     ),
     banner = faker.helpers.maybe(() => {
       const w = faker.number.int({ min: 320, max: 1920 }),
         h = faker.number.int({ min: 100, max: Math.min(w, 720) });
-      return genImageUrl(w, h, baseName);
+      return genImageUrl(w, h);
     }, { probability: 0.5 });
   fbb.finish(
     Board.createBoard(
@@ -355,43 +350,44 @@ function genComment(
   fbb.finish(
     Comment.createComment(
       fbb,
-      author,
-      parent,
-      thread,
-      BigInt(date.valueOf()) / 1000n,
+      author, // author
+      parent, // parent
+      thread, // thread
+      BigInt(date.valueOf()) / 1000n, // created_at
       faker.helpers.maybe(
         () =>
           BigInt(
             faker.date.between({ from: date, to: Date() }).valueOf(),
           ) / 1000n,
         { probability: 0.1 },
-      ) ?? null,
-      null,
-      null,
-      instance ? instance.id : 0n,
-      faker.number.int({ min: 0, max: 0xffffffff }),
+      ) ?? 0n, // updated_at (should be 0n if not present)
+      null, // fetched_at
+      null, // deleted_at
+      instance ? instance.id : 0n, // instance
+      faker.number.int({ min: 0, max: 0xffffffff }), // salt
       instance
         ? fbb.createString(
           `https://${instance.domain}/ap/activity/${id.toString(16)}`,
         )
-        : 0,
+        : 0, // activity_url
       fbb.createString(
         `https://${instance ? instance.domain : ludwigDomain}/post/${
           id.toString(16)
         }`,
-      ),
-      fbb.createSharedString(contentRaw),
-      Comment.createContentTypeVector(fbb, [RichText.Text]),
+      ), // original_post_url
+      fbb.createSharedString(contentRaw), // content_raw
+      Comment.createContentTypeVector(fbb, [RichText.Text]), // content_type
       Comment.createContentVector(
         fbb,
         [fbb.createString(content.map((t) => `<p>${t}</p>`).join(""))]
-      ),
+      ), // content
       faker.datatype.boolean(0.05)
         ? fbb.createString(faker.company.catchPhrase())
-        : 0,
-      ...randomModState(fbb),
-      ModState.Normal,
-      0
+        : 0, // content_warning
+      false, // distinguished
+      ...randomModState(fbb), // mod_state, mod_reason
+      ModState.Normal, // board_mod_state
+      0 // board_mod_reason
     ),
   );
   return { id, data: fbb.asUint8Array() };

@@ -35,16 +35,16 @@ void define_webapp_routes(
     db, sessions, site, rate_limiter
   );
   Router<SSL, Context<SSL>, std::shared_ptr<WebappState>> r(app, state);
-  
+
   define_admin_routes(r, first_run, dump);
   define_board_routes(r, boards);
   define_feed_routes(r, posts, boards, users, first_run);
   define_post_routes(r, posts, boards, users);
   define_search_routes(r, search);
-  define_user_routes(r, users);
+  define_user_routes(r, users, posts);
 
-  r.any("/*", [](auto*, auto*, auto&) {
-    die(404, "Page not found");
+  r.any("/*", [](auto*, auto* req, auto&) {
+    throw ApiError(fmt::format("Page not found: {}", req->getUrl()), 404);
   });
 }
 

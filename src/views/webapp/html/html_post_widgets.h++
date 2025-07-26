@@ -1,5 +1,6 @@
 #pragma once
 #include "html_common.h++"
+#include "views/webapp/paths.h++"
 #include "html_rich_text.h++"
 #include "fbs/records.h++"
 #include "models/site.h++"
@@ -49,7 +50,8 @@ void html_vote_buttons(ResponseWriter& r, const T& entry, const SiteDetail* site
     can_downvote = entry.can_downvote(login, site);
   if (can_upvote || can_downvote) {
     r.write_fmt(
-      R"(<form class="vote-buttons" id="votes-{0:x}" method="post" action="/{1}/{0:x}/vote" hx-post="/{1}/{0:x}/vote" hx-swap="outerHTML">)"_cf,
+      R"(<form class="vote-buttons" id="votes-{0:x}" method="post" action=")" PATH_POST_vote("{1}", "{0:x}")
+      R"(" hx-post=")" PATH_POST_vote("{1}", "{0:x}") R"(" hx-swap="outerHTML">)"_cf,
       entry.id, T::noun
     );
   } else {

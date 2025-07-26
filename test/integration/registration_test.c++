@@ -239,11 +239,11 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
               optional<uint64_t> cur;
               optional<LocalUserDetail> login;
               for (auto p : sessions->list_applications(txn, cur, login)) {
-                id = p.second.id; 
+                id = p.second.id;
               }
             }
             REQUIRE(id != 0);
-            auto rsp = http.post(fmt::format("{}/site_admin/applications/approve/{:x}", base_url, id))
+            auto rsp = http.post(fmt::format("{}/site_admin/applications/{:x}/approve", base_url, id))
               .header("cookie", admin_cookie)
               .body(TYPE_FORM, "")
               .dispatch_and_wait();
@@ -316,7 +316,7 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
         THEN("the Invites page loads correctly and is present in the Site Admin tabs") {
           CHECK(rsp->error().value_or("") == "");
           auto page = html(rsp);
-          CHECK(page.xpath_exists(R"(//form[@action="invites/new"])"));
+          CHECK(page.xpath_exists(R"(//form[@action="/site_admin/invites/new"])"));
           CHECK(page.xpath_exists(R"(//ul[@class="tabs"]/li/span[@class="selected"][text()="Invites"])"));
         }
       }
@@ -439,7 +439,7 @@ SCENARIO_METHOD(IntegrationTest, "registration", "[integration][registration]") 
         THEN("the Invites page loads correctly and is present in the User Settings tabs") {
           CHECK(rsp->error().value_or("") == "");
           auto page = html(rsp);
-          CHECK(page.xpath_exists(R"(//form[@action="invites/new"])"));
+          CHECK(page.xpath_exists(R"(//form[@action="/settings/invites/new"])"));
           CHECK(page.xpath_exists(R"(//ul[@class="tabs"]/li/span[@class="selected"][text()="Invites"])"));
         }
       }

@@ -1,5 +1,6 @@
 #pragma once
 #include "views/router_common.h++"
+#include "views/webapp/paths.h++"
 #include "webapp_common.h++"
 #include "controllers/post_controller.h++"
 #include "controllers/board_controller.h++"
@@ -118,7 +119,7 @@ void define_post_routes(
   // VIEW COMMENTS
   //////////////////////////////////////////////////////////
 
-  r.get("/thread/:id", [posts, boards](auto* rsp, auto* req, auto& c) {
+  r.get(PATH_THREAD_thread(":id"), [posts, boards](auto* rsp, auto* req, auto& c) {
     auto txn = c.app->db->open_read_txn();
     c.populate(txn);
     const auto id = hex_id_param(req, 0);
@@ -143,7 +144,7 @@ void define_post_routes(
     c.finish_write();
   });
 
-  r.get("/comment/:id", [posts, boards](auto* rsp, auto* req, auto& c) {
+  r.get(PATH_COMMENT_comment(":id"), [posts, boards](auto* rsp, auto* req, auto& c) {
     auto txn = c.app->db->open_read_txn();
     c.populate(txn);
     const auto id = hex_id_param(req, 0);
@@ -174,7 +175,7 @@ void define_post_routes(
   // CREATE THREAD
   //////////////////////////////////////////////////////////
 
-  r.get("/b/:name/create_thread", [boards](auto* rsp, auto* req, auto& c) {
+  r.get(PATH_THREAD_create(":name"), [boards](auto* rsp, auto* req, auto& c) {
     auto txn = c.app->db->open_read_txn();
     const auto board_id = board_name_param(txn, req, 0);
     const auto show_url = req->getQuery("text") != "1";
@@ -187,7 +188,7 @@ void define_post_routes(
     c.finish_write();
   });
 
-  r.post_form("/b/:name/create_thread", [posts](auto* rsp, auto _c, auto body) -> Coro {
+  r.post_form(PATH_THREAD_create(":name"), [posts](auto* rsp, auto _c, auto body) -> Coro {
     auto& c = co_await _c;
     auto user = c.require_login();
     const auto board_id = co_await _c.with_request([&](auto* req) {
@@ -208,13 +209,13 @@ void define_post_routes(
     txn.commit();
     rsp->writeStatus(http_status(303));
     c.write_cookie();
-    rsp->writeHeader("Location", format("/thread/{:x}"_cf, id))->end();
+    rsp->writeHeader("Location", format(PATH_THREAD_thread("{}") ""_cf, id))->end();
   });
 
   // EDIT THREAD
   //////////////////////////////////////////////////////////
 
-  r.get("/thread/:id/edit", [](auto* rsp, auto* req, auto& c) {
+  r.get(PATH_THREAD_edit(":id"), [](auto* rsp, auto* req, auto& c) {
     auto txn = c.app->db->open_read_txn();
     const auto id = hex_id_param(req, 0);
     const auto login = c.require_login(txn);

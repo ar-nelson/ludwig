@@ -1,6 +1,7 @@
 #pragma once
 #include "views/router_common.h++"
 #include "webapp_common.h++"
+#include "views/webapp/paths.h++"
 #include "controllers/board_controller.h++"
 #include "html/html_board_list.h++"
 #include "html/html_board_forms.h++"
@@ -20,8 +21,8 @@ static inline auto board_header_options(
     .banner_link = req->getUrl(),
     .page_title = title,
     .banner_title = display_name_as_text(board),
-    .banner_image = board.banner_url() ? optional(format("/media/board/{}/banner.webp"_cf, board.name()->string_view())) : nullopt,
-    .card_image = board.icon_url() ? optional(format("/media/board/{}/icon.webp"_cf, board.name()->string_view())) : nullopt
+    .banner_image = board.banner_url() ? optional(format(PATH_MEDIA_board_banner("{}") ""_cf, board.name()->string_view())) : nullopt,
+    .card_image = board.icon_url() ? optional(format(PATH_MEDIA_board_icon("{}") ""_cf, board.name()->string_view())) : nullopt
   };
 }
 
@@ -36,21 +37,21 @@ void define_board_routes(
   // BOARD LIST
   //////////////////////////////////////////////////////////
 
-  r.get("/boards", [boards](auto* rsp, auto* req, auto& c) {
+  r.get(PATH_BOARD_list, [boards](auto* rsp, auto* req, auto& c) {
     auto txn = c.app->db->open_read_txn();
     c.populate(txn);
     const auto local = req->getQuery("local") == "1";
     const auto sort = parse_board_sort_type(req->getQuery("sort"));
     const auto sub = req->getQuery("sub") == "1";
-    const auto base_url = format("/boards?local={}&sort={}&sub={}"_cf,
+    const auto base_url = format(PATH_BOARD_list "?local={}&sort={}&sub={}"_cf,
       local ? "1" : "0",
       EnumNameBoardSortType(sort),
       sub ? "1" : "0"
     );
     rsp->writeHeader("Content-Type", TYPE_HTML);
     html_site_header(c, {
-      .canonical_path = "/boards",
-      .banner_link = "/boards",
+      .canonical_path = PATH_BOARD_list,
+      .banner_link = PATH_BOARD_list,
       .banner_title = "Boards",
     });
     const auto from = req->getQuery("from");
@@ -63,7 +64,7 @@ void define_board_routes(
   // CREATE BOARD
   //////////////////////////////////////////////////////////
 
-  r.get("/create_board", [boards](auto* rsp, auto*, auto& c) {
+  r.get(PATH_BOARD_create, [boards](auto* rsp, auto*, auto& c) {
     auto txn = c.app->db->open_read_txn();
     const auto& login = c.require_login(txn);
     if (!boards->can_create_board(login)) {
@@ -71,7 +72,7 @@ void define_board_routes(
     }
     rsp->writeHeader("Content-Type", TYPE_HTML);
     html_site_header(c, {
-      .canonical_path = "/create_board",
+      .canonical_path = PATH_BOARD_create,
       .banner_title = "Create Board",
     });
     c.write("<main>");
@@ -81,7 +82,7 @@ void define_board_routes(
     c.finish_write();
   });
 
-  r.post_form("/create_board", [boards](auto* rsp, auto _c, auto body) -> Coro {
+  r.post_form(PATH_BOARD_create, [boards](auto* rsp, auto _c, auto body) -> Coro {
     auto& c = co_await _c;
     auto user = c.require_login();
     auto form = co_await body;
@@ -100,13 +101,13 @@ void define_board_routes(
     txn.commit();
     rsp->writeStatus(http_status(303));
     c.write_cookie();
-    rsp->writeHeader("Location", format("/b/{}"_cf, name))->end();
+    rsp->writeHeader("Location", format(PATH_BOARD_board("{}") ""_cf, name))->end();
   });
 
   // BOARD SETTINGS
   //////////////////////////////////////////////////////////
 
-  r.get("/b/:name/settings", [boards](auto* rsp, auto* req, auto& c) {
+  r.get(PATH_BOARD_settings(":name"), [boards](auto* rsp, auto* req, auto& c) {
     auto txn = c.app->db->open_read_txn();
     const auto board_id = board_name_param(txn, req, 0);
     const auto login = c.require_login(txn);
@@ -128,7 +129,7 @@ void define_board_routes(
   // BOARD ACTIONS
   //////////////////////////////////////////////////////////
 
-  r.post_form("/b/:name/subscribe", [boards](auto* rsp, auto _c, auto body) -> Coro {
+  r.post_form(PATH_BOARD_subscribe(":name"), [boards](auto* rsp, auto _c, auto body) -> Coro {
     auto& c = co_await _c;
     const auto [name, board_id, referer] = co_await _c.with_request([&](auto* req) {
       auto txn = c.app->db->open_read_txn();

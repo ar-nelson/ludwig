@@ -26,10 +26,10 @@ void html_first_run_setup_form(
   r.write(
     HTML_CHECKBOX("cws_enabled", "Allow posts with content warnings (also known as NSFW posts)?", R"( checked autocomplete="off")")
     HTML_CHECKBOX("not_board_creation_admin_only", "Allow non-admin users to create boards?", R"( checked autocomplete="off")")
-    HTML_CHECKBOX("registation_enabled", "Allow new users to register?", R"( checked autocomplete="off")")
-    HTML_CHECKBOX("registation_application_required", "Require admin approval for registration?", R"( checked autocomplete="off")")
+    HTML_CHECKBOX("registration_enabled", "Allow new users to register?", R"( checked autocomplete="off")")
+    HTML_CHECKBOX("registration_application_required", "Require admin approval for registration?", R"( checked autocomplete="off")")
     HTML_TEXTAREA("application_question", "Application question", "", "Why do you want to join?")
-    HTML_CHECKBOX("registation_invite_required", "Require invite codes for registration?", R"( autocomplete="off")")
+    HTML_CHECKBOX("registration_invite_required", "Require invite codes for registration?", R"( autocomplete="off")")
     HTML_CHECKBOX("not_invite_admin_only", "Allow non-admin users to generate invite codes?", R"( autocomplete="off")")
     R"(<details><summary>Advanced</summary><fieldset><legend class="a11y">Advanced</legend><blockquote>)"
       HTML_FIELD("post_max_length", "Max post length (bytes)", "number", R"( min="512" value="1048576" autocomplete="off")")

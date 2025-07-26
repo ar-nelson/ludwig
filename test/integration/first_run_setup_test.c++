@@ -7,8 +7,8 @@
   "&voting=2" \
   "&cws_enabled=true" \
   "&not_board_creation_admin_only=true" \
-  "&registation_enabled=true" \
-  "&registation_application_required=true" \
+  "&registration_enabled=true" \
+  "&registration_application_required=true" \
   "&application_question=Who are you" \
   "&post_max_length=100000" \
   "&javascript_enabled=true" \
@@ -96,8 +96,8 @@ SCENARIO_METHOD(IntegrationTest, "first-run setup", "[integration][first_run]") 
             "&voting=2"
             "&cws_enabled=true"
             "&not_board_creation_admin_only=true"
-            "&registation_enabled=true"
-            "&registation_application_required=true"
+            "&registration_enabled=true"
+            "&registration_application_required=true"
             "&application_question=Who are you"
             "&post_max_length=100000"
             "&javascript_enabled=true"

@@ -15,8 +15,9 @@ struct LocalUserUpdate {
   std::optional<std::optional<std::string_view>> display_name, bio,
       avatar_url, banner_url;
   std::optional<bool> bot, open_links_in_new_tab, show_avatars,
-      show_bot_accounts, show_karma, hide_cw_posts, expand_cw_images,
-      expand_cw_posts, javascript_enabled, infinite_scroll_enabled;
+      show_bot_accounts, show_karma, show_images_threads, show_images_comments,
+      hide_cw_posts, expand_cw_images, expand_cw_posts, show_new_post_notifs,
+      show_read_posts, send_notifications_to_email, javascript_enabled, infinite_scroll_enabled;
   std::optional<IsAdmin> admin;
   std::optional<SortType> default_sort_type;
   std::optional<CommentSortType> default_comment_sort_type;
@@ -59,6 +60,11 @@ public:
     uint64_t id,
     std::optional<uint64_t> as_user,
     const LocalUserUpdate& update
+  ) -> void;
+  auto delete_local_user(
+    WriteTxn& txn,
+    uint64_t id,
+    std::optional<uint64_t> as_user
   ) -> void;
   auto hide_user(
     WriteTxn& txn,

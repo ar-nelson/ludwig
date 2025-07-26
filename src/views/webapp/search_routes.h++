@@ -14,7 +14,7 @@ void define_search_routes(
 ) {
   using Coro = RouterCoroutine<Context<SSL>>;
 
-  r.get_async("/search", [search](auto* rsp, auto _c) -> Coro {
+  r.get_async(PATH_search, [search](auto* rsp, auto _c) -> Coro {
     auto query = co_await _c.with_request([](auto* req) {
       return SearchQuery{
         .query = req->getQuery("search"),
@@ -31,7 +31,7 @@ void define_search_routes(
     auto results = co_await search->search(query, c.login);
     rsp->writeHeader("Content-Type", TYPE_HTML);
     html_site_header(c, {
-      .canonical_path = "/search",
+      .canonical_path = PATH_search,
       .banner_title = "Search",
     });
     c.write("<div>");

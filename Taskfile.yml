@@ -1,4 +1,4 @@
-version: '3'
+version: "3"
 
 tasks:
   setup:
@@ -6,7 +6,7 @@ tasks:
     sources:
       - meson.build
       - src/meson.build
-      - src/models/meson.build
+      - src/fbs/meson.build
       - src/static/meson.build
       - test/meson.build
       - vendor/meson.build
@@ -20,7 +20,7 @@ tasks:
     sources:
       - meson.build
       - src/meson.build
-      - src/models/meson.build
+      - src/fbs/meson.build
       - src/static/meson.build
       - vendor/meson.build
       - subprojects/meson.build
@@ -87,11 +87,11 @@ tasks:
     deps:
       - build
     sources:
-      - src/models/*.fbs
+      - src/fbs/*.fbs
     cmds:
-      - ./build/subprojects/flatbuffers-*/flatc --ts --gen-all -o ./extras/flatbuffers src/models/ts-models.fbs
+      - ./build/subprojects/flatbuffers-*/flatc --ts --gen-all -o ./extras/flatbuffers src/fbs/ts-models.fbs
       - >
-        find ./extras/flatbuffers -iname '*.ts' -exec sed -i -e "s/\\.js'/.ts'/g" -e "s/from 'flatbuffers'/from 'npm:flatbuffers'/g" {} \;
+          find ./extras/flatbuffers -iname '*.ts' -exec sed -i -e "s/\\.js'/.ts'/g" -e "s/from 'flatbuffers'/from 'npm:flatbuffers'/g" {} \;
     env:
       ASAN_OPTIONS: detect_leaks=0
     generates:

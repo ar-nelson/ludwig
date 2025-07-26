@@ -141,13 +141,14 @@ int main(int argc, char** argv) {
       spdlog::critical("Could not open {}: {}", importfile, strerror(errno));
       return EXIT_FAILURE;
     }
-    try {
+    TRY {
       spdlog::info("Importing database dump from {}", importfile);
       DumpController::import_dump(dbfile, f.get(), file_size, search_engine, map_size);
       spdlog::info("Import complete. You can now start Ludwig without --import.");
       return EXIT_SUCCESS;
-    } catch (const runtime_error& e) {
+    } CATCH (const runtime_error& e) {
       spdlog::critical("Import failed: {}", e.what());
+      LOG_STACK_TRACE;
       return EXIT_FAILURE;
     }
   }
@@ -161,7 +162,7 @@ int main(int argc, char** argv) {
       spdlog::critical("Could not open {}: {}", exportfile, strerror(errno));
       return EXIT_FAILURE;
     }
-    try {
+    TRY {
       spdlog::info("Exporting database dump to {}", exportfile);
       auto txn = db->open_read_txn();
       for (auto chunk : dump_controller->export_dump(txn)) {
@@ -169,8 +170,9 @@ int main(int argc, char** argv) {
       };
       spdlog::info("Export complete.");
       return EXIT_SUCCESS;
-    } catch (const runtime_error& e) {
+    } CATCH (const runtime_error& e) {
       spdlog::critical("Export failed: {}", e.what());
+      LOG_STACK_TRACE;
       return EXIT_FAILURE;
     }
   }

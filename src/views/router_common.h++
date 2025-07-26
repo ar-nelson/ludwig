@@ -242,10 +242,11 @@ public:
       rsp->end();
       return true;
     }
-    try {
+    TRY {
       error_response(e, rsp);
-    } catch (...) {
+    } CATCH (...) {
       spdlog::critical("Route {} threw exception in error page callback; response has been truncated. This is a bug.", url);
+      LOG_STACK_TRACE;
       rsp->end();
     }
     return true;

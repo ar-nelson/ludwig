@@ -11,7 +11,7 @@ void html_datetime(ResponseWriter& r, Timestamp timestamp) noexcept {
 
 void html_user_avatar(ResponseWriter& r, const User& user, Login login) noexcept {
   if (user.avatar_url() && (!login || login->local_user().show_avatars())) {
-    r.write_fmt(R"(<img aria-hidden="true" class="avatar" loading="lazy" src="/media/user/{}/avatar.webp">)"_cf,
+    r.write_fmt(R"(<img aria-hidden="true" class="avatar" loading="lazy" src=")" PATH_MEDIA_user_avatar("{}") R"(">)"_cf,
       Escape{user.name()}
     );
   } else {
@@ -20,7 +20,7 @@ void html_user_avatar(ResponseWriter& r, const User& user, Login login) noexcept
 }
 
 void html_user_link(ResponseWriter& r, const User& user, bool user_is_admin, Login login, uint64_t board_id) noexcept {
-  r.write_fmt(R"(<a class="user-link" href="/u/{}">)"_cf, Escape(user.name()));
+  r.write_fmt(R"(<a class="user-link" href=")" PATH_USER_user("{}") R"(">)"_cf, Escape(user.name()));
   html_user_avatar(r, user, login);
   html_qualified_display_name(r, &user);
   r.write("</a>");
@@ -30,7 +30,7 @@ void html_user_link(ResponseWriter& r, const User& user, bool user_is_admin, Log
 
 void html_board_icon(ResponseWriter& r, const Board& board) noexcept {
   if (board.icon_url()) {
-    r.write_fmt(R"(<img aria-hidden="true" class="avatar" loading="lazy" src="/media/board/{}/icon.webp">)"_cf,
+    r.write_fmt(R"(<img aria-hidden="true" class="avatar" loading="lazy" src=")" PATH_MEDIA_board_icon("{}") R"(">)"_cf,
       Escape(board.name())
     );
   } else {
@@ -39,7 +39,7 @@ void html_board_icon(ResponseWriter& r, const Board& board) noexcept {
 }
 
 void html_board_link(ResponseWriter& r, const Board& board) noexcept {
-  r.write_fmt(R"(<a class="board-link" href="/b/{}">)"_cf, Escape(board.name()));
+  r.write_fmt(R"(<a class="board-link" href=")" PATH_BOARD_board("{}") R"(">)"_cf, Escape(board.name()));
   html_board_icon(r, board);
   html_qualified_display_name(r, &board);
   r.write("</a>");

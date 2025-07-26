@@ -329,6 +329,21 @@ auto SessionController::change_password(
   txn.set_local_user(user_id, fbb.GetBufferSpan());
 }
 
+auto SessionController::delete_account(
+  WriteTxn& txn,
+  uint64_t user_id,
+  SecretString&& password
+) -> void {
+  const auto user = LocalUserDetail::get_login(txn, user_id);
+  uint8_t hash[32];
+  UserController::hash_password(std::move(password), user.local_user().password_salt()->bytes()->Data(), hash);
+  // Note that this returns 0 on success, 1 on failure!
+  if (CRYPTO_memcmp(hash, user.local_user().password_hash()->bytes()->Data(), 32)) {
+    throw ApiError("Invalid password", 400);
+  }
+  user_controller->delete_local_user(txn, user_id, user_id);
+}
+
 auto SessionController::create_site_invite(WriteTxn& txn, optional<uint64_t> as_user) -> uint64_t {
   using namespace std::chrono;
   if (const auto user = LocalUserDetail::get_login(txn, as_user)) {

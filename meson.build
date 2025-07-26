@@ -19,6 +19,7 @@ cmake_opts.add_cmake_defines(
     'BUILD_STATIC_LIBS': 'ON',
     'BUILD_TESTS': 'OFF',
     'SPM_ENABLE_SHARED': 'OFF',
+    'CPPTRACE_USE_EXTERNAL_ZSTD': 'ON',
   },
 )
 cmake_opts.set_install(false)
@@ -136,6 +137,9 @@ endif
 
 asio_dep = dependency('asio', static: true)
 catch2_dep = dependency('catch2-with-main')
+cpptrace = cmake.subproject('cpptrace', options: cmake_opts)
+cpptrace_dep = cpptrace.dependency('cpptrace-lib')
+dwarf_dep = cpptrace.dependency('dwarf')
 flatbuffers_dep = dependency('flatbuffers', static: true)
 flatc = find_program('flatc')
 fmt_dep = dependency('fmt', static: true)
@@ -169,6 +173,8 @@ libs = [
   expat_dep,
 
   asio_dep,
+  dwarf_dep,
+  cpptrace_dep,
   flatbuffers_dep,
   fmt_dep,
   libvips_dep,
@@ -196,5 +202,5 @@ executable(
   fbs_gen,
   static_gen,
   dependencies: libs,
-  include_directories: inc_dir
+  include_directories: inc_dir,
 )

@@ -1,3 +1,4 @@
+#include "views/webapp/paths.h++"
 #include "html_sidebar.h++"
 #include "html_login_forms.h++"
 #include "html_rich_text.h++"
@@ -11,7 +12,7 @@ namespace Ludwig {
 
 void html_subscribe_button(ResponseWriter& r, string_view name, bool is_unsubscribe) noexcept {
   r.write_fmt(
-    R"(<form method="post" action="/b/{0}/subscribe" hx-post="/b/{0}/subscribe" hx-swap="outerHTML">{1})"
+    R"(<form method="post" action=")" PATH_BOARD_subscribe("{0}") R"(" hx-post=")" PATH_BOARD_subscribe("{0}") R"(" hx-swap="outerHTML">{1})"
     R"(<button type="submit" class="big-button">{2}</button>)"
     "</form>"_cf,
     Escape{name},
@@ -30,7 +31,7 @@ void html_sidebar(
     R"(<label id="sidebar-toggle-label" for="sidebar-toggle">)" ICON("menu") R"( Menu</label>)"
     R"(<input type="checkbox" name="sidebar-toggle" id="sidebar-toggle" class="a11y">)"
     R"(<aside id="sidebar"><section id="search-section"><h2>Search</h2>)"
-    R"(<form action="/search" id="search-form">)"
+    R"(<form action=")" PATH_search R"(" id="search-form">)"
     R"(<label for="search"><span class="a11y">Search</span>)"
     R"(<input type="search" name="search" id="search" placeholder="Search"><input type="submit" value="Search"></label>)"
   );
@@ -55,7 +56,9 @@ void html_sidebar(
   if (!login) {
     r.write(R"(<section id="login-section"><h2>Login</h2>)");
     html_sidebar_login_form(r);
-    if (site->registration_enabled) r.write(R"(<a href="/register" class="big-button">Register</a>)");
+    if (site->registration_enabled) {
+      r.write(R"(<a href=")" PATH_register R"(" class="big-button">Register</a>)");
+    }
     r.write("</section>");
   } else {
     visit(overload{
@@ -63,7 +66,7 @@ void html_sidebar(
         if (SiteController::can_create_board(login, *site)) {
           r.write(
             R"(<section id="actions-section"><h2>Actions</h2>)"
-            R"(<a class="big-button" href="/create_board">Create a new board</a>)"
+            R"(<a class="big-button" href=")" PATH_BOARD_create R"(">Create a new board</a>)"
             R"(</section>)"
           );
         }
@@ -73,14 +76,14 @@ void html_sidebar(
         html_subscribe_button(r, board.board().name()->string_view(), board.subscribed);
         if (board.can_create_thread(login)) {
           r.write_fmt(
-            R"(<a class="big-button" href="/b/{0}/create_thread">Submit a new link</a>)"
-            R"(<a class="big-button" href="/b/{0}/create_thread?text=1">Submit a new text post</a>)"_cf,
+            R"(<a class="big-button" href=")" PATH_THREAD_create("{0}") R"(">Submit a new link</a>)"
+            R"(<a class="big-button" href=")" PATH_THREAD_create("{0}") R"(?text=1">Submit a new text post</a>)"_cf,
             Escape(board.board().name())
           );
         }
         if (board.can_change_settings(login)) {
           r.write_fmt(
-            R"(<a class="big-button" href="/b/{0}/settings">Board settings</a>)"_cf,
+            R"(<a class="big-button" href=")" PATH_BOARD_settings("{}") R"(">Board settings</a>)"_cf,
             Escape(board.board().name())
           );
         }

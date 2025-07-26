@@ -1,5 +1,6 @@
 #include "html_site_admin_forms.h++"
 #include "html_form_widgets.h++"
+#include "html_post_widgets.h++"
 
 using std::optional, std::string_view, fmt::operator""_cf; // NOLINT
 
@@ -45,10 +46,10 @@ void html_site_admin_form(
   r.write_fmt(
     HTML_CHECKBOX("cws_enabled", "Allow posts with content warnings (also known as NSFW posts)?", R"( {} autocomplete="off")")
     HTML_CHECKBOX("not_board_creation_admin_only", "Allow non-admin users to create boards?", R"( {} autocomplete="off")")
-    HTML_CHECKBOX("registation_enabled", "Allow new users to register?", R"( {} autocomplete="off")")
-    HTML_CHECKBOX("registation_application_required", "Require admin approval for registration?", R"( {} autocomplete="off")")
+    HTML_CHECKBOX("registration_enabled", "Allow new users to register?", R"( {} autocomplete="off")")
+    HTML_CHECKBOX("registration_application_required", "Require admin approval for registration?", R"( {} autocomplete="off")")
     HTML_TEXTAREA("application_question", "Application question", "", "{}")
-    HTML_CHECKBOX("registation_invite_required", "Require invite codes for registration?", R"( {} autocomplete="off")")
+    HTML_CHECKBOX("registration_invite_required", "Require invite codes for registration?", R"( {} autocomplete="off")")
     HTML_CHECKBOX("not_invite_admin_only", "Allow non-admin users to generate invite codes?", R"( {} autocomplete="off")")
     R"(<details><summary>Advanced</summary><fieldset><legend class="a11y">Advanced</legend>)"
       HTML_FIELD("post_max_length", "Max post length (bytes)", "number", R"( min="512" value="{:d}" autocomplete="off")")
@@ -104,15 +105,63 @@ void html_site_admin_applications_list(
       r.write(R"(<span class="a11y">Approved</span>)" ICON("check") "</tr>");
     } else {
       r.write_fmt(
-        R"(<form method="post"><button type="submit" formaction="/site_admin/applications/approve/{0:x}">)"
+        R"(<form method="post"><button type="submit" formaction="/site_admin/applications/{0:x}/approve">)"
         R"(<span class="a11y">Approve</span>)" ICON("check") "</button>"
-        R"(&nbsp;<button type="submit" formaction="/site_admin/applications/reject/{0:x}">)"
+        R"(&nbsp;<button type="submit" formaction="/site_admin/applications/{0:x}/reject">)"
         R"(<span class="a11y">Reject</span>)" ICON("x") "</button></form></tr>"_cf,
         detail.id
       );
     }
   }
   if (!any_entries) r.write(R"(<tr><td colspan="7">There's nothing here.</tr>)");
+  // TODO: Pagination
+  r.write("</tbody></table></div>");
+}
+
+void html_admin_invites_list(
+  ResponseWriter& r,
+  SessionController& sessions,
+  ReadTxn& txn,
+  Login login,
+  string_view cursor_str,
+  optional<string_view> error
+) noexcept {
+  r.write_fmt(
+    R"(<div class="table-page"><h2>Invite Codes</h2>{})"
+    R"(<form action=")" PATH_ADMIN_new_invite R"(" method="post"><input type="submit" value="Generate New Invite Code"></form><table>)"
+    R"(<thead><th>Code<th>Created<th>Expires<th>Accepted<th>Acceptor</thead>)"
+    R"(<tbody id="invite-table">)"_cf,
+    error_banner(error)
+  );
+  PageCursor cursor(cursor_str);
+  bool any_entries = false;
+  for (auto [id, invite] : sessions.list_invites_from_user(txn, cursor, login->id)) {
+    any_entries = true;
+    r.write_fmt(
+      R"(<tr><td>{}<td>{:%D}<td>)"_cf,
+      invite_id_to_code(id),
+      uint_to_timestamp(invite.created_at())
+    );
+    if (auto to = invite.to()) {
+      r.write_fmt(
+        R"(N/A<td>{:%D}<td>)"_cf,
+        uint_to_timestamp(*invite.accepted_at())
+      );
+      try {
+        auto u = LocalUserDetail::get(txn, *to, login);
+        html_user_link(r, u.user(), u.local_user().admin(), login);
+        r.write("</tr>");
+      } catch (...) {
+        r.write("[error]</tr>");
+      }
+    } else {
+      r.write_fmt(
+        R"({:%D}<td>N/A<td>N/A</tr>)"_cf,
+        uint_to_timestamp(invite.expires_at())
+      );
+    }
+  }
+  if (!any_entries) r.write(R"(<tr><td colspan="5">There's nothing here.</tr>)");
   // TODO: Pagination
   r.write("</tbody></table></div>");
 }
@@ -135,9 +184,9 @@ auto form_to_site_update(QueryString<string_view> body) -> SiteUpdate {
     .cws_enabled = body.optional_bool("cws_enabled"),
     .require_login_to_view = body.optional_bool("require_login_to_view"),
     .board_creation_admin_only = !body.optional_bool("not_board_creation_admin_only"),
-    .registration_enabled = body.optional_bool("registation_enabled"),
-    .registration_application_required = body.optional_bool("registation_application_required"),
-    .registration_invite_required = body.optional_bool("registation_invite_required"),
+    .registration_enabled = body.optional_bool("registration_enabled"),
+    .registration_application_required = body.optional_bool("registration_application_required"),
+    .registration_invite_required = body.optional_bool("registration_invite_required"),
     .invite_admin_only = !body.optional_bool("not_invite_admin_only")
   };
 }

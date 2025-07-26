@@ -1,3 +1,4 @@
+#include "views/webapp/paths.h++"
 #include "html_thread_forms.h++"
 #include "html_post_widgets.h++"
 #include "html_form_widgets.h++"
@@ -15,7 +16,7 @@ void html_create_thread_form(
   optional<string_view> error
 ) noexcept {
   r.write_fmt(
-    R"(<main><form data-component="Form" class="form form-page" method="post" action="/b/{}/create_thread"><h2>Create Thread</h2>{})"
+    R"(<main><form data-component="Form" class="form form-page" method="post" action=")" PATH_THREAD_create("{}") R"("><h2>Create Thread</h2>{})"
     R"(<p class="thread-info"><span>Posting as )"_cf,
     Escape(board.board().name()), error_banner(error)
   );
@@ -41,7 +42,7 @@ void html_edit_thread_form(
   optional<string_view> error
 ) noexcept {
   r.write_fmt(
-    R"(<main><form data-component="Form" class="form form-page" method="post" action="/thread/{:x}/edit"><h2>Edit Thread</h2>{})"
+    R"(<main><form data-component="Form" class="form form-page" method="post" action=")" PATH_THREAD_edit("{:x}") R"("><h2>Edit Thread</h2>{})"
     R"(<p class="thread-info"><span>Posting as )"_cf,
     thread.id, error_banner(error)
   );

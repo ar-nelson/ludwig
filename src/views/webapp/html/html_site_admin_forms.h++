@@ -32,6 +32,15 @@ void html_site_admin_applications_list(
   std::optional<std::string_view> error = {}
 ) noexcept;
 
+void html_admin_invites_list(
+  ResponseWriter& r,
+  SessionController& sessions,
+  ReadTxn& txn,
+  Login login,
+  std::string_view cursor_str = "",
+  std::optional<std::string_view> error = {}
+) noexcept;
+
 auto form_to_site_update(QueryString<std::string_view> body) -> SiteUpdate;
 
 }

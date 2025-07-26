@@ -110,6 +110,11 @@ public:
     SecretString&& old_password,
     SecretString&& new_password
   ) -> void;
+  auto delete_account(
+    WriteTxn& txn,
+    uint64_t user_id,
+    SecretString&& password
+  ) -> void;
 
   auto list_notifications(
     ReadTxn& txn,

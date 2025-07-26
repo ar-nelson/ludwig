@@ -6,6 +6,7 @@
 #include "models/enums.h++"
 #include "models/site.h++"
 #include "models/null_placeholders.h++"
+#include "views/webapp/paths.h++"
 
 namespace Ludwig {
 
@@ -58,7 +59,7 @@ struct ThreadDetail {
   auto should_show_votes(Login login, const SiteDetail* site) const noexcept -> bool;
   auto should_fetch_card() const noexcept -> bool;
 
-  static constexpr std::string_view noun = "thread";
+  static constexpr std::string_view noun = PATH_THREAD_NOUN;
   static auto get(
     ReadTxn& txn,
     uint64_t thread_id,

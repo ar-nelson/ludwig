@@ -98,28 +98,29 @@ void html_site_header(GenericContext& c, HtmlHeaderOptions opt) noexcept {
     R"(</head><body><script>document.body.classList.add("has-js")</script>)"
     R"(<nav class="topbar"><div class="site-name">🎹 {}</div><ul class="quick-boards">)"
     R"(<li><a href="/">Home</a>)"
-    R"(<li><a href="/local">Local</a>)"
-    R"(<li><a href="/all">All</a>)"
-    R"(<li><a href="/boards">Boards</a>)"
-    R"(<li><a href="/users">Users</a>)"_cf,
+    R"(<li><a href=")" PATH_FEED_local R"(">Local</a>)"
+    R"(<li><a href=")" PATH_FEED_all R"(">All</a>)"
+    R"(<li><a href=")" PATH_BOARD_list R"(">Boards</a>)"
+    R"(<li><a href=")" PATH_USER_list R"(">Users</a>)"_cf,
     Escape{c.site->name}
   );
   if (c.login) {
     c.write_fmt(
       R"(</ul><ul>)"
-      R"(<li id="topbar-user"><a href="/u/{}">{}</a> ({:d}))"
-      R"(<li><a href="/notifications">Notifications ({:d})</a><li><a href="/settings">Settings</a>)"
-      R"({}<li><a href="/logout">Logout</a></ul></nav>)"_cf,
+      R"(<li id="topbar-user"><a href=")" PATH_USER_user("{}") R"(">{}</a> ({:d}))"
+      R"(<li><a href=")" PATH_notifications R"(">Notifications ({:d})</a>)"
+      R"(<li><a href=")" PATH_USER_settings R"(">Settings</a>)"
+      R"({}<li><a href=")" PATH_logout R"(">Logout</a></ul></nav>)"_cf,
       Escape(c.login->user().name()),
       display_name_as_html(c.login->user()),
       c.login->stats().thread_karma() + c.login->stats().comment_karma(),
       c.login->local_user_stats().unread_notification_count(),
-      SiteController::can_change_site_settings(c.login) ? R"(<li><a href="/site_admin">Site admin</a>)" : ""
+      SiteController::can_change_site_settings(c.login) ? R"(<li><a href=")" PATH_ADMIN_admin R"(">Site admin</a>)" : ""
     );
   } else if (c.site->registration_enabled) {
-    c.write(R"(</ul><ul><li><a href="/login">Login</a><li><a href="/register">Register</a></ul></nav>)");
+    c.write(R"(</ul><ul><li><a href=")" PATH_login R"(">Login</a><li><a href=")" PATH_register R"(r">Register</a></ul></nav>)");
   } else {
-    c.write(R"(</ul><ul><li><a href="/login">Login</a></ul></nav>)");
+    c.write(R"(</ul><ul><li><a href=")" PATH_login R"(">Login</a></ul></nav>)");
   }
   if (c.login) {
     if (c.login->user().mod_state() >= ModState::Locked) {

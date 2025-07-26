@@ -1,6 +1,7 @@
 #pragma once
 #include "views/router_common.h++"
 #include "webapp_common.h++"
+#include "views/webapp/paths.h++"
 #include "controllers/post_controller.h++"
 #include "controllers/board_controller.h++"
 #include "controllers/user_controller.h++"
@@ -110,21 +111,21 @@ void define_feed_routes(
     }
   });
 
-  r.get("/all", [feed_route](auto* rsp, auto* req, auto& c) {
+  r.get(PATH_FEED_all, [feed_route](auto* rsp, auto* req, auto& c) {
     feed_route(PostController::FEED_ALL, rsp, req, c);
   });
 
-  r.get("/local", [feed_route](auto* rsp, auto* req, auto& c) {
+  r.get(PATH_FEED_local, [feed_route](auto* rsp, auto* req, auto& c) {
     feed_route(PostController::FEED_LOCAL, rsp, req, c);
   });
 
   r.get("/c/:name", [](auto* rsp, auto* req, auto& c) {
     // Compatibility alias for Lemmy community URLs
     // Needed because some Lemmy apps expect URLs in exactly this format
-    write_redirect_to(rsp, c, format("/b/{}"_cf, req->getParameter(0)));
+    write_redirect_to(rsp, c, format(PATH_BOARD_board("{}") ""_cf, req->getParameter(0)));
   });
 
-  r.get("/b/:name", [boards, posts](auto* rsp, auto* req, auto& c) {
+  r.get(PATH_BOARD_board(":name"), [boards, posts](auto* rsp, auto* req, auto& c) {
     auto txn = c.app->db->open_read_txn();
     c.populate(txn);
     const auto board_id = board_name_param(txn, req, 0);
@@ -174,7 +175,7 @@ void define_feed_routes(
     c.finish_write();
   });
 
-  r.get("/u/:name", [users, posts](auto* rsp, auto* req, auto& c) {
+  r.get(PATH_USER_user(":name"), [users, posts](auto* rsp, auto* req, auto& c) {
     auto txn = c.app->db->open_read_txn();
     c.populate(txn);
     const auto user_id = user_name_param(txn, req, 0);
@@ -194,10 +195,10 @@ void define_feed_routes(
       .banner_link = c.url,
       .banner_title = display_name_as_text(user.user()),
       .banner_image = user.user().banner_url()
-        ? std::optional(format("/media/user/{}/banner.webp"_cf, user.user().name()->string_view()))
+        ? std::optional(format(PATH_MEDIA_user_banner("{}") ""_cf, user.user().name()->string_view()))
         : std::nullopt,
       .card_image = user.user().avatar_url()
-        ? std::optional(format("/media/user/{}/avatar.webp"_cf, user.user().name()->string_view()))
+        ? std::optional(format(PATH_MEDIA_user_avatar("{}") ""_cf, user.user().name()->string_view()))
         : std::nullopt
     });
     if (!c.is_htmx) {

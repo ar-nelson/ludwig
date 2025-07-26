@@ -32,10 +32,10 @@ void serve_static(
 template <bool SSL>
 void define_static_routes(uWS::TemplatedApp<SSL>& app) {
   serve_static(app, "/favicon.ico", "image/vnd.microsoft.icon", twemoji_piano_ico_str());
-  serve_static(app, "/static/default-theme.css", TYPE_CSS, default_theme_min_css_str());
-  serve_static(app, "/static/htmx.min.js", TYPE_JS, htmx_min_js_str());
-  serve_static(app, "/static/ludwig.js", TYPE_JS, ludwig_js_str());
-  serve_static(app, "/static/feather-sprite.svg", TYPE_SVG, feather_sprite_svg_str());
+  serve_static(app, PATH_STATIC_css, TYPE_CSS, default_theme_min_css_str());
+  serve_static(app, PATH_STATIC_js, TYPE_JS, ludwig_js_str());
+  serve_static(app, PATH_STATIC_js_htmx, TYPE_JS, htmx_min_js_str());
+  serve_static(app, PATH_STATIC_icon_sprite, TYPE_SVG, feather_sprite_svg_str());
 }
 
 }

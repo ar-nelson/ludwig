@@ -27,7 +27,7 @@ void html_thread_entry(
       Escape{
         thread.thread().content_url()
           ? thread.thread().content_url()->string_view()
-          : format("/thread/{:x}"_cf, thread.id)
+          : format(PATH_THREAD_thread("{:x}") ""_cf, thread.id)
       },
       title
     );
@@ -38,7 +38,7 @@ void html_thread_entry(
   // TODO: Selectively show CW'd images, maybe use blurhash
   if (show_images && !cw && thread.link_card().image_url()) {
     r.write_fmt(
-      R"(<div class="thumbnail"><img src="/media/thread/{:x}/thumbnail.webp" aria-hidden="true"></div>)"_cf,
+      R"(<div class="thumbnail"><img src=")" PATH_MEDIA_thread_thumbnail("{:x}") R"(" aria-hidden="true"></div>)"_cf,
       thread.id
     );
   } else {
@@ -68,7 +68,7 @@ void html_thread_entry(
   r.write("</span></div>");
   html_vote_buttons(r, thread, site, login);
   if (context != PostContext::View) {
-    r.write_fmt(R"(<div class="controls"><a id="comment-link-{0:x}" href="/thread/{0:x}#comments">{1:d}{2}</a>)"_cf,
+    r.write_fmt(R"(<div class="controls"><a id="comment-link-{0:x}" href=")" PATH_THREAD_thread("{0:x}") R"(#comments">{1:d}{2}</a>)"_cf,
       thread.id,
       thread.stats().descendant_count(),
       thread.stats().descendant_count() == 1 ? " comment" : " comments"

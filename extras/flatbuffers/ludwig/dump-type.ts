@@ -9,10 +9,12 @@ export enum DumpType {
   LocalBoard = 3,
   Thread = 4,
   Comment = 5,
-  Application = 6,
-  Invite = 7,
-  SettingRecord = 8,
-  UpvoteBatch = 9,
-  DownvoteBatch = 10,
-  SubscriptionBatch = 11
+  Notification = 6,
+  DirectMessage = 7,
+  Application = 8,
+  Invite = 9,
+  SettingRecord = 10,
+  UpvoteBatch = 11,
+  DownvoteBatch = 12,
+  SubscriptionBatch = 13
 }

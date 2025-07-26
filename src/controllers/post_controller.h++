@@ -145,6 +145,11 @@ public:
     std::optional<uint64_t> as_user,
     const ThreadUpdate& update
   ) -> void;
+  auto delete_thread(
+    WriteTxn& txn,
+    uint64_t id,
+    std::optional<uint64_t> as_user
+  ) -> void;
   auto create_comment(
     WriteTxn& txn,
     uint64_t author,
@@ -169,6 +174,11 @@ public:
     uint64_t id,
     std::optional<uint64_t> as_user,
     const CommentUpdate& update
+  ) -> void;
+  auto delete_comment(
+    WriteTxn& txn,
+    uint64_t id,
+    std::optional<uint64_t> as_user
   ) -> void;
   auto vote(WriteTxn& txn, uint64_t user_id, uint64_t post_id, Vote vote) -> void;
 };

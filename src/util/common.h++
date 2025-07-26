@@ -21,6 +21,17 @@
 #include <flatbuffers/string.h>
 #include <ada.h>
 
+#ifdef LUDWIG_DEBUG
+#  include <cpptrace/from_current.hpp>
+#  define TRY CPPTRACE_TRY
+#  define CATCH CPPTRACE_CATCH
+#  define LOG_STACK_TRACE spdlog::critical("{}", cpptrace::from_current_exception().to_string())
+#else
+#  define TRY try
+#  define CATCH catch
+#  define LOG_STACK_TRACE
+#endif
+
 namespace Ludwig {
 
 constexpr std::string_view VERSION = "0.0.1";

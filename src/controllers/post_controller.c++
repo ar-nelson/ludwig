@@ -813,6 +813,19 @@ auto PostController::update_thread(
   txn.queue_event(event_bus, Event::ThreadUpdate, id);
 }
 
+auto PostController::delete_thread(
+  WriteTxn& txn,
+  uint64_t id,
+  std::optional<uint64_t> as_user
+) -> void {
+  const auto login = LocalUserDetail::get_login(txn, as_user);
+  const auto detail = ThreadDetail::get(txn, id, login);
+  if (login && !detail.can_delete(login)) {
+    throw ApiError("User does not have permission to delete this thread", 403);
+  }
+  txn.delete_thread(id);
+}
+
 auto PostController::create_comment(
   WriteTxn& txn,
   uint64_t author,
@@ -962,6 +975,19 @@ auto PostController::update_comment(
   }));
   txn.set_comment(id, fbb.GetBufferSpan());
   txn.queue_event(event_bus, Event::CommentUpdate, id);
+}
+
+auto PostController::delete_comment(
+  WriteTxn& txn,
+  uint64_t id,
+  std::optional<uint64_t> as_user
+) -> void {
+  const auto login = LocalUserDetail::get_login(txn, as_user);
+  const auto detail = CommentDetail::get(txn, id, login);
+  if (login && !detail.can_delete(login)) {
+    throw ApiError("User does not have permission to delete this comment", 403);
+  }
+  txn.delete_comment(id);
 }
 
 auto PostController::vote(

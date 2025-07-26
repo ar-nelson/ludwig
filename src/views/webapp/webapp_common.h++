@@ -2,6 +2,7 @@
 #include "fmt/compile.h"
 #include "uWebSockets/HttpParser.h"
 #include "views/router_common.h++"
+#include "views/webapp/paths.h++"
 #include "views/webapp/html/html_common.h++"
 #include "util/rate_limiter.h++"
 #include "controllers/session_controller.h++"
@@ -25,7 +26,7 @@ struct GenericContext : public ResponseWriter {
   static const std::regex cookie_regex;
 
   std::chrono::steady_clock::time_point start;
-  std::optional<uint64_t> logged_in_user_id;
+  std::optional<uint64_t> logged_in_user_id, session_id;
   std::optional<std::string> session_cookie;
   std::string ip;
   bool is_htmx;
@@ -95,19 +96,20 @@ struct Context : public RequestContext<SSL, std::shared_ptr<WebappState>>, publi
     session_cookie = cookie;
     site = app->site_controller->site_detail();
     if (!new_session) {
-      if (site->require_login_to_view && this->url != "/login") {
+      if (site->require_login_to_view && this->url != PATH_login) {
         die(401, "Login is required to view this page");
       }
-      if (!site->setup_done && this->url != "/login") {
+      if (!site->setup_done && this->url != PATH_login) {
         die(401, "First-run setup is not complete. Log in as an admin user to complete site setup. If no admin user exists, check console output for a randomly-generated password.");
       }
     } else if (!site->setup_done) {
-      if (this->url != "/" && this->url != "/login" && this->url != "/logout" && this->url != "/site_admin/first_run_setup") {
+      if (this->url != "/" && this->url !=  PATH_login && this->url != PATH_logout && this->url != PATH_ADMIN_first_run_setup) {
         die(403, "First-run setup is not complete. This page is not yet accessible.");
       }
     }
 
     logged_in_user_id = new_session.transform(λx(x.user_id));
+    session_id = new_session.transform(λx(x.session_id));
   }
 
   void error_response(const ApiError& e, Response rsp) noexcept override;
@@ -137,7 +139,7 @@ void Context<SSL>::error_response(const ApiError& e, Response rsp) noexcept {
     if (this->method == "get" && e.http_status == 401) {
       rsp->writeStatus(http_status(303))
         ->writeHeader("Set-Cookie", COOKIE_NAME "=deleted; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT")
-        ->writeHeader("Location", "/login")
+        ->writeHeader("Location", PATH_login)
         ->end();
       return;
     } else if (app) {

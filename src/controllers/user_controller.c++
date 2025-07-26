@@ -194,6 +194,19 @@ auto UserController::update_local_user(
   }
 }
 
+auto UserController::delete_local_user(
+  WriteTxn& txn,
+  uint64_t id,
+  optional<uint64_t> as_user
+) -> void {
+  const auto login = LocalUserDetail::get_login(txn, as_user);
+  const auto detail = LocalUserDetail::get(txn, id, login);
+  if (login && !detail.can_change_settings(login)) {
+    throw ApiError("User does not have permission to delete this user", 403);
+  }
+  txn.delete_user(id);
+}
+
 auto UserController::save_post(
   WriteTxn& txn,
   uint64_t user_id,
