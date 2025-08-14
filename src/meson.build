@@ -1,26 +1,4 @@
 ludwig_sources = files(
-  'util/base64.c++',
-  'util/jwt.c++',
-  'util/rate_limiter.c++',
-  'util/rich_text.c++',
-
-  'db/iter.c++',
-  'db/db.c++',
-
-  'services/asio_event_bus.c++',
-  'services/asio_http_client.c++',
-  'services/lmdb_search_engine.c++',
-  'services/thumbnail_cache.c++',
-
-  'models/board.c++',
-  'models/comment.c++',
-  'models/local_board.c++',
-  'models/local_user.c++',
-  'models/notification.c++',
-  'models/site.c++',
-  'models/thread.c++',
-  'models/user.c++',
-  'models/null_placeholders.c++',
 
   'controllers/board_controller.c++',
   'controllers/dump_controller.c++',
@@ -32,10 +10,31 @@ ludwig_sources = files(
   'controllers/session_controller.c++',
   'controllers/site_controller.c++',
   'controllers/user_controller.c++',
+  'db/db.c++',
+
+  'db/iter.c++',
+
+  'models/board.c++',
+  'models/comment.c++',
+  'models/local_board.c++',
+  'models/local_user.c++',
+  'models/notification.c++',
+  'models/null_placeholders.c++',
+  'models/site.c++',
+  'models/thread.c++',
+  'models/user.c++',
+
+  'services/asio_event_bus.c++',
+  'services/asio_http_client.c++',
+  'services/local_search_engine.c++',
+  'services/thumbnail_cache.c++',
+  'util/base64.c++',
+  'util/jwt.c++',
+  'util/rate_limiter.c++',
+  'util/rich_text.c++',
+  'views/lemmy_api_routes.c++',
 
   'views/media_routes.c++',
-  'views/lemmy_api_routes.c++',
-  'views/webapp/webapp_common.c++',
   'views/webapp/html/html_board_forms.c++',
   'views/webapp/html/html_board_list.c++',
   'views/webapp/html/html_comment_entry.c++',
@@ -54,6 +53,7 @@ ludwig_sources = files(
   'views/webapp/html/html_thread_forms.c++',
   'views/webapp/html/html_user_list.c++',
   'views/webapp/html/html_user_settings_forms.c++',
+  'views/webapp/webapp_common.c++',
 )
 
 subdir('fbs')

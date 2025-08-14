@@ -1,6 +1,3 @@
-[submodule "subprojects/sentencepiece"]
-	path = subprojects/sentencepiece
-	url = https://github.com/google/sentencepiece.git
 [submodule "subprojects/boringssl"]
 	path = subprojects/boringssl
 	url = https://boringssl.googlesource.com/boringssl

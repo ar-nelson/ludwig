@@ -51,7 +51,6 @@ inc_dir = include_directories(
   'src',
   'vendor/include',
   'vendor/include/uSockets',
-  'subprojects/sentencepiece/src',
 )
 
 # Include libvips dependencies statically,
@@ -146,11 +145,10 @@ fmt_dep = dependency('fmt', static: true)
 libvips = subproject('libvips', default_options: libvips_options)
 libvips_dep = libvips.get_variable('libvips_cpp_dep')
 libxml2_dep = dependency('libxml-2.0', static: true)
+lucene_dep = dependency('liblucene++')
 boringssl = cmake.subproject('boringssl', options: cmake_opts)
 crypto_dep = boringssl.dependency('crypto')
 ssl_dep = boringssl.dependency('ssl')
-sentencepiece = cmake.subproject('sentencepiece', options: cmake_opts)
-sentencepiece_dep = sentencepiece.dependency('sentencepiece-static')
 simdjson_dep = dependency('simdjson', static: true)
 subproject(
   'spdlog',
@@ -179,9 +177,9 @@ libs = [
   fmt_dep,
   libvips_dep,
   libxml2_dep,
+  lucene_dep,
   crypto_dep,
   ssl_dep,
-  sentencepiece_dep,
   simdjson_dep,
   spdlog_dep,
   thread_dep,
@@ -204,3 +202,13 @@ executable(
   dependencies: libs,
   include_directories: inc_dir,
 )
+
+# executable(
+#   'search_engine_test',
+#   'src/search_engine_test.c++',
+#   ludwig_sources,
+#   vendor_sources,
+#   fbs_gen,
+#   static_gen,
+#   dependencies: libs,
+#   include_directories: inc_dir,

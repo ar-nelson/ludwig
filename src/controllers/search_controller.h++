@@ -39,36 +39,37 @@ public:
   friend class CompletableSearch;
 };
 
+/**
+ * A CompletableOnce instance that continuously fetches pages of search results, filtering out unviewable entries until
+ * it has enough results to build an entire page.
+ */
 class CompletableSearch : public CompletableOnce<std::vector<SearchResultDetail>>, public std::enable_shared_from_this<CompletableSearch> {
 private:
   SearchController& controller;
   SearchQuery query;
   Login login;
-  std::atomic<std::shared_ptr<CompletableOnce<std::vector<SearchResult>>>> last_page;
+  std::atomic<std::shared_ptr<CompletableOnce<std::vector<SearchResult>>>> current_page;
   std::vector<SearchResultDetail> results;
 
   void on_page(std::vector<SearchResult> page) {
     if (page.empty()) {
-      spdlog::info("Got nothing!");
+      spdlog::debug("Got nothing!");
       complete(std::move(results));
       return;
     }
-    spdlog::info("Got page of {:d} results", page.size());
+    spdlog::debug("Got page of {:d} results", page.size());
     {
       auto txn = controller.db->open_read_txn();
       for (auto& r : page) {
         try {
           if (auto d = search_result_detail(txn, r, login)) {
-            spdlog::info("+ Accepted result");
             results.push_back(*d);
-          } else {
-            spdlog::info("- Rejected result");
           }
         } catch (const std::exception& e) {
           spdlog::warn("Error in search result: {}", e.what());
         }
         if (results.size() >= query.limit) {
-          spdlog::info("Done, got {:d} total results", results.size());
+          spdlog::debug("Done, got {:d} total results", results.size());
           complete(std::move(results));
           return;
         }
@@ -76,23 +77,27 @@ private:
     }
     if (is_canceled()) return;
     query.offset += query.limit;
-    spdlog::info("Repeating with offset {:d}", query.offset);
-    last_page.store(controller.search_engine->search(query), std::memory_order_release);
-    last_page.load(std::memory_order_acquire)->on_complete([self = this->shared_from_this()](auto v){
+    spdlog::debug("Repeating with offset {:d}", query.offset);
+    current_page.store(controller.search_engine->search(query), std::memory_order_release);
+    current_page.load(std::memory_order_acquire)->on_complete([self = this->shared_from_this()](auto v){
       self->on_page(v);
     });
   }
 public:
   CompletableSearch(SearchController& controller, SearchQuery query, Login login) :
-    controller(controller), query(query), login(login), last_page(controller.search_engine->search(query)) {
-    last_page.load(std::memory_order_acquire)->on_complete([self = this->shared_from_this()](auto v){
+    controller(controller), query(query), login(login), current_page(controller.search_engine->search(query)) {}
+
+  // Annoyingly, this must be called separately from the constructor because shared_from_this() is not available yet in the constructor.
+  // At least it's only used in one place, so there's no need to remember this in more places...
+  void init() {
+    current_page.load(std::memory_order_acquire)->on_complete([self = this->shared_from_this()](auto v){
       self->on_page(v);
     });
   }
 
   void cancel() noexcept override {
     CompletableOnce<std::vector<SearchResultDetail>>::cancel();
-    last_page.load(std::memory_order_acquire)->cancel();
+    current_page.load(std::memory_order_acquire)->cancel();
   }
 };
 

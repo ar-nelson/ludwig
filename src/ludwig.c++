@@ -5,7 +5,7 @@
 #include "db/db.h++"
 #include "services/asio_http_client.h++"
 #include "services/asio_event_bus.h++"
-#include "services/lmdb_search_engine.h++"
+#include "services/local_search_engine.h++"
 #include "controllers/board_controller.h++"
 #include "controllers/dump_controller.h++"
 #include "controllers/first_run_controller.h++"
@@ -26,7 +26,7 @@
 #include <csignal>
 
 using namespace Ludwig;
-using std::lock_guard, std::make_shared, std::mutex, std::optional, std::pair,
+using std::lock_guard, std::make_shared, std::mutex, std::optional,
     std::runtime_error, std::shared_ptr, std::stoull, std::string, std::thread,
     std::unique_ptr, std::vector;
 
@@ -65,8 +65,8 @@ int main(int argc, char** argv) {
     .set_default("ludwig.mdb");
   parser.add_option("--search")
     .dest("search")
-    .help(R"(search provider, can be "none" or "lmdb:filename.mdb" (default = lmdb:search.mdb))")
-    .set_default("lmdb:search.mdb");
+    .help(R"(search provider, can be "none" or "local:directory" (default = local:ludwig.search))")
+    .set_default("local:ludwig.search");
   parser.add_option("--import")
     .dest("import")
     .type("FILE.zst")
@@ -115,11 +115,11 @@ int main(int argc, char** argv) {
   spdlog::set_level(spdlog::level::from_str(log_level));
 
   shared_ptr<SearchEngine> search_engine = nullptr;
-  if (options["search"].starts_with("lmdb:")) {
-    const auto filename = options["search"].substr(5);
-    search_engine = make_shared<LmdbSearchEngine>(filename, map_size);
+  if (options["search"].starts_with("local:")) {
+    const auto filename = options["search"].substr(6);
+    search_engine = make_shared<LocalSearchEngine>(filename);
   } else if (options["search"] != "none") {
-    spdlog::critical(R"(Invalid --search option: {} (must be "none" or "lmdb:filename.mdb"))", options["search"]);
+    spdlog::critical(R"(Invalid --search option: {} (must be "none" or "local:directory"))", options["search"]);
     return EXIT_FAILURE;
   }
 

@@ -7,4 +7,5 @@ build.*/
 *.mdb-lock
 *.dbdump
 *.dbdump.zst
+*.search/
 core

@@ -508,7 +508,7 @@ ol.thread-list, ol.comment-list, ol.board-list, ol.user-list {
   padding: 0;
 }
 
-.thread-list > li, .comment-list > li, .board-list > li, .user-list > li {
+.thread-list > li, .comment-list > li, .board-list > li, .user-list > li, .search-list > li {
   list-style-type: none;
   margin: 0;
   padding: 0;

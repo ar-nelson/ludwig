@@ -1,6 +1,6 @@
 #include "search_controller.h++"
 
-using std::exception, std::nullopt, std::optional, std::shared_ptr;
+using std::exception, std::nullopt, std::optional, std::runtime_error, std::shared_ptr;
 using namespace std::placeholders;
 
 namespace Ludwig {
@@ -109,38 +109,56 @@ auto SearchController::event_handler(Event event, uint64_t subject_id) noexcept 
 auto SearchController::index_all() -> void {
   auto txn = db->open_read_txn();
   for (const auto user : txn.list_users_old()) {
-    try {
+    TRY {
       search_engine->index(user, txn.get_user(user).value());
-    } catch (const exception& e) {
+    } CATCH (const exception& e) {
       spdlog::warn("Error adding user {:x} to search index: {}", user, e.what());
+#     ifdef LUDWIG_DEBUG
+        LOG_STACK_TRACE;
+        throw runtime_error("Aborting index due to error");
+#     endif
     }
   }
   for (const auto board : txn.list_boards_old()) {
-    try {
+    TRY {
       search_engine->index(board, txn.get_board(board).value());
-    } catch (const exception& e) {
+    } CATCH (const exception& e) {
       spdlog::warn("Error adding board {:x} to search index: {}", board, e.what());
+#     ifdef LUDWIG_DEBUG
+        LOG_STACK_TRACE;
+        throw runtime_error("Aborting index due to error");
+#     endif
     }
   }
   for (const auto thread : txn.list_threads_old()) {
-    try {
+    TRY {
       search_engine->index(thread, txn.get_thread(thread).value());
-    } catch (const exception& e) {
+    } CATCH (const exception& e) {
       spdlog::warn("Error adding thread {:x} to search index: {}", thread, e.what());
+#     ifdef LUDWIG_DEBUG
+        LOG_STACK_TRACE;
+        throw runtime_error("Aborting index due to error");
+#     endif
     }
   }
   for (const auto comment : txn.list_comments_old()) {
-    try {
+    TRY {
       search_engine->index(comment, txn.get_comment(comment).value());
-    } catch (const exception& e) {
+    } CATCH (const exception& e) {
       spdlog::warn("Error adding comment {:x} to search index: {}", comment, e.what());
+#     ifdef LUDWIG_DEBUG
+        LOG_STACK_TRACE;
+        throw runtime_error("Aborting index due to error");
+#     endif
     }
   }
 }
 
 auto SearchController::search(SearchQuery query, Login login) -> std::shared_ptr<CompletableSearch> {
   if (!search_engine) throw ApiError("Search is not enabled on this server", 403);
-  return std::make_shared<CompletableSearch>(*this, query, login);
+  auto result = std::make_shared<CompletableSearch>(*this, query, login);
+  result->init();
+  return result;
 }
 
 }
