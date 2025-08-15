@@ -2,67 +2,29 @@
 #include "services/http_client.h++"
 #include <concurrent_lru_cache.h>
 #include <variant>
-#include <vips/vips8>
-#include <xxhash.h>
 
 namespace Ludwig {
 
-class ImageRef {
-private:
-  VipsArea* area;
-  uint64_t _hash;
+class Thumbnail {
 public: 
-  ImageRef() : area(nullptr), _hash(0) {}
-  ImageRef(VipsBlob* blob) :
-    area(blob ? &blob->area : nullptr),
-    _hash(area ? XXH3_64bits(area->data, area->length) : 0) {}
-  ~ImageRef() {
-    if (area) vips_area_unref(area);
-  }
-  ImageRef(const ImageRef& from) : area(from.area), _hash(from._hash) {
-    if (area) from.area->count++;
-  }
-  ImageRef(ImageRef&& from) : area(from.area), _hash(from._hash) {
-    from.area = nullptr;
-    from._hash = 0;
-  }
-  void operator=(const ImageRef& from) {
-    if (from.area) from.area->count++;
-    if (area) vips_area_unref(area);
-    area = from.area;
-    _hash = from._hash;
-  }
-  void operator=(ImageRef&& from) {
-    if (area) vips_area_unref(area);
-    area = from.area;
-    _hash = from._hash;
-    from.area = nullptr;
-    from._hash = 0;
-  }
-  uint64_t hash() const {
-    return _hash;
-  }
-  const void* data() const {
-    return area ? area->data : nullptr;
-  }
-  size_t length() const {
-    return area ? area->length : 0;
-  }
-  operator bool() const {
-    return !!area;
-  }
-  operator std::string_view() const {
-    return {(const char*)data(), length() };
-  }
+  uint8_t* data;
+  size_t length;
+  uint64_t hash;
+  Thumbnail(uint8_t* data, size_t length);
+  ~Thumbnail() { free(data); }
+  Thumbnail(Thumbnail&& from) : data(from.data), length(from.length), hash(from.hash) { from.data = nullptr; }
+  void operator=(Thumbnail&& from) { data = from.data; length = from.length; hash = from.hash; from.data = nullptr; }
+  operator std::string_view() const { return std::string_view((const char*)data, length); }
 };
+
+using ThumbnailRef = std::shared_ptr<Thumbnail>;
 
 class ThumbnailCache {
 public:
-  using Callback = uWS::MoveOnlyFunction<void (ImageRef)>;
   using Dispatcher = std::function<void (uWS::MoveOnlyFunction<void()>)>;
 private:
-  using Promise = std::list<std::shared_ptr<CompletableOnce<ImageRef>>>;
-  using Entry = std::variant<Promise, ImageRef>;
+  using Promise = std::list<std::shared_ptr<CompletableOnce<ThumbnailRef>>>;
+  using Entry = std::variant<Promise, ThumbnailRef>;
   auto fetch_thumbnail(std::string url, Entry& entry_cell) -> Entry&;
   tbb::concurrent_lru_cache<std::string, Entry, Entry(*)(const std::string&)> cache;
   std::shared_ptr<HttpClient> http_client;
@@ -82,14 +44,14 @@ public:
     uint16_t thumbnail_size,
     Dispatcher dispatcher = [](auto f) { f(); }
   ) : ThumbnailCache(http_client, cache_size, thumbnail_size, thumbnail_size, dispatcher) {}
-  auto thumbnail(std::string url) -> std::shared_ptr<CompletableOnce<ImageRef>>;
+  auto thumbnail(std::string url) -> std::shared_ptr<CompletableOnce<ThumbnailRef>>;
   auto set_thumbnail(std::string url, std::string_view mimetype, std::string_view data) -> bool;
   static auto generate_thumbnail(
     std::optional<std::string_view> mimetype,
     std::string_view data,
     uint16_t width,
     uint16_t height = 0
-  ) -> ImageRef;
+  ) noexcept -> ThumbnailRef;
 };
 
 }

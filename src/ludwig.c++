@@ -1,5 +1,3 @@
-#include "glib.h"
-#include "spdlog/common.h"
 #include "util/common.h++"
 #include "util/rich_text.h++"
 #include "db/db.h++"
@@ -19,7 +17,6 @@
 #include "views/webapp/routes.h++"
 #include "views/media_routes.h++"
 #include "views/lemmy_api_routes.h++"
-#include "vips/vips.h"
 #include <uWebSockets/App.h>
 #include <asio.hpp>
 #include <optparse.h>
@@ -225,11 +222,6 @@ int main(int argc, char** argv) {
     }
   }
 
-  if (VIPS_INIT(argv[0])) {
-    vips_error_exit(nullptr);
-  }
-  g_log_set_handler("VIPS", G_LOG_LEVEL_MASK, glib_log_handler, nullptr);
-
   AsioThreadPool pool(threads);
   auto rate_limiter = make_shared<KeyedRateLimiter>(rate_limit / 300.0, rate_limit);
   auto http_client = make_shared<AsioHttpClient>(pool.io, 1000,
@@ -291,7 +283,6 @@ int main(int argc, char** argv) {
   run();
   pool.stop();
   for (auto& th : running_threads) if (th.joinable()) th.join();
-  vips_shutdown();
 
   if (!on_close.empty()) {
     spdlog::info("Shut down cleanly");

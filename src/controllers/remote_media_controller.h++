@@ -27,11 +27,11 @@ public:
     ThumbnailCache::Dispatcher dispatcher = [](auto f) { f(); }
   );
 
-  auto user_avatar(std::string_view user_name) -> std::shared_ptr<CompletableOnce<ImageRef>>;
-  auto user_banner(std::string_view user_name) -> std::shared_ptr<CompletableOnce<ImageRef>>;
-  auto board_icon(std::string_view board_name) -> std::shared_ptr<CompletableOnce<ImageRef>>;
-  auto board_banner(std::string_view board_name) -> std::shared_ptr<CompletableOnce<ImageRef>>;
-  auto thread_link_card_image(uint64_t thread_id) -> std::shared_ptr<CompletableOnce<ImageRef>>;
+  auto user_avatar(std::string_view user_name) -> std::shared_ptr<CompletableOnce<ThumbnailRef>>;
+  auto user_banner(std::string_view user_name) -> std::shared_ptr<CompletableOnce<ThumbnailRef>>;
+  auto board_icon(std::string_view board_name) -> std::shared_ptr<CompletableOnce<ThumbnailRef>>;
+  auto board_banner(std::string_view board_name) -> std::shared_ptr<CompletableOnce<ThumbnailRef>>;
+  auto thread_link_card_image(uint64_t thread_id) -> std::shared_ptr<CompletableOnce<ThumbnailRef>>;
   auto fetch_link_card_for_thread(uint64_t thread_id) noexcept -> Async<void>;
 };
 

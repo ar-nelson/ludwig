@@ -30,7 +30,24 @@ add_global_arguments(
   '-Wno-gnu-anonymous-struct',
   '-Wno-nested-anon-types',
   '-DLIBUS_USE_OPENSSL=1',
-  '-DXXH_INLINE_ALL=1',
+  '-DWUFFS_CONFIG__MODULES=1',
+  '-DWUFFS_CONFIG__MODULE__ADLER32=1',
+  '-DWUFFS_CONFIG__MODULE__AUX__BASE=1',
+  '-DWUFFS_CONFIG__MODULE__AUX__IMAGE=1',
+  '-DWUFFS_CONFIG__MODULE__AUX__JSON=1',
+  '-DWUFFS_CONFIG__MODULE__BASE=1',
+  '-DWUFFS_CONFIG__MODULE__BMP=1',
+  '-DWUFFS_CONFIG__MODULE__CRC32=1',
+  '-DWUFFS_CONFIG__MODULE__DEFLATE=1',
+  '-DWUFFS_CONFIG__MODULE__GIF=1',
+  '-DWUFFS_CONFIG__MODULE__JPEG=1',
+  '-DWUFFS_CONFIG__MODULE__JSON=1',
+  '-DWUFFS_CONFIG__MODULE__PNG=1',
+  '-DWUFFS_CONFIG__MODULE__QOI=1',
+  '-DWUFFS_CONFIG__MODULE__TARGA=1',
+  '-DWUFFS_CONFIG__MODULE__XXHASH64=1',
+  '-DWUFFS_CONFIG__MODULE__WEBP=1',
+  '-DWUFFS_CONFIG__MODULE__ZLIB=1',
   language: ['c', 'cpp'],
 )
 
@@ -53,86 +70,10 @@ inc_dir = include_directories(
   'vendor/include/uSockets',
 )
 
-# Include libvips dependencies statically,
-# and add them as top-level dependencies,
-# to avoid libvips pulling in shared libs.
 zlib_dep = dependency('zlib', static: true)
-libpng_dep = dependency('libpng', static: true)
-libjpeg_dep = dependency('libjpeg', static: true)
 libwebp_dep = dependency('libwebp', static: true)
 libwebpmux_dep = dependency('libwebpmux', static: true)
 libwebpdemux_dep = dependency('libwebpdemux', static: true)
-libsharpyuv_dep = dependency('libsharpyuv', static: true)
-gio_dep = dependency('gio-2.0', static: true)
-gobject_dep = dependency('gobject-2.0', static: true)
-expat_dep = dependency('expat', static: true)
-
-libvips_options = [
-  'deprecated=false',
-  'examples=false',
-  'cplusplus=true',
-  'doxygen=false',
-  'gtk_doc=false',
-  'modules=disabled',
-  'introspection=disabled',
-  'vapi=false',
-  'cfitsio=disabled',
-  'cgif=disabled',
-  'exif=disabled',
-  'fftw=disabled',
-  'fontconfig=disabled',
-  'archive=disabled',
-  'imagequant=disabled',
-  'jpeg=enabled',
-  'lcms=disabled',
-  'magick=disabled',
-  'matio=disabled',
-  'nifti=disabled',
-  'openexr=disabled',
-  'openjpeg=disabled',
-  'openslide=disabled',
-  'highway=enabled',
-  'orc=disabled',
-  'pangocairo=disabled',
-  'pdfium=disabled',
-  'png=enabled',
-  'quantizr=disabled',
-  'spng=disabled',
-  'tiff=disabled',
-  'webp=enabled',
-  'zlib=enabled',
-  'ppm=false',
-  'analyze=false',
-  'radiance=false',
-]
-
-if get_option('thumbnail_avif')
-  libvips_options += 'heif=enabled'
-  add_global_arguments('-DLUDWIG_THUMBNAIL_AVIF=1', language: 'cpp')
-else
-  libvips_options += 'heif=disabled'
-endif
-
-if get_option('thumbnail_jxl')
-  libvips_options += 'jpeg-xl=enabled'
-  add_global_arguments('-DLUDWIG_THUMBNAIL_JXL=1', language: 'cpp')
-else
-  libvips_options += 'jpeg-xl=disabled'
-endif
-
-if get_option('thumbnail_svg')
-  libvips_options += 'rsvg=enabled'
-  add_global_arguments('-DLUDWIG_THUMBNAIL_SVG=1', language: 'cpp')
-else
-  libvips_options += 'rsvg=disabled'
-endif
-
-if get_option('thumbnail_pdf')
-  libvips_options += 'poppler=enabled'
-  add_global_arguments('-DLUDWIG_THUMBNAIL_PDF=1', language: 'cpp')
-else
-  libvips_options += 'poppler=disabled'
-endif
 
 asio_dep = dependency('asio', static: true)
 catch2_dep = dependency('catch2-with-main')
@@ -142,8 +83,6 @@ dwarf_dep = cpptrace.dependency('dwarf')
 flatbuffers_dep = dependency('flatbuffers', static: true)
 flatc = find_program('flatc')
 fmt_dep = dependency('fmt', static: true)
-libvips = subproject('libvips', default_options: libvips_options)
-libvips_dep = libvips.get_variable('libvips_cpp_dep')
 libxml2_dep = dependency('libxml-2.0', static: true)
 lucene_dep = dependency('liblucene++')
 boringssl = cmake.subproject('boringssl', options: cmake_opts)
@@ -160,22 +99,15 @@ zstd_dep = dependency('libzstd', static: true)
 
 libs = [
   zlib_dep,
-  libpng_dep,
-  libjpeg_dep,
   libwebp_dep,
   libwebpmux_dep,
   libwebpdemux_dep,
-  libsharpyuv_dep,
-  gio_dep,
-  gobject_dep,
-  expat_dep,
 
   asio_dep,
   dwarf_dep,
   cpptrace_dep,
   flatbuffers_dep,
   fmt_dep,
-  libvips_dep,
   libxml2_dep,
   lucene_dep,
   crypto_dep,
@@ -202,13 +134,3 @@ executable(
   dependencies: libs,
   include_directories: inc_dir,
 )
-
-# executable(
-#   'search_engine_test',
-#   'src/search_engine_test.c++',
-#   ludwig_sources,
-#   vendor_sources,
-#   fbs_gen,
-#   static_gen,
-#   dependencies: libs,
-#   include_directories: inc_dir,

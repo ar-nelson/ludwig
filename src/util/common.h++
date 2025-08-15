@@ -10,7 +10,6 @@
 #include <regex>
 #include <string>
 #include <string_view>
-#include <glib.h>
 #include <fmt/core.h>
 #include <fmt/compile.h>
 #include <spdlog/spdlog.h>
@@ -186,24 +185,6 @@ static inline auto invite_id_to_code(uint64_t id) noexcept -> std::string {
   return fmt::format("{:05X}-{:03X}-{:03X}-{:05X}"_cf, id >> 44, (id >> 32) & 0xfff, (id >> 20) & 0xfff, id & 0xfffff);
 }
 
-static inline auto glib_log_level_to_spdlog_level(GLogLevelFlags level) -> spdlog::level::level_enum {
-  if (level & G_LOG_LEVEL_CRITICAL) return spdlog::level::critical;
-  if (level & G_LOG_LEVEL_ERROR) return spdlog::level::err;
-  if (level & G_LOG_LEVEL_WARNING) return spdlog::level::warn;
-  if (level & G_LOG_LEVEL_MESSAGE) return spdlog::level::info;
-  if (level & G_LOG_LEVEL_INFO) return spdlog::level::debug;
-  return spdlog::level::trace;
-}
-
-static inline auto glib_log_handler(
-  const gchar* log_domain,
-  GLogLevelFlags log_level,
-  const gchar* message,
-  gpointer
-) -> void {
-  spdlog::log(glib_log_level_to_spdlog_level(log_level), "{}: {}", log_domain, message);
-}
-
 // Reimplemented here because the version in Flatbuffers is broken (missing const_cast)
 template <typename T>
 const T* get_temporary_pointer(const flatbuffers::FlatBufferBuilder& fbb, flatbuffers::Offset<T> offset) {
@@ -282,6 +263,8 @@ public:
     return state.index() == 0 && std::get<State0>(state) == State0::Canceled;
   }
 };
+
+uint64_t xxhash64(std::string_view data) noexcept;
 
 }
 

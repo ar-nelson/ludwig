@@ -28,47 +28,47 @@ RemoteMediaController::RemoteMediaController(
   assert(xml_ctx != nullptr);
 }
 
-auto RemoteMediaController::user_avatar(string_view user_name) -> std::shared_ptr<CompletableOnce<ImageRef>> {
+auto RemoteMediaController::user_avatar(string_view user_name) -> std::shared_ptr<CompletableOnce<ThumbnailRef>> {
   auto txn = db->open_read_txn();
   const auto user =
     txn.get_user_id_by_name(user_name).and_then([&](auto id){return txn.get_user(id);});
   if (user && user->get().avatar_url()) {
     return small_cache.thumbnail(user->get().avatar_url()->str());
   }
-  return std::make_shared<CompletableOnce<ImageRef>>(ImageRef{});
+  return std::make_shared<CompletableOnce<ThumbnailRef>>(nullptr);
 }
 
-auto RemoteMediaController::user_banner(string_view user_name) -> std::shared_ptr<CompletableOnce<ImageRef>> {
+auto RemoteMediaController::user_banner(string_view user_name) -> std::shared_ptr<CompletableOnce<ThumbnailRef>> {
   auto txn = db->open_read_txn();
   const auto user =
     txn.get_user_id_by_name(user_name).and_then([&](auto id){return txn.get_user(id);});
   if (user && user->get().banner_url()) {
     return banner_cache.thumbnail(user->get().banner_url()->str());
   }
-  return std::make_shared<CompletableOnce<ImageRef>>(ImageRef{});
+  return std::make_shared<CompletableOnce<ThumbnailRef>>(nullptr);
 }
 
-auto RemoteMediaController::board_icon(string_view board_name) -> std::shared_ptr<CompletableOnce<ImageRef>> {
+auto RemoteMediaController::board_icon(string_view board_name) -> std::shared_ptr<CompletableOnce<ThumbnailRef>> {
   auto txn = db->open_read_txn();
   const auto board =
     txn.get_board_id_by_name(board_name).and_then([&](auto id){return txn.get_board(id);});
   if (board && board->get().icon_url()) {
     return small_cache.thumbnail(board->get().icon_url()->str());
   }
-  return std::make_shared<CompletableOnce<ImageRef>>(ImageRef{});
+  return std::make_shared<CompletableOnce<ThumbnailRef>>(nullptr);
 }
 
-auto RemoteMediaController::board_banner(string_view board_name) -> std::shared_ptr<CompletableOnce<ImageRef>> {
+auto RemoteMediaController::board_banner(string_view board_name) -> std::shared_ptr<CompletableOnce<ThumbnailRef>> {
   auto txn = db->open_read_txn();
   const auto board =
     txn.get_board_id_by_name(board_name).and_then([&](auto id){return txn.get_board(id);});
   if (board && board->get().banner_url()) {
     return banner_cache.thumbnail(board->get().banner_url()->str());
   }
-  return std::make_shared<CompletableOnce<ImageRef>>(ImageRef{});
+  return std::make_shared<CompletableOnce<ThumbnailRef>>(nullptr);
 }
 
-auto RemoteMediaController::thread_link_card_image(uint64_t thread_id) -> std::shared_ptr<CompletableOnce<ImageRef>> {
+auto RemoteMediaController::thread_link_card_image(uint64_t thread_id) -> std::shared_ptr<CompletableOnce<ThumbnailRef>> {
   auto txn = db->open_read_txn();
   const auto thread = txn.get_thread(thread_id);
   if (thread && thread->get().content_url()) {
@@ -77,7 +77,7 @@ auto RemoteMediaController::thread_link_card_image(uint64_t thread_id) -> std::s
       return small_cache.thumbnail(card->get().image_url()->str());
     }
   }
-  return std::make_shared<CompletableOnce<ImageRef>>(ImageRef{});
+  return std::make_shared<CompletableOnce<ThumbnailRef>>(nullptr);
 }
 
 static inline auto str_eq(const char* lhs, const xmlChar* rhs) noexcept -> bool {

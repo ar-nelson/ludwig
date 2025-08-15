@@ -5,7 +5,6 @@
 #include "static/htmx.min.js.h++"
 #include "static/ludwig.js.h++"
 #include "static/twemoji-piano.ico.h++"
-#include <xxhash.h>
 
 namespace Ludwig {
 
@@ -17,7 +16,7 @@ void serve_static(
   std::string_view src
 ) noexcept {
   using fmt::operator""_cf;
-  const auto hash = format("\"{:016x}\""_cf, XXH3_64bits(src.data(), src.length()));
+  const auto hash = format("\"{:016x}\""_cf, xxhash64(src));
   app.get(path, [src, mimetype, hash](auto* res, auto* req) {
     if (req->getHeader("if-none-match") == hash) {
       res->writeStatus(http_status(304))->end();

@@ -2,7 +2,6 @@
 #include "views/router_common.h++"
 #include "services/http_client.h++"
 #include <parallel_hashmap/phmap.h>
-#include <glib.h>
 #include <filesystem>
 #include <fstream>
 #include <lmdb.h>
@@ -26,9 +25,6 @@ static inline auto test_root() {
 
 static_block {
   spdlog::set_level(spdlog::level::debug);
-  g_log_set_handler(G_LOG_DOMAIN, G_LOG_LEVEL_MASK, glib_log_handler, nullptr);
-  g_log_set_handler("GLib-GObject", G_LOG_LEVEL_MASK, glib_log_handler, nullptr);
-  g_log_set_handler("VIPS", G_LOG_LEVEL_MASK, glib_log_handler, nullptr);
 }
 
 static inline auto load_file(std::filesystem::path p) -> string {

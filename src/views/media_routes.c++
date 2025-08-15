@@ -10,16 +10,16 @@ template <bool SSL>
 static inline auto write_thumbnail(
   HttpResponse<SSL>* rsp,
   const string& if_none_match,
-  const ImageRef& img
+  const ThumbnailRef img
 ) -> void {
   if (!img) throw ApiError("No thumbnail available", 404);
-  const auto hash_hex = fmt::format(R"("{:016x}")", img.hash());
+  const auto hash_hex = fmt::format(R"("{:016x}")", img->hash);
   if (if_none_match == hash_hex) {
     rsp->writeStatus(http_status(304))->end();
   } else {
     rsp->writeHeader("Content-Type", TYPE_WEBP)
       ->writeHeader("Etag", hash_hex)
-      ->end(img);
+      ->end(*img);
   }
 }
 

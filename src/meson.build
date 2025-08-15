@@ -29,6 +29,7 @@ ludwig_sources = files(
   'services/local_search_engine.c++',
   'services/thumbnail_cache.c++',
   'util/base64.c++',
+  'util/common.c++',
   'util/jwt.c++',
   'util/rate_limiter.c++',
   'util/rich_text.c++',
